@@ -1,0 +1,57 @@
+# npm 发布:推 v* tag 触发;OIDC trusted publishing(无 token,带 provenance)。
+# 一次性配置(npmjs.com → pi-verdict → Settings → Trusted Publisher):
+#   Repository: jesset/pi-verdict
+#   Workflow:   publish.yml
+#   Environment: (留空或 main 分支)
+# 若暂不配置 trusted publishing,可改用 NPM_TOKEN secret 版本(见注释)。
+
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm OIDC provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify (typecheck + tests)
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Assert tag matches package.json version
+        run: |
+          PKG_VERSION="v$(bun -e 'console.log(require("./package.json").version)')"
+          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != package.json ${PKG_VERSION}"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Pack inspection (files whitelist sanity)
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        # 无 token 版(需在 repo secrets 配 NPM_TOKEN):
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # 并将上一行改为: npm publish --access public

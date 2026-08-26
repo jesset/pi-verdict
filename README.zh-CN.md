@@ -53,7 +53,10 @@ tool_call
 ## 快速开始
 
 ```bash
-# 试用一次
+# 从 npm 安装(首发版本发布后可用)
+pi install npm:pi-verdict
+
+# 或直接从源码 —— 试用一次
 pi --extension ./extensions/auto-mode.ts
 
 # 或全局安装(自动发现)
@@ -105,6 +108,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 ```bash
 bun install
 bun run typecheck
+bun test          # 21 个离线桩测试:规则层 / 分类器重试 / 影子缓存 / 命令语义
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。

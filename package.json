@@ -1,11 +1,43 @@
 {
   "name": "pi-verdict",
-  "private": true,
   "version": "0.1.0",
   "description": "Pi coding agent extension: automatic tool-call permission verdicts — rule layer + model classifier with three-state adjudication (allow/ask/deny), fail-closed, evidence-driven",
   "type": "module",
+  "main": "extensions/auto-mode.ts",
+  "files": [
+    "extensions/auto-mode.ts",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "permissions",
+    "security",
+    "tool-call",
+    "classifier",
+    "ai-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jesset/pi-verdict.git"
+  },
+  "homepage": "https://github.com/jesset/pi-verdict#readme",
+  "bugs": "https://github.com/jesset/pi-verdict/issues",
+  "license": "MIT",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.3",

@@ -53,7 +53,10 @@ tool_call
 ## Quick start
 
 ```bash
-# try it once
+# install from npm (after the first release is published)
+pi install npm:pi-verdict
+
+# or directly from git — try it once
 pi --extension ./extensions/auto-mode.ts
 
 # or install globally (auto-discovered)
@@ -105,6 +108,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
+bun test          # 21 offline stub tests: rules, classifier retry, shadow cache, command semantics
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).
