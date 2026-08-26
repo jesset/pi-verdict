@@ -1,5 +1,7 @@
 # 调研:Pi 工具调用权限自动裁决品类竞品全景(pi-verdict 定位基准)
 
+> ⚠️ 本文为 0.2.0 前快照(pi-verdict 尚有内置白名单)。当前状态对照见 `pi-automode-convergence.md`(2026-08-27,含架构收敛结论与残余差异分级)。
+
 > 对应 issue: #9(README 重写)/ #1
 > 调研日期: 2026-08-26。所有数据当日一手采集:npm registry API、GitHub API / README / 源码、本地已解包源码。
 > 基准:本仓库 pi-verdict(`extensions/auto-mode.ts`,~590 行单文件、零运行时依赖、三态裁决、fail-closed、影子缓存遥测)——既有事实按任务约定不再复述,仅用于对比。
