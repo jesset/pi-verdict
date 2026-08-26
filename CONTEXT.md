@@ -39,3 +39,7 @@
 ### fail-closed
 
 任何异常路径(分类器报错、超时、输出无法解析)的默认行为:拦截,绝不静默放行。
+
+### 影子缓存 (shadow cache)
+
+为「是否引入生效裁决缓存」积累实测数据的 observe-only 遥测:每次灰区裁决前后同步回放「双键 LRU(128)」的 would-be 命中(命令键 = 工具+输入+cwd,上下文键 = 最近 5 条 user 行),**只记录永不生效** —— 裁决永远来自模型。只回写真实模型 allow/deny,ask 与 fail-closed 不入;会话内存态,`session_start` 重置。观察口:`/automode` 统计行与 `PI_AUTO_MODE_DEBUG=1` 通知标注。

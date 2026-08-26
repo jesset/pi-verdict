@@ -12,17 +12,21 @@
  *      - 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
  *   3. 三态裁决:allow 放行 / deny 拦截 / ask 转人工(ctx.ui.confirm)
  *
+ * 影子缓存(observe-only,#7):灰区裁决同步回放「双键 LRU(128)」would-be 命中率,
+ * 只记录不生效(裁决永远来自模型),为「是否引入生效缓存」(#5 决议)积累 pi 实测数据。
+ *
  * fail-closed:分类器异常/超时/输出违反契约 → deny;非交互模式(无 UI)ask → deny。
  *
  * 配置:
  *   --auto-mode / --no-auto-mode   CLI flag,总开关(默认开)
  *   --auto-mode-model provider/id  分类器模型(默认继承会话当前模型)
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
- *   PI_AUTO_MODE_DEBUG=1           所有裁决(含放行)都弹通知
+ *   PI_AUTO_MODE_DEBUG=1           所有裁决(含放行)都弹通知;影子缓存标注同步开启
  *
  * 已知原型简化(见 README「已知限制」):
  *   - bash 分段是朴素切分(不处理引号内的 | 等),无 AST
- *   - 无裁决缓存、无熔断器、无用户自定义规则
+ *   - 裁决缓存暂缓引入(#5 决议):现为影子缓存 observe-only 遥测,积累数据后决断;
+ *     无熔断器(重议信号 = deny 风暴成本失控 / 非交互长期运行)
  *   - 未把 AGENTS.md 作为降权意图证据传入分类器
  *
  * 设计依据:research/claude-code-classifier-prompts.md、
@@ -263,11 +267,11 @@ function toolCallLine(name: string, args: Record<string, unknown>): string {
 }
 
 /**
- * 从会话分支构造精简转录:保留 user 消息与 assistant 的 toolCall,
+ * 从会话分支收集精简转录原料:user 消息行与 assistant 工具调用行。
  * 丢弃 assistant 叙述/thinking 与 toolResult(注入面与 token 大头)。
- * 待审查动作固定为最后一行(位置约定,借鉴 Claude Code)。
+ * 影子缓存的 contextKey 与 buildTranscript 同源(同一批 user 行),保证键与模型输入一致。
  */
-function buildTranscript(ctx: ExtensionContext, actionLine: string): string {
+function collectTranscriptParts(ctx: ExtensionContext): { userLines: string[]; toolLines: string[] } {
 	const userLines: string[] = [];
 	const toolLines: string[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
@@ -282,6 +286,12 @@ function buildTranscript(ctx: ExtensionContext, actionLine: string): string {
 			}
 		}
 	}
+	return { userLines, toolLines };
+}
+
+/** 精简转录:最近 user 消息 + 最近工具调用,待审查动作固定为最后一行(位置约定,借鉴 CC) */
+function buildTranscript(ctx: ExtensionContext, actionLine: string): string {
+	const { userLines, toolLines } = collectTranscriptParts(ctx);
 	const lines = [...userLines.slice(-MAX_USER_MESSAGES), ...toolLines.slice(-MAX_TOOL_CALLS)];
 	lines.push(actionLine);
 	return lines.join("\n");
@@ -344,6 +354,125 @@ async function classifyWithModel(
 }
 
 // ============================================================================
+// 影子缓存:双键命中率遥测(observe-only,#7;设计定案见 #5)
+//
+// 键设计(#5 定案):
+//   commandKey = hash(toolName + JSON.stringify(input) + cwd)  —— 不做命令规范化
+//   contextKey = hash(最近 5 条 sanitized user 行,与 transcript 同源同窗口)
+// 行为:
+//   每次灰区裁决前查 would-be 命中;真实模型 allow/deny 回写(LRU 128,上下文变更覆写);
+//   ask 与 fail-closed 不入缓存;命中时对比缓存裁决与本次模型裁决(反事实一致性)。
+//   永不生效:裁决永远来自模型,此处只记录。
+// ============================================================================
+
+const SHADOW_LRU_MAX = 128;
+
+type ShadowVerdict = "allow" | "deny";
+interface ShadowEntry {
+	ctxKey: string;
+	verdict: ShadowVerdict;
+}
+
+/** FNV-1a 32 位摘要:仅会话内键用,非密码学 */
+function fnv1a(s: string): string {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16);
+}
+
+interface ShadowStats {
+	gray: number; // 灰区裁决总数(含 ask/fail-closed)
+	hits: number; // 双键命中(would-be)
+	missNoEntry: number;
+	missCtx: number;
+	cmdRepeats: number; // 命令键重复(忽略 context 的上界口径)
+	divergeDangerous: number; // 命中且缓存 allow → 模型 deny(若缓存生效会放过本次拦截)
+	divergeConservative: number; // 命中且缓存 deny → 模型 allow
+}
+
+type ShadowProbe =
+	| { result: "hit"; entry: ShadowEntry }
+	| { result: "no-entry" }
+	| { result: "ctx-changed"; prevVerdict: ShadowVerdict };
+
+class ShadowCache {
+	private lru = new Map<string, ShadowEntry>();
+	private seen = new Set<string>();
+	readonly stats: ShadowStats = { gray: 0, hits: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, divergeDangerous: 0, divergeConservative: 0 };
+
+	/** 会话重置:清空 LRU 与统计(#5 定案:会话内存态) */
+	reset(): void {
+		this.lru.clear();
+		this.seen.clear();
+		Object.assign(this.stats, { gray: 0, hits: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, divergeDangerous: 0, divergeConservative: 0 });
+	}
+
+	/** 灰区裁决前置查询(仅遥测,不影响裁决) */
+	probe(commandKey: string, ctxKey: string): ShadowProbe {
+		this.stats.gray++;
+		if (this.seen.has(commandKey)) this.stats.cmdRepeats++;
+		else this.seen.add(commandKey);
+		const entry = this.lru.get(commandKey);
+		if (!entry) {
+			this.stats.missNoEntry++;
+			return { result: "no-entry" };
+		}
+		if (entry.ctxKey !== ctxKey) {
+			this.stats.missCtx++;
+			return { result: "ctx-changed", prevVerdict: entry.verdict };
+		}
+		this.stats.hits++;
+		// LRU 位置刷新,保留原裁决(命中即重放)
+		this.lru.delete(commandKey);
+		this.lru.set(commandKey, entry);
+		return { result: "hit", entry };
+	}
+
+	/** 真实模型 allow/deny 裁决后回写;ask 与 fail-closed 不入 */
+	record(commandKey: string, ctxKey: string, verdict: ShadowVerdict): void {
+		this.lru.delete(commandKey);
+		this.lru.set(commandKey, { ctxKey, verdict });
+		if (this.lru.size > SHADOW_LRU_MAX) {
+			const oldest = this.lru.keys().next().value;
+			if (oldest !== undefined) this.lru.delete(oldest);
+		}
+	}
+
+	/** 命中后的反事实一致性计数(仅与可缓存裁决对比;ask/fail-closed 不可比) */
+	countDivergence(cached: ShadowVerdict, actual: ShadowVerdict): void {
+		if (cached === actual) return;
+		if (cached === "allow" && actual === "deny") this.stats.divergeDangerous++;
+		else this.stats.divergeConservative++;
+	}
+
+	/** /automode 展示用摘要 */
+	summary(): string {
+		const s = this.stats;
+		if (s.gray === 0) return "影子缓存: 本会话暂无灰区裁决";
+		const rate = ((100 * s.hits) / s.gray).toFixed(1);
+		return `影子缓存: 灰区 ${s.gray} · 双键命中 ${s.hits} (${rate}%) · miss 无条目 ${s.missNoEntry}/上下文变 ${s.missCtx} · 命令重复 ${s.cmdRepeats} · 分歧 危险 ${s.divergeDangerous}/保守 ${s.divergeConservative}`;
+	}
+}
+
+function shadowCommandKey(toolName: string, input: Record<string, unknown>, cwd: string): string {
+	return fnv1a(`${toolName}\u0000${JSON.stringify(input)}\u0000${cwd}`);
+}
+
+function shadowContextKey(ctx: ExtensionContext): string {
+	const { userLines } = collectTranscriptParts(ctx);
+	return fnv1a(userLines.slice(-MAX_USER_MESSAGES).join("\u0000"));
+}
+
+function shadowTag(probe: ShadowProbe): string {
+	if (probe.result === "hit") return `(影子缓存: would-hit ${probe.entry.verdict})`;
+	if (probe.result === "ctx-changed") return `(影子缓存: miss:context-changed, 原裁决 ${probe.prevVerdict})`;
+	return `(影子缓存: miss:no-entry)`;
+}
+
+// ============================================================================
 // 扩展主体
 // ============================================================================
 
@@ -353,19 +482,29 @@ export default function autoMode(pi: ExtensionAPI) {
 
 	let enabled = pi.getFlag("auto-mode") !== false;
 	const debug = process.env.PI_AUTO_MODE_DEBUG === "1";
+	const shadow = new ShadowCache();
 
 	function refreshStatus(ctx: ExtensionContext) {
 		ctx.ui.setStatus("auto-mode", enabled ? ctx.ui.theme.fg("accent", "🛡️ auto") : undefined);
 	}
 
-	pi.on("session_start", async (_event, ctx) => refreshStatus(ctx));
+	// session_start 会重置 shadow(会话内存态,#5 定案)
+	pi.on("session_start", async (_event, ctx) => {
+		shadow.reset();
+		refreshStatus(ctx);
+	});
 
 	pi.registerCommand("automode", {
 		description: "Toggle Auto Mode (automatic tool-call gating)",
 		handler: async (_args, ctx) => {
 			enabled = !enabled;
 			refreshStatus(ctx);
-			ctx.ui.notify(enabled ? "🛡️ Auto Mode 已开启:工具调用由规则+分类器自动裁决" : "Auto Mode 已关闭:工具调用直接执行", "info");
+			ctx.ui.notify(
+				enabled
+					? `🛡️ Auto Mode 已开启:工具调用由规则+分类器自动裁决\n${shadow.summary()}`
+					: `Auto Mode 已关闭:工具调用直接执行\n${shadow.summary()}`,
+				"info",
+			);
 		},
 	});
 
@@ -408,14 +547,27 @@ export default function autoMode(pi: ExtensionAPI) {
 			ctx.ui.notify(`🛡️ Auto Mode 拦截: 无可用分类器模型(fail-closed)\n  ${action}`, "warning");
 			return { block: true, reason: "[auto-mode] 无可用分类器模型(fail-closed)" };
 		}
+
+		// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
+		const cmdKey = shadowCommandKey(event.toolName, input, ctx.cwd);
+		const ctxKey = shadowContextKey(ctx);
+		const probe = shadow.probe(cmdKey, ctxKey);
+
 		const outcome = await classifyWithModel(ctx, model, action);
 
+		// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
+		// 命中且本次为可缓存裁决时,对比反事实一致性
+		if (outcome.source === "model" && outcome.verdict !== "ask") {
+			if (probe.result === "hit") shadow.countDivergence(probe.entry.verdict, outcome.verdict);
+			shadow.record(cmdKey, ctxKey, outcome.verdict);
+		}
+
 		if (outcome.verdict === "allow") {
-			if (debug) ctx.ui.notify(`🛡️ allow(分类器): ${outcome.reason}\n  ${action}`, "info");
+			if (debug) ctx.ui.notify(`🛡️ allow(分类器): ${outcome.reason}\n  ${action} ${shadowTag(probe)}`, "info");
 			return undefined;
 		}
 		if (outcome.verdict === "deny") {
-			ctx.ui.notify(`🛡️ Auto Mode 拦截: ${outcome.reason}\n  ${action}`, "warning");
+			ctx.ui.notify(`🛡️ Auto Mode 拦截: ${outcome.reason}\n  ${action}${debug ? " " + shadowTag(probe) : ""}`, "warning");
 			return { block: true, reason: `[auto-mode 分类器拦截] ${outcome.reason}` };
 		}
 
