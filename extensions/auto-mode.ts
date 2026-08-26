@@ -5,7 +5,11 @@
  * 语义对齐 Claude Code Auto Mode,但方向相反:Pi 默认放行 → 本扩展自动拦截。
  *
  * 管线(tool_call 钩子):
- *   1. 规则层:bash 白名单/危险正则 + 文件路径敏感度分级 → 硬 allow / 硬 deny
+ *   1. 规则层(内置 deny floor + 用户规则):
+ *      - 内置 floor:bash 危险正则 + 路径敏感度分级(S0-S5)→ 硬 deny
+ *        (默认开;配置 builtinDenyFloor:false 可整体关闭,风险自担)
+ *      - 用户规则:config/pi-verdict.json 的 allow/deny 正则(黑名单优先于白名单)
+ *      - 无内置白名单(安全声明由用户配置承担,#12/审计响应)
  *   2. 灰区:模型分类器(默认"自省":继承当前会话 provider/model)
  *      - 输入:CC 风格 <transcript> 精简转录(用户消息流 + 工具调用流,
  *        不含 assistant 叙述与工具结果),待审查动作固定为最后一行
@@ -23,9 +27,11 @@
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
  *   --auto-mode-debug             所有裁决(含放行)都弹通知;影子缓存标注同步开启
  *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
+ *   <agentDir>/config/pi-verdict.json   用户规则:{ allow: [regex], deny: [regex] }
+ *                                     匹配:bash=完整命令串 / 文件工具=绝对路径;新会话生效
  *
  * 已知原型简化(见 README「已知限制」):
- *   - bash 分段是朴素切分(不处理引号内的 | 等),无 AST
+ *   - 无内置 bash 白名单;危险识别依赖正则 floor(无 AST 解析)——未知形态交分类器
  *   - 裁决缓存暂缓引入(#5 决议):现为影子缓存 observe-only 遥测,积累数据后决断;
  *     无熔断器(重议信号 = deny 风暴成本失控 / 非交互长期运行)
  *   - 未把 AGENTS.md 作为降权意图证据传入分类器
@@ -34,6 +40,7 @@
  *           research/pi-model-call-and-ref-implementations.md
  */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -41,32 +48,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // ============================================================================
 // 规则层:bash
 // ============================================================================
-
-/** 无条件白名单:只读/无副作用命令(源自 pi-permission BUILTIN_UNCONDITIONAL_SAFE + pi-auto-approve Tier 1) */
-const BASH_SAFE_UNCONDITIONAL = new Set([
-	"arch", "basename", "cat", "cd", "cksum", "cmp", "column", "comm", "cut", "diff", "dirname",
-	"du", "df", "echo", "expand", "expr", "false", "file", "fold", "grep", "groups", "head", "id",
-	"jq", "ls", "md5sum", "nl", "paste", "printenv", "ps", "pwd", "readlink", "realpath", "rev",
-	"seq", "sha256sum", "shasum", "stat", "tail", "tr", "true", "tsort", "uniq", "uname", "uptime",
-	"wc", "whereis", "who", "whoami", "which", "tree", "less", "more", "rg", "ag", "ack", "locate",
-	"type", "hostname", "env", "date",
-]);
-
-/** 条件白名单:argv 级检查(源自研究报告 §4.2) */
-const GIT_READONLY_SUBCOMMANDS = new Set([
-	"status", "log", "diff", "show", "branch", "tag", "remote", "rev-parse", "rev-list",
-	"describe", "whatchanged", "shortlog", "blame", "grep", "ls-remote",
-]);
-const GIT_FORBIDDEN_FLAGS = new Set([
-	"-c", "-C", "-p", "--config-env", "--exec-path", "--git-dir", "--namespace",
-	"--paginate", "--super-prefix", "--work-tree", "--output", "--ext-diff", "--textconv", "--exec",
-]);
-const FIND_FORBIDDEN = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"]);
-const RG_FORBIDDEN = new Set(["--pre", "--hostname-bin", "--search-zip", "-z"]);
-const OUTPUT_FLAG_COMMANDS = new Set(["base64", "sort", "iconv", "shuf"]);
-const PKG_READONLY = new Set(["list", "info", "view", "outdated", "audit", "why"]);
-const PIP_READONLY = new Set(["list", "show", "freeze", "search"]);
-const DOCKER_READONLY = new Set(["ps", "images", "inspect", "logs", "stats", "info", "version", "history", "top", "diff"]);
 
 /** 危险模式:对完整命令串匹配(覆盖管道/复合命令),命中即 deny(源自研究报告 §4.3) */
 const BASH_DANGER_RULES: Array<{ id: string; pattern: RegExp; reason: string }> = [
@@ -86,91 +67,85 @@ const BASH_DANGER_RULES: Array<{ id: string; pattern: RegExp; reason: string }> 
 	{ id: "fork-bomb", pattern: /:\(\)\s*\{/, reason: "fork 炸弹" },
 ];
 
-/**
- * 朴素 bash 分段:按 && || ; | 切开,不处理引号包裹的运算符(原型简化)。
- * 危险规则已在完整命令串上跑过,这里的切分只服务于白名单判定。
- */
-function splitShellChain(command: string): string[] {
-	return command
-		.split(/&&|\|\||[;|]/)
-		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
-}
-
-/** 提取段内 argv:跳过前导 VAR=value 赋值,命令名去路径前缀 */
-function segmentArgv(segment: string): string[] {
-	const tokens = segment.split(/\s+/).filter(Boolean);
-	while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
-	if (tokens.length > 0) tokens[0] = path.basename(tokens[0]);
-	return tokens;
-}
-
-function isConditionalSafe(argv: string[]): boolean {
-	const [cmd, ...rest] = argv;
-	switch (cmd) {
-		case "git": {
-			const sub = rest.find((t) => !t.startsWith("-"));
-			if (!sub || !GIT_READONLY_SUBCOMMANDS.has(sub)) return false;
-			if (rest.some((t) => GIT_FORBIDDEN_FLAGS.has(t))) return false;
-			if (sub === "branch") {
-				return rest.every((t) => t === "branch" || !t.startsWith("-") || /^(-l|--list|-a|-r|-v|--show-current|--format=)/.test(t));
-			}
-			return true;
-		}
-		case "find":
-			return !rest.some((t) => FIND_FORBIDDEN.has(t));
-		case "rg":
-			return !rest.some((t) => RG_FORBIDDEN.has(t));
-		case "base64":
-		case "sort":
-		case "iconv":
-		case "shuf":
-			return !rest.some((t) => t === "-o" || t === "--output" || (/^-[a-zA-Z]*o/.test(t) && !t.startsWith("--")));
-		case "sed":
-			// 仅放行 sed -n {N|M,N}p [file]
-			return rest[0] === "-n" && rest.length <= 3 && (rest.length === 1 || /^\d*(,\d+)?p$/.test(rest[1] ?? ""));
-		case "date":
-			return !rest.some((t) => t === "-s" || t === "--set" || (/^-[a-zA-Z]*s/.test(t) && !t.startsWith("--")));
-		case "npm":
-		case "yarn":
-		case "pnpm":
-			return rest.length > 0 && PKG_READONLY.has(rest[0]);
-		case "pip":
-		case "pip3":
-			return rest.length > 0 && PIP_READONLY.has(rest[0]);
-		case "docker":
-		case "podman":
-			return rest.length > 0 && DOCKER_READONLY.has(rest[0]);
-		default:
-			return false;
-	}
-}
-
 type RuleVerdict = "allow" | "deny" | "gray";
 interface RuleResult {
 	verdict: RuleVerdict;
 	reason?: string;
 }
 
-function classifyBash(command: string): RuleResult {
-	// 危险规则:对完整命令串匹配(单 argv 看不到管道另一侧)
-	for (const rule of BASH_DANGER_RULES) {
-		if (rule.pattern.test(command)) return { verdict: "deny", reason: `规则 ${rule.id}: ${rule.reason}` };
+function classifyBash(command: string, floorOn: boolean): RuleResult {
+	// 内置 deny floor:危险正则对完整命令串匹配;可经 builtinDenyFloor 整体关闭
+	if (floorOn) {
+		for (const rule of BASH_DANGER_RULES) {
+			if (rule.pattern.test(command)) return { verdict: "deny", reason: `规则 ${rule.id}: ${rule.reason}` };
+		}
 	}
-	// 白名单:逐段检查,全部命中才放行
-	const segments = splitShellChain(command);
-	if (segments.length === 0) return { verdict: "allow", reason: "空命令" };
-	for (const segment of segments) {
-		const argv = segmentArgv(segment);
-		if (argv.length === 0) continue;
-		const [cmd, ...rest] = argv;
-		if (BASH_SAFE_UNCONDITIONAL.has(cmd)) continue;
-		// <cmd> --help / --version 一律放行
-		if (rest.length === 1 && /^(--help|-h|--version|-v)$/.test(rest[0])) continue;
-		if (OUTPUT_FLAG_COMMANDS.has(cmd) || isConditionalSafe(argv)) continue;
-		return { verdict: "gray", reason: `命令不在白名单: ${cmd}` };
+	if (!command.trim()) return { verdict: "allow", reason: "空命令" };
+	// 无内置白名单(#12):一切非危险命令交用户规则与分类器
+	return { verdict: "gray", reason: "无内置白名单" };
+}
+
+// ============================================================================
+// 用户规则:白名单/黑名单(可配置;#12 审计响应)
+//
+// 配置:<agentDir>/config/pi-verdict.json(尊重 PI_CODING_AGENT_DIR 覆盖):
+//   { "allow": ["^ls\\b", "^git (status|log|diff)\\b"], "deny": ["rm ", "^/etc/"] }
+// 匹配目标:bash/powershell = 完整命令串;read/write/edit/grep/find/ls = 解析后绝对路径;
+// 其余工具(MCP/自定义)不参与用户规则,恒走分类器。
+// 优先级:内置 deny floor → 用户 deny → 用户 allow → gray;floor 默认开,可经 builtinDenyFloor:false 关闭。
+// 非法正则跳过并通知(配置错误不导致扩展失效);新会话生效。
+// ============================================================================
+
+interface UserRules {
+	allow: RegExp[];
+	deny: RegExp[];
+	/** 内置 deny floor 开关(危险正则 + 路径敏感度 deny),默认 true;关闭后依赖用户规则与分类器 */
+	builtinDenyFloor: boolean;
+}
+
+const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true };
+
+function userConfigPath(): string {
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+	return path.join(agentDir, "config", "pi-verdict.json");
+}
+
+const USER_CONFIG_TEMPLATE = `${JSON.stringify({
+	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。修改后新会话生效。",
+	allow: ["^ls\\b"],
+	deny: [],
+	builtinDenyFloor: true,
+}, null, 2)}\n`;
+
+/**
+ * 加载用户规则。首启生成带注释模板(allow 内示例默认仅 ^ls\b 可用,其余为说明占位);
+ * 配置缺失/损坏/字段非法一律回退空规则(安全默认,不失效),非法正则收集回报。
+ */
+function loadUserRules(): { rules: UserRules; skipped: string[] } {
+	try {
+		const p = userConfigPath();
+		if (!fs.existsSync(p)) {
+			try {
+				fs.mkdirSync(path.dirname(p), { recursive: true });
+				fs.writeFileSync(p, USER_CONFIG_TEMPLATE);
+			} catch { /* 只读环境静默跳过 */ }
+			return { rules: EMPTY_RULES, skipped: [] };
+		}
+		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; builtinDenyFloor?: unknown };
+		const skipped: string[] = [];
+		const compile = (list: unknown): RegExp[] =>
+			(Array.isArray(list) ? list : []).filter((x): x is string => typeof x === "string").flatMap((src) => {
+				try {
+					return [new RegExp(src)];
+				} catch {
+					skipped.push(src);
+					return [];
+				}
+			});
+		return { rules: { allow: compile(raw.allow), deny: compile(raw.deny), builtinDenyFloor: raw.builtinDenyFloor !== false }, skipped };
+	} catch {
+		return { rules: EMPTY_RULES, skipped: [] };
 	}
-	return { verdict: "allow" };
 }
 
 // ============================================================================
@@ -184,49 +159,98 @@ function expandHome(p: string): string {
 const S0_SECRET = [
 	/\.ssh(\/|$)/, /\.aws(\/|$)/, /\.gnupg(\/|$)/, /(^|\/)\.env(\.|$)/, /credentials?(\.|\/|$)/i,
 	/(^|\/)id_rsa/, /\.pem$/, /_history$/, /\.config\/gh(\/|$)/, /\.pi\/agent\/auth\.json$/,
+	// V8(安全审计):常见明文凭证文件补全
+	/(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.pypirc$/, /(^|\/)\.envrc$/, /(^|\/)\.vault-token$/,
+	/\.kube(\/|$)/, /\.docker\/config\.json$/, /\.gem\/credentials$/,
 ];
 const S1_SYSTEM = [/^\/etc(\/|$)/, /^\/usr(\/|$)/, /^\/var(\/|$)/, /^\/System(\/|$)/, /(^|\/)authorized_keys$/];
 const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/, /crontab/, /Library\/LaunchAgents(\/|$)/, /\.config\/systemd(\/|$)/];
 const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/, /(^|\/)\.gitmodules$/];
 
 /** read 类工具:S0 读取即高危(deny),其余读取放行。isWrite: write/edit 走完整分级 */
-function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: boolean): RuleResult {
+function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: boolean, floorOn: boolean): RuleResult {
 	const abs = path.resolve(cwd, expandHome(rawPath));
 	const hit = (rules: RegExp[]) => rules.some((r) => r.test(abs));
+	// floor 关闭时:内置 deny 一律降级 gray(永不升格 allow);非 deny 分支(allow/gray)保持
+	const D = floorOn
+		? (reason: string): RuleResult => ({ verdict: "deny", reason })
+		: (reason: string): RuleResult => ({ verdict: "gray", reason });
 
-	if (hit(S0_SECRET)) return { verdict: "deny", reason: `S0 密钥/凭证路径: ${rawPath}` };
+	if (hit(S0_SECRET)) return D(`S0 密钥/凭证路径: ${rawPath}`);
 	if (!isWrite) {
 		if (hit(S1_SYSTEM)) return { verdict: "gray", reason: `读取系统配置路径: ${rawPath}` };
 		return { verdict: "allow" };
 	}
-	if (hit(S1_SYSTEM)) return { verdict: "deny", reason: `写入系统目录: ${rawPath}` };
-	if (hit(S3_GIT_META)) return { verdict: "deny", reason: `写入 .git 元数据(可执行代码入口): ${rawPath}` };
+	if (hit(S1_SYSTEM)) return D(`写入系统目录: ${rawPath}`);
+	if (hit(S3_GIT_META)) return D(`写入 .git 元数据(可执行代码入口): ${rawPath}` );
 	if (hit(S2_USER_RC)) return { verdict: "gray", reason: `写入用户配置/持久化入口: ${rawPath}` };
 	if (abs === cwd || abs.startsWith(cwd + path.sep)) return { verdict: "allow" };
 	return { verdict: "gray", reason: `写入项目目录(CWD)外: ${rawPath}` };
 }
 
-/** 工具调用 → 规则层裁决。未覆盖的工具(含 MCP/自定义)→ gray,交分类器 */
-function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string): RuleResult {
+/** 用户规则匹配目标:bash/powershell=完整命令串;路径类工具=解析后绝对路径;其余工具不参与 */
+function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: string): string | null {
 	switch (toolName) {
 		case "bash":
 		case "powershell":
-			return classifyBash(String(input.command ?? ""));
+			return String(input.command ?? "");
+		case "read":
 		case "write":
 		case "edit":
-			return classifyPath(toolName, String(input.path ?? ""), cwd, true);
+		case "grep":
+		case "find":
+		case "ls": {
+			const p = typeof input.path === "string" && input.path ? input.path : null;
+			return p ? path.resolve(cwd, expandHome(p)) : null;
+		}
+		default:
+			return null;
+	}
+}
+
+/**
+ * 工具调用 → 规则层裁决。裁决序(#12):
+ *   1. 内置 base(bash 危险正则 floor / 路径敏感度分级)——deny 即终局(floor 可经 builtinDenyFloor 关闭)
+ *   2. 用户黑名单 → deny(优先于白名单)
+ *   3. 用户白名单 → allow
+ *   4. base(路径类工具的默认 allow/gray;其余 gray)→ 交分类器
+ */
+function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules): RuleResult {
+	let base: RuleResult;
+	switch (toolName) {
+		case "bash":
+		case "powershell":
+			base = classifyBash(String(input.command ?? ""), user.builtinDenyFloor);
+			break;
+		case "write":
+		case "edit":
+			base = classifyPath(toolName, String(input.path ?? ""), cwd, true, user.builtinDenyFloor);
+			break;
 		case "read":
-			return classifyPath(toolName, String(input.path ?? ""), cwd, false);
+			base = classifyPath(toolName, String(input.path ?? ""), cwd, false, user.builtinDenyFloor);
+			break;
 		case "grep":
 		case "find":
 		case "ls": {
 			const p = typeof input.path === "string" ? input.path : undefined;
-			if (p) return classifyPath(toolName, p, cwd, false);
-			return { verdict: "allow" };
+			base = p ? classifyPath(toolName, p, cwd, false, user.builtinDenyFloor) : { verdict: "allow" };
+			break;
 		}
 		default:
-			return { verdict: "gray", reason: `未内置规则覆盖的工具: ${toolName}` };
+			base = { verdict: "gray", reason: `未内置规则覆盖的工具: ${toolName}` };
 	}
+	if (base.verdict === "deny") return base; // 内置 floor:deny 优先于一切用户规则
+
+	const target = userRuleTarget(toolName, input, cwd);
+	if (target !== null) {
+		for (const re of user.deny) {
+			if (re.test(target)) return { verdict: "deny", reason: `用户黑名单: ${re.source}` };
+		}
+		for (const re of user.allow) {
+			if (re.test(target)) return { verdict: "allow", reason: "用户白名单" };
+		}
+	}
+	return base;
 }
 
 // ============================================================================
@@ -311,7 +335,7 @@ interface ClassifierOutcome {
 	source: "model" | "fail-closed";
 }
 
-const CLASSIFIER_TIMEOUT_MS = 15_000;
+const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(15s 会误杀 ~15%),research/cache-sim 数据
 const CLASSIFIER_MAX_TOKENS = 512;
 const CLASSIFIER_RETRY_MAX_TOKENS = 1024; // 防御重试档:覆盖无视 reasoning:off 或轻思考仍超预算的模型
 
@@ -522,15 +546,21 @@ export default function autoMode(pi: ExtensionAPI) {
 	let enabled = pi.getFlag("auto-mode") !== false;
 	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
 	const shadow = new ShadowCache();
+	let userRules: UserRules = loadUserRules().rules;
 
 	function refreshStatus(ctx: ExtensionContext) {
 		// 双态恒显:on 高亮 / off 暗色(原来 off 直接隐藏,状态不可见)
 		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "accent" : "dim", enabled ? "auto mode on" : "auto mode off"));
 	}
 
-	// session_start 会重置 shadow(会话内存态,#5 定案)
+	// session_start:重置影子缓存(会话内存态,#5 定案)+ 重载用户规则(配置改动新会话生效)
 	pi.on("session_start", async (_event, ctx) => {
 		shadow.reset();
+		const loaded = loadUserRules();
+		userRules = loaded.rules;
+		if (loaded.skipped.length > 0) {
+			ctx.ui.notify(`pi-verdict:配置中 ${loaded.skipped.length} 条非法正则已跳过(${userConfigPath()})`, "warning");
+		}
 		refreshStatus(ctx);
 	});
 
@@ -583,7 +613,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		const action = describeAction(event.toolName, input);
 
 		// 第 1 层:规则
-		const rule = classifyByRules(event.toolName, input, ctx.cwd);
+		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules);
 		if (rule.verdict === "allow") {
 			if (debug) ctx.ui.notify(`🛡️ allow(规则): ${action}`, "info");
 			return undefined;

@@ -8,7 +8,7 @@
 
 > Pi 默认以 YOLO 模式运行:所有工具调用不经确认直接执行。
 > **verdict 给每次调用一个三态裁决 —— `allow / ask / deny`。**
-> 确定性规则先行;灰区交给携带会话上下文的模型分类器;任何失败路径一律 fail-closed。
+> 内置 deny floor 与你的 allow/deny 规则先行;其余交给携带会话上下文的模型分类器;任何失败路径一律 fail-closed。
 
 **verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」。
 
@@ -29,9 +29,9 @@
 tool_call
   │
   ├─ 1. 规则层(确定性,零延迟)
-  │     ├─ bash:危险正则(完整命令串)→ deny;白名单(逐段 argv 检查)→ allow
-  │     ├─ write/edit:路径敏感度 S0–S5(密钥/系统/.git 元数据 → deny;CWD 内 → allow)
-  │     └─ read/grep/find/ls:密钥路径 → deny,其余 → allow
+  │     ├─ 内置 deny floor:bash 危险正则(完整命令串)+ 路径敏感度 S0–S5
+  │     ├─ 用户规则:deny 优先于 allow(正则,见下)
+  │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
   ├─ 2. 灰区 → 模型分类器(默认继承会话模型 —— "自省")
   │     ├─ 输入:CC 风格 <transcript>(最近 5 条用户消息 + 最近 10 次工具调用,
@@ -77,6 +77,23 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 | `PI_AUTO_MODE_MODEL` | — | 模型配置的环境变量形式 |
 | `PI_AUTO_MODE_DEBUG=1` | 关 | 调试的环境变量形式(flag 优先) |
 
+### 用户规则(`config/pi-verdict.json`)
+
+```json
+{
+  "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
+  "deny":  ["rm ", "docker ", "^/etc/"],
+  "builtinDenyFloor": true
+}
+```
+
+- `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
+- 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
+- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在)
+- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
+
+为什么没有内置白名单?第三方安全审计(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+
 需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
 
 ## 证据驱动,不靠直觉
@@ -93,8 +110,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 
 原型质量 —— 可用,未硬化:
 
-- bash 分段是朴素切分(无引号/AST 感知);AST 移植方案已[实测否决](research/rule-engine-sim/README.md),真实流量出现敏感路径重定向绕过时重议
-- 暂无用户自定义规则;规则种子集在 `extensions/auto-mode.ts` 顶部
+- 设计上无内置白名单(见[安全审计](research/rule-layer-security-audit.md)与[用户规则](#用户规则configpi-verdictjson));allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
@@ -109,7 +125,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 ```bash
 bun install
 bun run typecheck
-bun test          # 21 个离线桩测试:规则层 / 分类器重试 / 影子缓存 / 命令语义
+bun test          # 36 个离线桩测试:deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。

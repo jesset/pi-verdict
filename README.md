@@ -8,7 +8,7 @@
 
 > Pi runs YOLO by default: every tool call executes without asking.
 > **verdict gives each call a three-state adjudication — `allow / ask / deny`.**
-> Deterministic rules first; gray areas go to a model classifier that sees the conversation context; every failure mode fails closed.
+> A built-in deny floor plus your own allow/deny rules first; everything else goes to a model classifier that sees the conversation context; every failure mode fails closed.
 
 **verdict is an adjudication, not a switch.** Most classifiers in this space output a binary allow/block. Three states matter: `ask` routes genuinely ambiguous actions to a human (and degrades to `deny` in non-interactive sessions), so "not sure" never silently becomes "go ahead".
 
@@ -29,9 +29,10 @@ Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-l
 tool_call
   │
   ├─ 1. Rule layer (deterministic, zero latency)
-  │     ├─ bash: danger regexes (full-string) → deny; whitelist (per-segment argv) → allow
-  │     ├─ write/edit: path sensitivity S0–S5 (secrets/system/.git meta → deny; in-CWD → allow)
-  │     └─ read/grep/find/ls: secret paths → deny, else allow
+  │     ├─ built-in deny floor: bash danger regexes (full-string) +
+  │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny)
+  │     ├─ your rules: user deny beats user allow (regex, see below)
+  │     └─ no built-in allowlist — every "always allow" claim is yours to make
   │
   ├─ 2. Gray zone → model classifier (defaults to session model — "self-reflection")
   │     ├─ input: CC-style <transcript> (last 5 user messages + last 10 tool calls,
@@ -77,6 +78,23 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 | `PI_AUTO_MODE_MODEL` | — | env form of the model flag |
 | `PI_AUTO_MODE_DEBUG=1` | off | env form of debug (flag wins) |
 
+### User rules (`config/pi-verdict.json`)
+
+```json
+{
+  "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
+  "deny":  ["rm ", "docker ", "^/etc/"],
+  "builtinDenyFloor": true
+}
+```
+
+- `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
+- matched against the **full command string** for bash, the **absolute path** for file tools (read/write/edit/grep/find/ls); other tools (MCP etc.) always go to the classifier
+- `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain)
+- first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
+
+Why no built-in allowlist? A third-party security audit ([`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+
 Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
 
 ## Evidence-driven, not vibes-driven
@@ -93,8 +111,7 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 
 Prototype quality — usable, not hardened:
 
-- bash segmentation is naive (no quoting/AST awareness); the AST-port alternative was [measured and rejected](research/rule-engine-sim/README.md), revisit if real traffic shows sensitive-path redirects slipping through
-- no user-defined rules yet; rule seeds live at the top of `extensions/auto-mode.ts`
+- no built-in allowlist by design (see the [security audit](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
 - AGENTS.md is not passed to the classifier as downweighted intent evidence (Claude Code does this)
 - parallel gray-zone calls are adjudicated serially
 - self-reflection means the session model adjudicates — point `--auto-mode-model` at a lighter model if verdict latency/cost matters (open question tracked in the issue tracker)
@@ -109,7 +126,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
-bun test          # 21 offline stub tests: rules, classifier retry, shadow cache, command semantics
+bun test          # 36 offline stub tests: deny floor, user rules, audit regression, classifier retry, shadow cache, commands
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).

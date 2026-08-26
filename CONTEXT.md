@@ -14,7 +14,11 @@
 
 ### 规则层 (rule layer)
 
-判定管线的第一段:确定性规则(正则/AST/路径匹配)对工具调用给出硬性 allow 或 deny。覆盖面上对**所有内置工具**生效,其中 bash 的规则最厚(命令结构分析),文件类工具按路径敏感度判定。
+判定管线的第一段:确定性规则给出硬性 allow 或 deny。由两部分组成:**内置 deny floor**(bash 危险正则 + 文件路径敏感度分级,只做 deny 声明——误报方向安全)与**用户规则**(allow/deny 正则,由用户配置并背书)。内置层不提供白名单(0.2.0 起,安全审计结论:白名单健全性需要 shell AST 分析)。
+
+### 用户规则 (user rules)
+
+`<agentDir>/config/pi-verdict.json` 中用户配置的 allow/deny 正则:deny 优先于 allow,黑名单命中即拦截;匹配目标为 bash 完整命令串 / 文件类工具的绝对路径。`builtinDenyFloor: false` 可整体关闭内置 deny floor(风险自担)。安全声明(「永远放行」)由用户背书而非作者。
 
 ### 灰区 (gray zone)
 

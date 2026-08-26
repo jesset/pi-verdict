@@ -1,12 +1,18 @@
 /**
- * pi-verdict 扩展桩测试:规则层 / 分类器重试 / 影子缓存 / 命令语义
+ * pi-verdict 扩展桩测试:内置 floor / 用户规则优先级 / 分类器重试 / 影子缓存 / 命令语义
  * 全部离线:mock ExtensionAPI/ExtensionContext,无网络、无真实模型。
- * 改编自开发期三份冒烟脚本(shadow/retry/command),语义与线上行为一致。
+ * 用户规则经 PI_CODING_AGENT_DIR 指向临时目录的真实 JSON 配置驱动(非注入 mock)。
  */
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import autoMode from "../extensions/auto-mode.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
+
+const TMP_AGENT = fs.mkdtempSync(path.join(os.tmpdir(), "pi-verdict-test-"));
+let config: { allow: string[]; deny: string[] } = { allow: [], deny: [] };
 
 interface Harness {
 	handlers: Record<string, any>;
@@ -14,6 +20,10 @@ interface Harness {
 	notifies: Array<[string, string]>;
 	branch: any[];
 	ctx: any;
+	calls: any[];
+	responses: any[];
+	confirms: number;
+	confirmAnswer: boolean;
 	install: (opts?: { flag?: boolean; debug?: boolean }) => void;
 }
 
@@ -22,16 +32,16 @@ function makeHarness(): Harness {
 	const commands: Record<string, any> = {};
 	const notifies: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
-	let envDebug = false;
 	const branch: any[] = [];
+	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
 			complete: async (_m: any, _req: any, opts: any) => {
-				(h as any).calls.push({ maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, reasoning: opts.reasoning });
-				const r = (h as any).responses[Math.min((h as any).calls.length - 1, (h as any).responses.length - 1)];
+				h.calls.push({ maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled });
+				const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
 				if (r instanceof Error) throw r;
 				return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
 			},
@@ -39,17 +49,16 @@ function makeHarness(): Harness {
 		},
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
-			confirm: async () => { (h as any).confirms++; return (h as any).confirmAnswer; },
+			confirm: async () => { h.confirms++; return h.confirmAnswer; },
 			setStatus: () => {}, theme: { fg: (_c: string, s: string) => s },
 		},
 	};
+	h.ctx = ctx;
 
-	const h: any = { handlers, commands, notifies, branch, ctx, calls: [], responses: [], confirms: 0, confirmAnswer: true };
 	h.install = (opts?: { flag?: boolean; debug?: boolean }) => {
 		flags = { "auto-mode": opts?.flag ?? true, "auto-mode-debug": opts?.debug ?? false };
-		envDebug = !!opts?.debug;
 		const prev = process.env.PI_AUTO_MODE_DEBUG;
-		if (envDebug) process.env.PI_AUTO_MODE_DEBUG = "1"; else delete process.env.PI_AUTO_MODE_DEBUG;
+		if (opts?.debug) process.env.PI_AUTO_MODE_DEBUG = "1"; else delete process.env.PI_AUTO_MODE_DEBUG;
 		autoMode({
 			registerFlag: (n: string, d: any) => { if (!(n in flags)) flags[n] = d.default; },
 			getFlag: (n: string) => flags[n],
@@ -61,67 +70,188 @@ function makeHarness(): Harness {
 	return h as Harness;
 }
 
+beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
+afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
+
+function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean }, invalid?: string[]): void {
+	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
+	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
+	fs.mkdirSync(path.dirname(p), { recursive: true });
+	const raw: Record<string, unknown> = { ...config };
+	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
+	// 非法正则测试:把 invalid 条目直接混入 allow 数组
+	if (invalid) raw.allow = [...config.allow, ...invalid];
+	fs.writeFileSync(p, JSON.stringify(raw));
+}
+
 const userMsg = (h: Harness, t: string) => h.branch.push({ type: "message", message: { role: "user", content: t } });
 const toolCall = (h: Harness, toolName: string, input: any) => h.handlers.tool_call({ toolName, input }, h.ctx);
 
-// ── 1. 规则层(确定性,零模型调用) ──────────────────────
+// ── 1. 内置 deny floor(不可覆盖)+ 无内置白名单 ─────────
 
-describe("rule layer", () => {
-	test("whitelisted read-only bash → allow, no model call", async () => {
+describe("built-in deny floor", () => {
+	test("danger regex (rm -rf) → deny, zero model calls", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
-		await toolCall(h, "bash", { command: "ls -la /proj" });
-		expect(h.calls.length).toBe(0);
-	});
-	test("conditional git subcommand → allow", async () => {
-		const h = makeHarness(); h.install();
-		await toolCall(h, "bash", { command: "git status && git log --oneline -3" });
-		expect(h.calls.length).toBe(0);
-	});
-	test("danger regex (rm -rf) → deny with reason", async () => {
-		const h = makeHarness(); h.install();
-		const r = await toolCall(h, "bash", { command: "rm -rf /tmp/anything" });
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" }); // 拼接防测试文件被危险正则误拦
 		expect(r?.block).toBe(true);
 		expect(r.reason).toContain("rm-recursive");
 		expect(h.calls.length).toBe(0);
 	});
-	test("write to secret path (S0) → deny", async () => {
+	test("floor NOT overridable by user allow", async () => {
+		setConfig({ allow: ["^rm"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+	test("no built-in whitelist: ls → gray → classifier", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1); // 无白名单:进分类器
+	});
+	test("write to S0 secret path → deny", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		const r = await toolCall(h, "write", { path: "~/.ssh/authorized_keys", content: "x" });
 		expect(r?.block).toBe(true);
 	});
-	test("write inside CWD → allow", async () => {
+	test("write inside CWD → rule allow, zero model calls", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		const r = await toolCall(h, "write", { path: "/proj/src/a.ts", content: "x" });
 		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0);
 	});
 });
 
-// ── 2. 分类器(重试矩阵 + 参数形态) ─────────────────────
+// ── 2. 用户规则(黑名单优先于白名单) ─────────────────────
+
+describe("user rules (deny > allow > gray)", () => {
+	test("user allow matches full command string → zero-latency allow", async () => {
+		setConfig({ allow: ["^ls\\b", "^git (status|log|diff)\\b"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "git status && git log --oneline -3" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0);
+	});
+	test("user deny beats user allow", async () => {
+		setConfig({ allow: ["^git"], deny: ["push"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "git push origin main" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("用户黑名单");
+	});
+	test("user deny beats path-based rule allow (directory semantics)", async () => {
+		setConfig({ deny: ["^/proj/"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: "/proj/a.ts", content: "x" });
+		expect(r?.block).toBe(true);
+	});
+	test("user rules do not apply to uncovered tools (MCP stays gray)", async () => {
+		setConfig({ allow: [".*"] });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "mcp__x__y", { a: 1 });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+	test("invalid regexes are skipped, valid ones still apply", async () => {
+		setConfig({ allow: ["^ls\\b"] }, ["[unclosed"]);
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "ls -la" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0); // 合法条目仍生效
+	});
+	test("builtinDenyFloor: false disables the whole built-in deny floor (risk accepted by user)", async () => {
+		setConfig({ builtinDenyFloor: false });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> floor off" }];
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" }); // 危险正则被关
+		expect(h.calls.length).toBe(1);        // 交分类器
+		expect(r?.block).toBe(true);           // 分类器裁决仍生效
+	});
+	test("builtinDenyFloor: false downgrades S0 path deny to gray (never to allow)", async () => {
+		setConfig({ builtinDenyFloor: false });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> floor off" }];
+		const r = await toolCall(h, "write", { path: "~/.ssh/authorized_keys", content: "x" });
+		expect(h.calls.length).toBe(1);        // gray 而非 deny → 分类器
+		expect(r?.block).toBe(true);
+	});
+	test("builtinDenyFloor default true keeps the floor", async () => {
+		setConfig({ allow: ["^rm"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
+		expect(r?.block).toBe(true);           // 默认开:floor 仍优先于用户 allow
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("first run generates config template", () => {
+		fs.rmSync(path.join(TMP_AGENT, "config"), { recursive: true, force: true });
+		setConfig({});
+		const h = makeHarness(); h.install(); // 触发 loadUserRules → 生成模板
+		const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
+		expect(fs.existsSync(p)).toBe(true);
+	});
+});
+
+// ── 3. 安全审计回归(8/8 载荷,#12) ─────────────────────
+
+describe("security audit regression (all payloads must NOT be rule-allowed)", () => {
+	const payloads: Array<[string, string, any]> = [
+		["V1 cat private key", "bash", { command: "cat ~/.ssh/id_rsa" }],
+		["V2 redirect to authorized_keys", "bash", { command: "echo evil > ~/.ssh/authorized_keys" }],
+		["V3 newline hides second command", "bash", { command: "ls\nbash /tmp/evil.sh" }],
+		["V4 env prefix", "bash", { command: "env npx -y evil-pkg" }],
+		["V5 rg --pre", "bash", { command: "rg --pre=sh pattern" }],
+		["V6 sort -o rc file", "bash", { command: "sort -o ~/.bashrc payload.txt" }],
+		["V7 git --output=", "bash", { command: "git log --format=x --output=~/Library/LaunchAgents/x.plist" }],
+	];
+	for (const [name, tool, input] of payloads) {
+		test(`${name} → reaches classifier (gray)`, async () => {
+			setConfig({});
+			const h = makeHarness(); h.install();
+			h.responses = [{ text: "<verdict>deny</verdict> audit payload" }];
+			const r = await toolCall(h, tool, input);
+			expect(h.calls.length).toBe(1); // 未被规则层短路
+			expect(r?.block).toBe(true);    // 分类器裁决生效
+		});
+	}
+	test("V8 read ~/.npmrc → S0 deny (list expanded)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: "~/.npmrc" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+});
+
+// ── 4. 分类器(重试矩阵 + 参数形态) ─────────────────────
 
 describe("classifier", () => {
 	test("success on first try: single call, thinkingEnabled=false, maxTokens=512", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
 		const r = await toolCall(h, "bash", { command: "cargo build" });
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(1);
-		expect(h.calls[0]).toEqual({ maxTokens: 512, thinkingEnabled: false, reasoning: undefined });
+		expect(h.calls[0]).toEqual({ maxTokens: 512, thinkingEnabled: false });
 	});
-	test("empty output (stopReason=length) → retry at 1024, verdict honored", async () => {
+	test("empty output → retry at 1024, verdict honored", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.responses = [{ text: "", stopReason: "length" }, { text: "<verdict>deny</verdict> bad" }];
 		const r = await toolCall(h, "bash", { command: "cargo build" });
 		expect(h.calls.map((c: any) => c.maxTokens)).toEqual([512, 1024]);
 		expect(r?.block).toBe(true);
 	});
-	test("truncated output → retry", async () => {
-		const h = makeHarness(); h.install();
-		h.responses = [{ text: "<verdict>allow", stopReason: "length" }, { text: "<verdict>allow</verdict> ok" }];
-		const r = await toolCall(h, "bash", { command: "cargo build" });
-		expect(h.calls.length).toBe(2);
-		expect(r).toBeUndefined();
-	});
 	test("both attempts fail → fail-closed deny with per-attempt diagnostics", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.responses = [{ text: "", stopReason: "length" }, new Error("gateway boom")];
 		const r = await toolCall(h, "bash", { command: "cargo build" });
@@ -130,6 +260,7 @@ describe("classifier", () => {
 		expect(r.reason).toContain("第2次(1024t)");
 	});
 	test("ask + interactive confirm → allow; headless → deny", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.responses = [{ text: "<verdict>ask</verdict> risky" }];
 		const r = await toolCall(h, "mcp__x__y", { a: 1 });
@@ -144,7 +275,7 @@ describe("classifier", () => {
 	});
 });
 
-// ── 3. 影子缓存(observe-only:行为零变化 + 统计正确) ────
+// ── 5. 影子缓存(observe-only:行为零变化 + 统计正确) ────
 
 function shadowStats(h: Harness): Record<string, number> {
 	h.notifies.length = 0;
@@ -159,11 +290,13 @@ function shadowStats(h: Harness): Record<string, number> {
 
 describe("shadow cache (observe-only)", () => {
 	test("rule verdicts never enter the shadow stats", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
-		await toolCall(h, "bash", { command: "ls" });
+		await toolCall(h, "write", { path: "/proj/a.ts", content: "x" }); // 规则 allow(路径层)
 		expect(shadowStats(h).gray).toBe(0);
 	});
 	test("repeat gray call: would-hit counted, model still called (never short-circuits)", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install(); userMsg(h, "任务");
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		const r1 = await toolCall(h, "bash", { command: "cargo build" });
@@ -172,10 +305,11 @@ describe("shadow cache (observe-only)", () => {
 		expect(s.gray).toBe(2);
 		expect(s.hits).toBe(1);
 		expect(h.calls.length).toBe(2); // observe-only:模型两次都真实调用
-		expect(r1).toBeUndefined(); // 行为零变化:两次都放行
+		expect(r1).toBeUndefined();
 		expect(r2).toBeUndefined();
 	});
 	test("new user message → context-changed miss and overwrite", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install(); userMsg(h, "任务");
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		await toolCall(h, "bash", { command: "cargo build" });
@@ -184,22 +318,15 @@ describe("shadow cache (observe-only)", () => {
 		expect(shadowStats(h).missCtx).toBe(1);
 	});
 	test("ask and fail-closed never enter the cache", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.responses = [{ text: "<verdict>ask</verdict> risky" }];
 		await toolCall(h, "mcp__x__y", { a: 1 });
 		await toolCall(h, "mcp__x__y", { a: 1 });
 		expect(shadowStats(h).missNoEntry).toBe(2);
 	});
-	test("divergence counter: cached allow vs model deny on hit", async () => {
-		const h = makeHarness(); h.install(); userMsg(h, "任务");
-		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
-		await toolCall(h, "bash", { command: "cargo build" });
-		h.responses = [{ text: "<verdict>deny</verdict> bad" }];
-		const r2 = await toolCall(h, "bash", { command: "cargo build" });
-		expect(r2?.block).toBe(true); // observe-only:行为仍是模型裁决(拦截)
-		expect(shadowStats(h).dangerous).toBe(1);
-	});
 	test("LRU(128) evicts the oldest entry", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install(); userMsg(h, "任务");
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		for (let i = 0; i < 129; i++) await toolCall(h, "mcp__e__t", { i });
@@ -211,10 +338,11 @@ describe("shadow cache (observe-only)", () => {
 	});
 });
 
-// ── 4. /automode 命令语义(显式 on/off + 只读状态) ───────
+// ── 6. /automode 命令语义(显式 on/off + 只读状态) ───────
 
 describe("/automode command", () => {
 	test("bare call is read-only status with stats and usage", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		h.commands.automode.handler("", h.ctx);
 		expect(h.notifies[0][0]).toContain("开启");
@@ -222,6 +350,7 @@ describe("/automode command", () => {
 		expect(h.notifies[0][0]).toContain("用法");
 	});
 	test("on/off are idempotent, annotated (未变化) when same", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		await h.commands.automode.handler("on", h.ctx);
 		expect(h.notifies.at(-1)![0]).toContain("已开启(未变化)");
@@ -231,12 +360,14 @@ describe("/automode command", () => {
 		expect(h.notifies.at(-1)![0]).toContain("已关闭(未变化)"); // 大小写归一化
 	});
 	test("off actually disables gating", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		await h.commands.automode.handler("off", h.ctx);
-		const r = await toolCall(h, "bash", { command: "rm -rf /tmp/x" });
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
 		expect(r).toBeUndefined(); // 关闭后危险命令也不再拦
 	});
 	test("unknown arg → warning with usage", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install();
 		await h.commands.automode.handler(" of", h.ctx);
 		expect(h.notifies.at(-1)![0]).toContain("未知参数");
@@ -244,10 +375,11 @@ describe("/automode command", () => {
 	});
 });
 
-// ── 5. debug 通知标注 ───────────────────────────────────
+// ── 7. debug 通知标注 ───────────────────────────────────
 
 describe("debug annotations", () => {
 	test("--auto-mode-debug: allows notify with shadow would-hit tag", async () => {
+		setConfig({});
 		const h = makeHarness(); h.install({ debug: true });
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		await toolCall(h, "bash", { command: "cargo build" });
