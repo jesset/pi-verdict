@@ -1,6 +1,6 @@
 {
   "name": "pi-verdict",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Pi coding agent extension: automatic tool-call permission verdicts — rule layer + model classifier with three-state adjudication (allow/ask/deny), fail-closed, evidence-driven",
   "author": "Jesset (https://github.com/jesset)",
   "type": "module",
@@ -12,9 +12,13 @@
     "LICENSE"
   ],
   "keywords": [
+    "pi-package",
     "pi",
     "pi-extension",
+    "extension",
     "pi-coding-agent",
+    "auto-mode",
+    "automode",
     "permissions",
     "security",
     "tool-call",
@@ -28,6 +32,9 @@
   "homepage": "https://github.com/jesset/pi-verdict#readme",
   "bugs": "https://github.com/jesset/pi-verdict/issues",
   "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test"

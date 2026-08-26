@@ -59,7 +59,7 @@ tool_call
 ## Quick start
 
 ```bash
-# install from npm (after the first release is published)
+# install from npm (listed in the package catalog: https://pi.dev/packages/pi-verdict)
 pi install npm:pi-verdict
 
 # or directly from git — try it once

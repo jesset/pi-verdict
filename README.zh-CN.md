@@ -58,7 +58,7 @@ tool_call
 ## 快速开始
 
 ```bash
-# 从 npm 安装(首发版本发布后可用)
+# 从 npm 安装(已收录 pi 官方包目录: https://pi.dev/packages/pi-verdict)
 pi install npm:pi-verdict
 
 # 或直接从源码 —— 试用一次

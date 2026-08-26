@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-27
+
+### Changed
+
+- package.json 元数据接入 pi 官方包目录(pi.dev/packages):keywords 新增 `pi-package`(目录收录条件,实测对比已收录/未收录包确认)与 `extension`(目录类型标签显示为 extension 而非泛化 package);新增 `pi` manifest 显式声明 `extensions/` 资源(此前依赖约定目录发现);README 安装段同步目录链接
+- keywords 新增 `auto-mode`/`automode`(对齐直接对标包 @czottmann/pi-automode 的主流写法,命中 /automode 命令名与仓库名搜索;经评估不引入 claude/claudecode —— 本包为 pi 扩展而非 Claude Code 插件,误导性关键字与诚实定位相悖,且两个直接竞品均未使用)
+
 ## [0.2.1] - 2026-08-27
 
 ### Added
