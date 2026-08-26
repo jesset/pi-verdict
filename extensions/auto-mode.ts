@@ -21,7 +21,8 @@
  *   --auto-mode / --no-auto-mode   CLI flag,总开关(默认开)
  *   --auto-mode-model provider/id  分类器模型(默认继承会话当前模型)
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
- *   PI_AUTO_MODE_DEBUG=1           所有裁决(含放行)都弹通知;影子缓存标注同步开启
+ *   --auto-mode-debug             所有裁决(含放行)都弹通知;影子缓存标注同步开启
+ *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
  *
  * 已知原型简化(见 README「已知限制」):
  *   - bash 分段是朴素切分(不处理引号内的 | 等),无 AST
@@ -479,9 +480,10 @@ function shadowTag(probe: ShadowProbe): string {
 export default function autoMode(pi: ExtensionAPI) {
 	pi.registerFlag("auto-mode", { description: "Enable Auto Mode (rules + model classifier gating for tool calls)", type: "boolean", default: true });
 	pi.registerFlag("auto-mode-model", { description: "Classifier model as provider/id (default: inherit session model)", type: "string" });
+	pi.registerFlag("auto-mode-debug", { description: "Notify every verdict incl. allows, with shadow-cache annotation", type: "boolean", default: false });
 
 	let enabled = pi.getFlag("auto-mode") !== false;
-	const debug = process.env.PI_AUTO_MODE_DEBUG === "1";
+	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
 	const shadow = new ShadowCache();
 
 	function refreshStatus(ctx: ExtensionContext) {

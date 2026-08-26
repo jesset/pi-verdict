@@ -61,9 +61,10 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 | 方式 | 说明 | 默认 |
 |---|---|---|
 | `--auto-mode` / `--no-auto-mode` | CLI flag,总开关 | 开 |
+| `--auto-mode-debug` | CLI flag,所有裁决(含放行)都弹通知,灰区裁决附带影子缓存 would-hit/miss 标注 | 关 |
 | `--auto-mode-model provider/id` | 分类器模型 | 继承会话当前模型(自省) |
 | `PI_AUTO_MODE_MODEL` | 同上的环境变量形式 | — |
-| `PI_AUTO_MODE_DEBUG=1` | 所有裁决(含放行)都弹通知,灰区裁决附带影子缓存 would-hit/miss 标注 | 关 |
+| `PI_AUTO_MODE_DEBUG=1` | 同 `--auto-mode-debug` 的环境变量形式(兼容保留) | 关 |
 
 ### 影子缓存遥测(observe-only)
 
@@ -71,7 +72,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 
 - 键:`commandKey = hash(toolName + JSON.stringify(input) + cwd)`;`contextKey = hash(最近 5 条 sanitized user 行,与 transcript 同源)`
 - 只回写真实模型 allow/deny;ask 与 fail-closed 不入;上下文变更覆写旧条目
-- 观察方式:① `/automode` 通知尾行 —— `影子缓存: 灰区 N · 双键命中 H (P%) · miss 无条目 X/上下文变 Y · 命令重复 R · 分歧 危险 D/保守 C`;② `PI_AUTO_MODE_DEBUG=1` 时灰区裁决通知附 `(影子缓存: would-hit allow)` 或 `miss:no-entry` / `miss:context-changed`
+- 观察方式:① `/automode` 通知尾行 —— `影子缓存: 灰区 N · 双键命中 H (P%) · miss 无条目 X/上下文变 Y · 命令重复 R · 分歧 危险 D/保守 C`;② `pi --auto-mode-debug`(或 `PI_AUTO_MODE_DEBUG=1`)时灰区裁决通知附 `(影子缓存: would-hit allow)` 或 `miss:no-entry` / `miss:context-changed`
 - 「分歧」= 命中时缓存裁决与本次模型裁决不一致的反事实计数:危险(缓存 allow/模型 deny)是未来生效缓存的安全风险信号,保守反之
 - 会话内存态,`session_start` 重置;LRU 容量 128、键设计等全部硬编码(#5 定案)
 - CC 历史数据回放基准:双键命中率 3.2%,收益集中于重试/轮询循环(`research/cache-sim/`)
