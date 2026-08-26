@@ -23,7 +23,8 @@
  *
  * 配置:
  *   --auto-mode / --no-auto-mode   CLI flag,总开关(默认开)
- *   --auto-mode-model provider/id  分类器模型(默认继承会话当前模型)
+ *   --auto-mode-model provider/id[:thinking]  分类器模型 + 可选思考级别后缀
+ *                                  (pi 原生 --model 语法;缺省 off = 显式关思考)
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
  *   --auto-mode-debug             所有裁决(含放行)都弹通知;影子缓存标注同步开启
  *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
@@ -114,7 +115,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。classifierModel 可持久指定分类器模型(provider/id,如 zai/glm-4-flash;留空=自省继承会话模型)。修改后新会话生效。",
+	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。classifierModel 可持久指定分类器模型(provider/id,如 zai/glm-4-flash;可带 pi 原生思考后缀如 zai/glm-4-flash:low;留空=自省继承会话模型)。修改后新会话生效。",
 	allow: ["^ls\\b"],
 	deny: [],
 	builtinDenyFloor: true,
@@ -357,6 +358,7 @@ async function callClassifierOnce(
 	model: NonNullable<ExtensionContext["model"]>,
 	userMessage: string,
 	maxTokens: number,
+	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off",
 ): Promise<{ ok: true; text: string; stopReason: string } | { ok: false; error: string }> {
 	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
 	if (ctx.signal) signals.push(ctx.signal);
@@ -371,14 +373,14 @@ async function callClassifierOnce(
 				signal: AbortSignal.any(signals),
 				maxTokens,
 				temperature: 0,
-				// 关思考必须用 API 原生字段 thinkingEnabled:false,而非 reasoning:"off"。
-				// 扩展侧 ModelRegistry 只暴露 API 层 complete(),其选项类型没有 reasoning 字段
-				// (它是 SimpleStreamOptions 的字段;宽类型 Model<Api> 的索引签名让 TS 静默放行,
-				// 运行时被丢弃)——minimal/off 从未生效,GLM 按默认 max 档思考烧尽预算/超时。
-				// anthropic-messages 栈上 thinkingEnabled:false → thinking:{"type":"disabled"}
-				// → GLM 降为 effort low 轻思考;其他 API 为无害多余
-				// 属性,交由防御重试兜底。根因与研究:research/thinking-param-blackhole.md
-				thinkingEnabled: false,
+				// 思考参数必须用 API 原生字段(thinkingEnabled/effort),而非 reasoning
+				// (API 层 complete() 无此字段,宽类型索引签名静默放行后运行时丢弃——见
+				// research/thinking-param-blackhole.md)。
+				// 缺省 off = 显式关思考(实证送达 thinking:{"type":"disabled"},GLM 降为
+				// effort low 轻思考);后缀级别经 adaptive effort 送达(minimal→low 映射)。
+				...(thinking === "off"
+					? { thinkingEnabled: false }
+					: { thinkingEnabled: true, effort: thinking === "minimal" ? ("low" as const) : thinking }),
 				cacheRetention: "short",
 				sessionId: ctx.sessionManager.getSessionId(),
 			},
@@ -403,6 +405,7 @@ async function classifyWithModel(
 	ctx: ExtensionContext,
 	model: NonNullable<ExtensionContext["model"]>,
 	actionLine: string,
+	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off",
 ): Promise<ClassifierOutcome> {
 	const transcript = buildTranscript(ctx, actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
@@ -410,7 +413,7 @@ async function classifyWithModel(
 	const failures: string[] = [];
 	for (const [n, maxTokens] of attempts) {
 		if (ctx.signal?.aborted) break; // 用户已取消,不再重试
-		const r = await callClassifierOnce(ctx, model, userMessage, maxTokens);
+		const r = await callClassifierOnce(ctx, model, userMessage, maxTokens, thinking);
 		if (r.ok) {
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, 原始输出=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
@@ -552,7 +555,7 @@ function shadowTag(probe: ShadowProbe): string {
 
 export default function autoMode(pi: ExtensionAPI) {
 	pi.registerFlag("auto-mode", { description: "Enable Auto Mode (rules + model classifier gating for tool calls)", type: "boolean", default: true });
-	pi.registerFlag("auto-mode-model", { description: "Classifier model as provider/id (default: inherit session model)", type: "string" });
+	pi.registerFlag("auto-mode-model", { description: "Classifier model as provider/id[:thinking] (pi --model syntax; default: inherit session model)", type: "string" });
 	pi.registerFlag("auto-mode-debug", { description: "Notify every verdict incl. allows, with shadow-cache annotation", type: "boolean", default: false });
 
 	let enabled = pi.getFlag("auto-mode") !== false;
@@ -603,19 +606,42 @@ export default function autoMode(pi: ExtensionAPI) {
 	});
 
 	let warnedClassifierModel = false;
+	/** 思考级别集(pi 原生 EXTENDED_THINKING_LEVELS;后缀语法对齐 pi --model provider/id:thinking) */
+	const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+	/** 解析 "provider/id:thinking" → { specPart, level }。无效后缀 → 忽略并警告一次 */
+	function parseModelSpec(raw: string, ctx: ExtensionContext): { specPart: string; level: string | null } {
+		const slash = raw.lastIndexOf("/");
+		const colon = raw.lastIndexOf(":");
+		if (colon > slash + 1 && THINKING_LEVELS.has(raw.slice(colon + 1))) {
+			return { specPart: raw.slice(0, colon), level: raw.slice(colon + 1) };
+		}
+		if (colon > slash + 1 && !warnedClassifierModel) {
+			warnedClassifierModel = true;
+			ctx.ui.notify(`pi-verdict:思考级别后缀 "${raw.slice(colon + 1)}" 无效(合法:${[...THINKING_LEVELS].join("/")}),已忽略`, "warning");
+		}
+		return { specPart: raw, level: null };
+	}
+
+	/** 分类器思考级别:spec 后缀指定;缺省 off(显式关思考,blackhole 研究背书) */
+	let classifierThinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off";
+
 	function resolveClassifierModel(ctx: ExtensionContext): NonNullable<ExtensionContext["model"]> | null {
 		// 优先级:CLI flag > 环境变量 > 配置文件(classifierModel) > 自省(会话模型)
-		const spec =
+		const raw =
 			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? userRules.classifierModel;
-		if (spec) {
-			const slash = spec.indexOf("/");
+		classifierThinking = "off";
+		if (raw) {
+			const { specPart, level } = parseModelSpec(raw, ctx);
+			if (level) classifierThinking = level as typeof classifierThinking;
+			const slash = specPart.indexOf("/");
 			if (slash > 0) {
-				const model = ctx.modelRegistry.find(spec.slice(0, slash), spec.slice(slash + 1));
+				const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
 				if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
 			}
 			if (!warnedClassifierModel) {
 				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
-				ctx.ui.notify(`pi-verdict:分类器模型 "${spec}" 不可用(未找到或未配置凭证),回退会话模型(自省)`, "warning");
+				ctx.ui.notify(`pi-verdict:分类器模型 "${raw}" 不可用(未找到或未配置凭证),回退会话模型(自省)`, "warning");
 			}
 		}
 		return ctx.model ?? null; // 自省:继承当前会话模型
@@ -654,7 +680,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		const ctxKey = shadowContextKey(ctx);
 		const probe = shadow.probe(cmdKey, ctxKey);
 
-		const outcome = await classifyWithModel(ctx, model, action);
+		const outcome = await classifyWithModel(ctx, model, action, classifierThinking);
 
 		// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
 		// 命中且本次为可缓存裁决时,对比反事实一致性

@@ -41,7 +41,7 @@ function makeHarness(): Harness {
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
 			complete: async (_m: any, _req: any, opts: any) => {
-				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled });
+				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort });
 				const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
 				if (r instanceof Error) throw r;
 				return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
@@ -254,6 +254,41 @@ describe("classifier model resolution", () => {
 		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("nope/missing"));
 		expect(warns.length).toBe(1); // 仅一次
 	});
+	test("pi-native thinking suffix: zai/flash:low → effort low (adaptive)", async () => {
+		setConfig({ classifierModel: "zai/flash:low" });
+		const h = makeHarness(); h.install();
+		h.findMap = { "zai/flash": { id: "glm-4-flash" } };
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].model).toBe("glm-4-flash");
+		expect(h.calls[0].thinkingEnabled).toBe(true);
+		expect(h.calls[0].effort).toBe("low");
+	});
+	test("suffix minimal maps to effort low; no suffix stays explicit off", async () => {
+		setConfig({ classifierModel: "zai/flash:minimal" });
+		const h = makeHarness(); h.install();
+		h.findMap = { "zai/flash": { id: "glm-4-flash" } };
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }, { text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].effort).toBe("low"); // minimal → low(anthropic effort 无 minimal)
+		setConfig({ classifierModel: "zai/flash" });
+		h.handlers.session_start?.({}, h.ctx); // 重载配置
+		h.findMap = { "zai/flash": { id: "glm-4-flash" } };
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[1].thinkingEnabled).toBe(false); // 无后缀 = 显式关思考
+		expect(h.calls[1].effort).toBeUndefined();
+	});
+	test("invalid suffix warned once and ignored", async () => {
+		setConfig({ classifierModel: "zai/flash:ultra" });
+		const h = makeHarness(); h.install();
+		h.findMap = {}; // 真实注册表找不到 flash:ultra 这样的 id
+		// 后缀 ultra 非法 → 忽略后缀,specPart = zai/flash:ultra 注册表查无 → 回退自省 + 警告
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].model).toBe("mock/glm");
+		expect(h.notifies.some(([m, l]) => l === "warning" && m.includes("ultra"))).toBe(true);
+	});
+
 	test("CLI flag beats config", async () => {
 		setConfig({ classifierModel: "zai/flash" });
 		const h = makeHarness(); h.install({ modelFlag: "prov/flagged" });
