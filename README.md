@@ -113,4 +113,4 @@ bun install        # 安装 typescript + @types/node(仅类型检查用)
 bun run typecheck  # tsc --noEmit
 ```
 
-注意:`tsconfig.json` 的 `paths` 指向本机全局安装的 `@earendil-works/pi-coding-agent` 类型,换机器需调整。
+`tsconfig.json` 的 `paths` 指向 `node_modules` 下的 `@earendil-works/pi-coding-agent` 类型,`bun install` 即可用。

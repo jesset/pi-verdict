@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.3",
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2"
   }
