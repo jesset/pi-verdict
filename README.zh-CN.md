@@ -21,7 +21,11 @@
 | [@zhushanwen/pi-permission](https://www.npmjs.com/package/@zhushanwen/pi-permission) | ✅(outcome) | ❌ 单轮无上下文 | closed(→ ask) | 4 |
 | [@gotgenes/pi-permission-system](https://github.com/gotgenes/pi-packages) | ✅ 纯确定性 | —(无内置分类器) | closed | 3 |
 
-完整全景:[`research/pi-permission-landscape.md`](research/pi-permission-landscape.md)。零依赖单文件形态是有意为之——整个扩展就是一个可通读的 [~590 行文件](extensions/auto-mode.ts)。
+完整全景:[`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · 与最近架构亲缘的收敛分析:[`research/pi-automode-convergence.md`](research/pi-automode-convergence.md)。
+
+诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、零依赖单文件(~700 行,刻意为之)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
+
+零依赖单文件形态是有意为之——整个扩展就是一个可通读的 [~700 行文件](extensions/auto-mode.ts)。
 
 ## 管线
 
@@ -104,6 +108,8 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 - [`research/thinking-param-blackhole.md`](research/thinking-param-blackhole.md) —— 思考模型烧尽分类器预算的三层取证,以及为什么修复是 `thinkingEnabled: false`
 - [`research/rule-engine-sim`](research/rule-engine-sim/README.md) —— 用 746 条真实 bash 调用实测 tree-sitter 规则引擎移植(**灰区吸收 0 条**)并否决
 - [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) —— 本 README 定位所对照的竞品全景
+- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) —— 规则层第三方安全审计(8/8 复现 → 0.2.0 架构性修复)
+- [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md) —— 与 pi-automode 何处真正收敛、何处仍然不同
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) —— Claude Code 分类器设计的结构化还原(基于自托管 Langfuse 观测),本扩展 transcript 契约的血统来源
 
 ## 状态与限制

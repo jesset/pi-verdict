@@ -21,7 +21,11 @@
 | [@zhushanwen/pi-permission](https://www.npmjs.com/package/@zhushanwen/pi-permission) | ✅ (outcome) | ❌ single-turn, no context | closed (→ ask) | 4 |
 | [@gotgenes/pi-permission-system](https://github.com/gotgenes/pi-packages) | ✅ deterministic only | — (no built-in classifier) | closed | 3 |
 
-Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md). The single-file, zero-dependency shape is deliberate — the whole extension is one readable [~590-line file](extensions/auto-mode.ts).
+Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · convergence analysis with the closest architectural relative: [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md).
+
+Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a zero-dependency single file (~700 lines, deliberate), and the measurement habit — every design decision in this repo is backed by shipped research.
+
+The single-file, zero-dependency shape is deliberate — the whole extension is one readable [~700-line file](extensions/auto-mode.ts).
 
 ## Pipeline
 
@@ -105,6 +109,8 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 - [`research/thinking-param-blackhole.md`](research/thinking-param-blackhole.md) — three-layer forensic root-cause of thinking models burning the classifier budget; why the fix is `thinkingEnabled: false`
 - [`research/rule-engine-sim`](research/rule-engine-sim/README.md) — measured a tree-sitter rule-engine port against 746 real bash calls (**absorbs 0 gray calls**) and rejected it
 - [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) — the competitive landscape this README's positioning is checked against
+- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) — third-party audit of the rule layer (8/8 reproduced → fixed architecturally in 0.2.0)
+- [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md) — where this project genuinely converges with pi-automode, and what remains distinct
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) — structural reconstruction of Claude Code's classifier design (via self-hosted Langfuse observations) that this extension's transcript contract descends from
 
 ## Status & limitations
