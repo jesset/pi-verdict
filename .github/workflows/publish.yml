@@ -1,29 +1,59 @@
-# npm 发布:推 v* tag 触发;OIDC trusted publishing(无 token,带 provenance)。
+# 发布触发:GitHub Release 发布(published)或手动 workflow_dispatch(输入 tag)。
+# 借鉴 czottmann/pi-automode 的 publish 设计:双验证 + npm@11 trusted publishing。
 # 一次性配置(npmjs.com → pi-verdict → Settings → Trusted Publisher):
-#   Repository: jesset/pi-verdict
-#   Workflow:   publish.yml
-#   Environment: (留空或 main 分支)
-# 若暂不配置 trusted publishing,可改用 NPM_TOKEN secret 版本(见注释)。
+#   Repository: jesset/pi-verdict / Workflow: publish.yml / Environment: 留空
 
 name: Publish
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish, e.g. v0.1.0"
+        required: true
+        type: string
 
 permissions:
   contents: read
   id-token: write # npm OIDC provenance
 
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          package_version=$(bun -e 'console.log(require("./package.json").version)')
+          expected_tag="v${package_version}"
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            echo "::error::release tag ($RELEASE_TAG) != package.json version ($expected_tag)"
+            exit 1
+          fi
+          tag_commit=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$head_commit" ]; then
+            echo "::error::checked-out commit ($head_commit) != tag $RELEASE_TAG ($tag_commit)"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -33,25 +63,16 @@ jobs:
           bun run typecheck
           bun test
 
-      - name: Assert tag matches package.json version
-        run: |
-          PKG_VERSION="v$(bun -e 'console.log(require("./package.json").version)')"
-          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} != package.json ${PKG_VERSION}"
-            exit 1
-          fi
+      - name: Use npm with trusted publishing support
+        run: npm install --global npm@11
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Pack inspection (files whitelist sanity)
+      - name: Validate package contents
         run: npm pack --dry-run
 
       - name: Publish
         run: npm publish --provenance --access public
-        # 无 token 版(需在 repo secrets 配 NPM_TOKEN):
-        # env:
-        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        # 并将上一行改为: npm publish --access public
