@@ -312,14 +312,16 @@ interface ClassifierOutcome {
 }
 
 const CLASSIFIER_TIMEOUT_MS = 15_000;
+const CLASSIFIER_MAX_TOKENS = 512;
+const CLASSIFIER_RETRY_MAX_TOKENS = 1024; // 防御重试档:覆盖无视 reasoning:off 或轻思考仍超预算的模型
 
-async function classifyWithModel(
+/** 单次分类器调用:显式 reasoning:"off"(见下方注释),失败返回错误串而非抛出 */
+async function callClassifierOnce(
 	ctx: ExtensionContext,
 	model: NonNullable<ExtensionContext["model"]>,
-	actionLine: string,
-): Promise<ClassifierOutcome> {
-	const transcript = buildTranscript(ctx, actionLine);
-	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
+	userMessage: string,
+	maxTokens: number,
+): Promise<{ ok: true; text: string; stopReason: string } | { ok: false; error: string }> {
 	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
 	if (ctx.signal) signals.push(ctx.signal);
 	try {
@@ -331,9 +333,16 @@ async function classifyWithModel(
 			},
 			{
 				signal: AbortSignal.any(signals),
-				maxTokens: 512, // 给思考模型留推理余量(CC 分类器为 max_tokens=64 + thinking disabled)
+				maxTokens,
 				temperature: 0,
-				reasoning: "minimal", // 压低推理档;不认识的 provider 会忽略
+				// 关思考必须用 API 原生字段 thinkingEnabled:false,而非 reasoning:"off"。
+				// 扩展侧 ModelRegistry 只暴露 API 层 complete(),其选项类型没有 reasoning 字段
+				// (它是 SimpleStreamOptions 的字段;宽类型 Model<Api> 的索引签名让 TS 静默放行,
+				// 运行时被丢弃)——minimal/off 从未生效,GLM 按默认 max 档思考烧尽预算/超时。
+				// anthropic-messages 栈上 thinkingEnabled:false → thinking:{"type":"disabled"}
+				// → GLM 降为 effort low 轻思考;其他 API 为无害多余
+				// 属性,交由防御重试兜底。根因与研究:research/thinking-param-blackhole.md
+				thinkingEnabled: false,
 				cacheRetention: "short",
 				sessionId: ctx.sessionManager.getSessionId(),
 			},
@@ -342,16 +351,44 @@ async function classifyWithModel(
 			.filter((b) => b.type === "text")
 			.map((b) => b.text)
 			.join("");
-		const diag = `stopReason=${response.stopReason}, model=${model.id}, 原始输出=${JSON.stringify(text.slice(0, 200))}`;
-		if (response.stopReason === "error" || response.stopReason === "aborted") {
-			return { verdict: "deny", reason: `分类器调用中止/出错(fail-closed): ${diag}`, source: "fail-closed" };
-		}
-		const parsed = parseVerdict(text);
-		if (!parsed) return { verdict: "deny", reason: `分类器输出违反契约(fail-closed): ${diag}`, source: "fail-closed" };
-		return { ...parsed, source: "model" };
+		return { ok: true, text, stopReason: response.stopReason };
 	} catch (err) {
-		return { verdict: "deny", reason: `分类器异常(fail-closed): ${err instanceof Error ? err.message : String(err)}`, source: "fail-closed" };
+		return { ok: false, error: err instanceof Error ? err.message : String(err) };
 	}
+}
+
+/**
+ * 灰区分类:两档尝试(512 → 失败重试 1024)。
+ * 重试触发:中止/出错/异常/输出违反契约(含空输出)——覆盖思考模型轻思考偶发空输出、
+ * 无视 disabled 的模型、拒收思考参数报错的模型;重试是模型无关的兼容层。
+ * 两档皆失败 → fail-closed deny(理由含两次诊断)。
+ */
+async function classifyWithModel(
+	ctx: ExtensionContext,
+	model: NonNullable<ExtensionContext["model"]>,
+	actionLine: string,
+): Promise<ClassifierOutcome> {
+	const transcript = buildTranscript(ctx, actionLine);
+	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
+	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
+	const failures: string[] = [];
+	for (const [n, maxTokens] of attempts) {
+		if (ctx.signal?.aborted) break; // 用户已取消,不再重试
+		const r = await callClassifierOnce(ctx, model, userMessage, maxTokens);
+		if (r.ok) {
+			const diag = `stopReason=${r.stopReason}, model=${model.id}, 原始输出=${JSON.stringify(r.text.slice(0, 200))}`;
+			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
+				const parsed = parseVerdict(r.text);
+				if (parsed) return { ...parsed, source: "model" };
+				failures.push(`第${n}次(${maxTokens}t)输出违反契约: ${diag}`);
+			} else {
+				failures.push(`第${n}次(${maxTokens}t)中止/出错: ${diag}`);
+			}
+		} else {
+			failures.push(`第${n}次(${maxTokens}t)异常: ${r.error}`);
+		}
+	}
+	return { verdict: "deny", reason: `分类器失败(fail-closed): ${failures.join("; ")}`, source: "fail-closed" };
 }
 
 // ============================================================================

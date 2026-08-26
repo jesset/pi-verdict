@@ -22,7 +22,7 @@ tool_call
   │     ├─ 输入:CC 风格 <transcript> 精简转录(用户消息流 + 工具调用流,
   │     │       不含 assistant 叙述与工具结果),待审查动作固定为最后一行
   │     ├─ 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
-  │     └─ 参数:maxTokens=512、reasoning=minimal、temperature=0、前缀缓存
+  │     └─ 参数:maxTokens=512(失败重试 1024)、thinkingEnabled=false(API 原生关思考)、temperature=0、前缀缓存
   │
   └─ 3. 三态裁决
         ├─ allow → 放行
@@ -87,7 +87,8 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 | `touch ./项目内文件` | 灰区 → 分类器 allow | ✅ 放行执行 |
 | `touch /tmp/xxx` | 灰区 → 分类器 ask → 非交互降级 | ✅ 拦截 |
 | `write ~/.ssh/xxx` | 规则层 S0 密钥路径 | ✅ 拦截 |
-| 分类器输出截断/违反契约 | fail-closed | ✅ 拦截 |
+| 分类器输出截断/违反契约 | 防御重试(512→1024) | ✅ 空输出/截断/超时/异常均重试一次,两档皆败才 fail-closed |
+| 思考模型轻思考偶发空输出(GLM effort low) | 防御重试 | ✅ 重试后裁决生效 |
 | 影子缓存:同键同上下文重复灰区调用 | observe-only | ✅ would-hit 计数,模型仍真实调用,行为不变 |
 | 影子缓存:新 user 消息后重放同命令 | observe-only | ✅ miss:context-changed 并覆写 |
 | 影子缓存:ask / fail-closed 结果 | observe-only | ✅ 不回写(重放仍 no-entry) |
