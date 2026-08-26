@@ -1,6 +1,6 @@
 {
   "name": "pi-verdict",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pi coding agent extension: automatic tool-call permission verdicts — rule layer + model classifier with three-state adjudication (allow/ask/deny), fail-closed, evidence-driven",
   "author": "Jesset (https://github.com/jesset)",
   "type": "module",
