@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pi-auto-mode",
+      "name": "pi-verdict",
       "devDependencies": {
         "@types/node": "^26.3.0",
         "typescript": "^7.0.2",

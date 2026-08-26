@@ -239,7 +239,7 @@ completeSimple(reviewModel, { systemPrompt, messages }, {
 
 ## 四、规则层种子集(供原型直接采用)
 
-以下清单从三个扩展的实现中提取合并,可直接作为 pi-auto-mode 原型的规则层初值。
+以下清单从三个扩展的实现中提取合并,可直接作为 pi-verdict 原型的规则层初值。
 
 ### 4.1 Bash 无条件白名单(只读/无副作用,直接放行)
 

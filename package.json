@@ -1,8 +1,8 @@
 {
-  "name": "pi-auto-mode",
+  "name": "pi-verdict",
   "private": true,
   "version": "0.1.0",
-  "description": "Auto Mode extension prototype for pi coding agent (rules + model classifier gating for tool calls)",
+  "description": "Pi coding agent extension: automatic tool-call permission verdicts — rule layer + model classifier with three-state adjudication (allow/ask/deny), fail-closed, evidence-driven",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

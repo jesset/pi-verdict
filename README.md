@@ -1,4 +1,4 @@
-# pi-auto-mode
+# pi-verdict
 
 Pi coding agent 的 **Auto Mode 扩展原型**:工具调用权限由「规则层 + 模型分类器」自动判定,无需人工逐次批准。
 
@@ -6,7 +6,7 @@ Pi coding agent 的 **Auto Mode 扩展原型**:工具调用权限由「规则层
 
 ## 背景
 
-Pi 默认以 YOLO 模式运行:所有工具调用(read/write/edit/bash)不经任何确认直接执行,核心刻意不内置权限系统(见 `research.md`、`research-pi-auto-mode.md`)。Claude Code 的 Auto Mode 用模型分类器自动裁决工具调用权限,减少批准疲劳。本扩展在 Pi 的 `tool_call` 钩子上实现等价能力 —— 方向相反:Pi 默认放行,本扩展自动拦截。
+Pi 默认以 YOLO 模式运行:所有工具调用(read/write/edit/bash)不经任何确认直接执行,核心刻意不内置权限系统(见 `research.md`、`research-pi-verdict.md`)。Claude Code 的 Auto Mode 用模型分类器自动裁决工具调用权限,减少批准疲劳。本扩展在 Pi 的 `tool_call` 钩子上实现等价能力 —— 方向相反:Pi 默认放行,本扩展自动拦截。
 
 ## 管线设计
 

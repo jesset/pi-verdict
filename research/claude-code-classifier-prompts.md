@@ -1,6 +1,6 @@
 # Claude Code 权限分类器提示词结构还原(基于自托管 Langfuse 观测数据)
 
-- 研究 Issue: [#4](https://github.com/jesset/pi-auto-mode/issues/4)(Part of #1)
+- 研究 Issue: [#4](https://github.com/jesset/pi-verdict/issues/4)(Part of #1)
 - 数据源: 自托管 Langfuse v4 实例(API 4.16.0,地址不公开),经 LLM 代理网关上报
 - 采样窗口: 2026-08-24T15:40Z ~ 2026-08-25T15:55Z(约 24h,样本充足,未放宽到 72h)
 - 查询方式: `GET /api/public/v2/observations`(`npx langfuse-cli api observations list`),按 `type=GENERATION` + `max_tokens=64` 特征初筛,再逐条拉取 `io` 字段确认

@@ -2,7 +2,7 @@
 
 > 目标仓库:`earendil-works/pi`(monorepo,包 `packages/coding-agent` @ 0.84.3)
 > 用途:稍后人工编辑、修订后按官方模板提交。**提交前必读**下方「提交须知」。
-> 事实来源:pi-auto-mode 仓库 `research/thinking-param-blackhole.md`(2026-08-26 取证)
+> 事实来源:pi-verdict 仓库 `research/thinking-param-blackhole.md`(2026-08-26 取证)
 
 ## 提交须知(来自 CONTRIBUTING.md,硬约束)
 
