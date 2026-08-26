@@ -53,8 +53,9 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 
 交互模式下:
 
-- `/automode` —— 开关 Auto Mode;footer 显示 `🛡️ auto` 表示生效中;通知尾行附带本会话影子缓存统计
-- 拦截时弹出通知,展示裁决理由
+- `/automode` —— 查看状态(只读,无副作用):当前开/关 + 本会话影子缓存统计
+- `/automode on` / `/automode off` —— 幂等设定(与现值相同不翻转,仅确认);未知参数严格拒绝并列出用法
+- footer 显示 `🛡️ auto` 表示生效中;拦截时弹出通知,展示裁决理由
 
 配置:
 
@@ -72,7 +73,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 
 - 键:`commandKey = hash(toolName + JSON.stringify(input) + cwd)`;`contextKey = hash(最近 5 条 sanitized user 行,与 transcript 同源)`
 - 只回写真实模型 allow/deny;ask 与 fail-closed 不入;上下文变更覆写旧条目
-- 观察方式:① `/automode` 通知尾行 —— `影子缓存: 灰区 N · 双键命中 H (P%) · miss 无条目 X/上下文变 Y · 命令重复 R · 分歧 危险 D/保守 C`;② `pi --auto-mode-debug`(或 `PI_AUTO_MODE_DEBUG=1`)时灰区裁决通知附 `(影子缓存: would-hit allow)` 或 `miss:no-entry` / `miss:context-changed`
+- 观察方式:① 裸 `/automode`(只读查看)—— `影子缓存: 灰区 N · 双键命中 H (P%) · miss 无条目 X/上下文变 Y · 命令重复 R · 分歧 危险 D/保守 C`;② `pi --auto-mode-debug`(或 `PI_AUTO_MODE_DEBUG=1`)时灰区裁决通知附 `(影子缓存: would-hit allow)` 或 `miss:no-entry` / `miss:context-changed`
 - 「分歧」= 命中时缓存裁决与本次模型裁决不一致的反事实计数:危险(缓存 allow/模型 deny)是未来生效缓存的安全风险信号,保守反之
 - 会话内存态,`session_start` 重置;LRU 容量 128、键设计等全部硬编码(#5 定案)
 - CC 历史数据回放基准:双键命中率 3.2%,收益集中于重试/轮询循环(`research/cache-sim/`)

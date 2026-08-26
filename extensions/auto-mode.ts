@@ -497,16 +497,28 @@ export default function autoMode(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("automode", {
-		description: "Toggle Auto Mode (automatic tool-call gating)",
-		handler: async (_args, ctx) => {
-			enabled = !enabled;
-			refreshStatus(ctx);
-			ctx.ui.notify(
-				enabled
-					? `🛡️ Auto Mode 已开启:工具调用由规则+分类器自动裁决\n${shadow.summary()}`
-					: `Auto Mode 已关闭:工具调用直接执行\n${shadow.summary()}`,
-				"info",
-			);
+		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
+		handler: async (args, ctx) => {
+			const arg = args.trim().toLowerCase();
+			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
+			if (arg === "") {
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode:开启" : "Auto Mode:关闭"}\n${shadow.summary()}\n用法: /automode on|off`, "info");
+			return;
+			}
+			// 幂等设定:与现值相同不翻转,仅确认
+			if (arg === "on" || arg === "off") {
+				const next = arg === "on";
+				const changed = next !== enabled;
+				enabled = next;
+				refreshStatus(ctx);
+				const head = next
+					? `🛡️ Auto Mode 已开启${changed ? "" : "(未变化)"}:工具调用由规则+分类器自动裁决`
+					: `Auto Mode 已关闭${changed ? "" : "(未变化)"}:工具调用直接执行`;
+				ctx.ui.notify(`${head}\n${shadow.summary()}`, "info");
+				return;
+			}
+			// 未知参数:严格拒绝并列出用法(大小写已归一化)
+			ctx.ui.notify(`未知参数: ${arg}\n用法: /automode(查看状态)| /automode on | /automode off`, "warning");
 		},
 	});
 
