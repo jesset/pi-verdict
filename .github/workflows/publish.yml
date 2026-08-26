@@ -63,13 +63,13 @@ jobs:
           bun run typecheck
           bun test
 
-      - name: Use npm with trusted publishing support
-        run: npm install --global npm@11
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Use npm with trusted publishing support
+        run: npm install --global npm@11
 
       - name: Validate package contents
         run: npm pack --dry-run
