@@ -27,7 +27,8 @@
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
  *   --auto-mode-debug             所有裁决(含放行)都弹通知;影子缓存标注同步开启
  *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
- *   <agentDir>/config/pi-verdict.json   用户规则:{ allow: [regex], deny: [regex] }
+ *   <agentDir>/config/pi-verdict.json   用户规则:{ allow: [regex], deny: [regex],
+ *                                     builtinDenyFloor, classifierModel }
  *                                     匹配:bash=完整命令串 / 文件工具=绝对路径;新会话生效
  *
  * 已知原型简化(见 README「已知限制」):
@@ -101,9 +102,11 @@ interface UserRules {
 	deny: RegExp[];
 	/** 内置 deny floor 开关(危险正则 + 路径敏感度 deny),默认 true;关闭后依赖用户规则与分类器 */
 	builtinDenyFloor: boolean;
+	/** 分类器模型 spec(provider/id);null = 未配置(自省继承会话模型) */
+	classifierModel: string | null;
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true, classifierModel: null };
 
 function userConfigPath(): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
@@ -111,10 +114,11 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。修改后新会话生效。",
+	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。classifierModel 可持久指定分类器模型(provider/id,如 zai/glm-4-flash;留空=自省继承会话模型)。修改后新会话生效。",
 	allow: ["^ls\\b"],
 	deny: [],
 	builtinDenyFloor: true,
+	classifierModel: null,
 }, null, 2)}\n`;
 
 /**
@@ -131,7 +135,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[] } {
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [] };
 		}
-		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; builtinDenyFloor?: unknown };
+		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown };
 		const skipped: string[] = [];
 		const compile = (list: unknown): RegExp[] =>
 			(Array.isArray(list) ? list : []).filter((x): x is string => typeof x === "string").flatMap((src) => {
@@ -142,7 +146,15 @@ function loadUserRules(): { rules: UserRules; skipped: string[] } {
 					return [];
 				}
 			});
-		return { rules: { allow: compile(raw.allow), deny: compile(raw.deny), builtinDenyFloor: raw.builtinDenyFloor !== false }, skipped };
+		return {
+			rules: {
+				allow: compile(raw.allow),
+				deny: compile(raw.deny),
+				builtinDenyFloor: raw.builtinDenyFloor !== false,
+				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
+			},
+			skipped,
+		};
 	} catch {
 		return { rules: EMPTY_RULES, skipped: [] };
 	}
@@ -590,13 +602,20 @@ export default function autoMode(pi: ExtensionAPI) {
 		},
 	});
 
+	let warnedClassifierModel = false;
 	function resolveClassifierModel(ctx: ExtensionContext): NonNullable<ExtensionContext["model"]> | null {
-		const spec = (pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL;
+		// 优先级:CLI flag > 环境变量 > 配置文件(classifierModel) > 自省(会话模型)
+		const spec =
+			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? userRules.classifierModel;
 		if (spec) {
 			const slash = spec.indexOf("/");
 			if (slash > 0) {
 				const model = ctx.modelRegistry.find(spec.slice(0, slash), spec.slice(slash + 1));
 				if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
+			}
+			if (!warnedClassifierModel) {
+				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
+				ctx.ui.notify(`pi-verdict:分类器模型 "${spec}" 不可用(未找到或未配置凭证),回退会话模型(自省)`, "warning");
 			}
 		}
 		return ctx.model ?? null; // 自省:继承当前会话模型

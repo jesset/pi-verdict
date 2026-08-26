@@ -24,7 +24,8 @@ interface Harness {
 	responses: any[];
 	confirms: number;
 	confirmAnswer: boolean;
-	install: (opts?: { flag?: boolean; debug?: boolean }) => void;
+	findMap: Record<string, any> | undefined;
+	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => void;
 }
 
 function makeHarness(): Harness {
@@ -33,19 +34,20 @@ function makeHarness(): Harness {
 	const notifies: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true };
+	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
 			complete: async (_m: any, _req: any, opts: any) => {
-				h.calls.push({ maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled });
+				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled });
 				const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
 				if (r instanceof Error) throw r;
 				return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
 			},
-			find: () => null, hasConfiguredAuth: () => false,
+			find: (p: string, id: string) => h.findMap?.[`${p}/${id}`] ?? null,
+			hasConfiguredAuth: () => true,
 		},
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
@@ -55,8 +57,8 @@ function makeHarness(): Harness {
 	};
 	h.ctx = ctx;
 
-	h.install = (opts?: { flag?: boolean; debug?: boolean }) => {
-		flags = { "auto-mode": opts?.flag ?? true, "auto-mode-debug": opts?.debug ?? false };
+	h.install = (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => {
+		flags = { "auto-mode": opts?.flag ?? true, "auto-mode-debug": opts?.debug ?? false, ...(opts?.modelFlag ? { "auto-mode-model": opts.modelFlag } : {}) };
 		const prev = process.env.PI_AUTO_MODE_DEBUG;
 		if (opts?.debug) process.env.PI_AUTO_MODE_DEBUG = "1"; else delete process.env.PI_AUTO_MODE_DEBUG;
 		autoMode({
@@ -73,11 +75,12 @@ function makeHarness(): Harness {
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean; classifierModel?: string | null }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
 	const raw: Record<string, unknown> = { ...config };
+	if (cfg.classifierModel !== undefined) raw.classifierModel = cfg.classifierModel;
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
@@ -230,6 +233,37 @@ describe("security audit regression (all payloads must NOT be rule-allowed)", ()
 	});
 });
 
+// ── 3.5 分类器模型解析(flag > env > config > 自省) ─────
+
+describe("classifier model resolution", () => {
+	test("config classifierModel is used when flag/env absent", async () => {
+		setConfig({ classifierModel: "zai/flash" });
+		const h = makeHarness(); h.install();
+		h.findMap = { "zai/flash": { id: "glm-4-flash" } };
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].model).toBe("glm-4-flash");
+	});
+	test("invalid config model falls back to session model with one-time warning", async () => {
+		setConfig({ classifierModel: "nope/missing" });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }, { text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].model).toBe("mock/glm"); // 回退自省
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("nope/missing"));
+		expect(warns.length).toBe(1); // 仅一次
+	});
+	test("CLI flag beats config", async () => {
+		setConfig({ classifierModel: "zai/flash" });
+		const h = makeHarness(); h.install({ modelFlag: "prov/flagged" });
+		h.findMap = { "zai/flash": { id: "glm-4-flash" }, "prov/flagged": { id: "flagged-model" } };
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.calls[0].model).toBe("flagged-model");
+	});
+});
+
 // ── 4. 分类器(重试矩阵 + 参数形态) ─────────────────────
 
 describe("classifier", () => {
@@ -240,7 +274,7 @@ describe("classifier", () => {
 		const r = await toolCall(h, "bash", { command: "cargo build" });
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(1);
-		expect(h.calls[0]).toEqual({ maxTokens: 512, thinkingEnabled: false });
+		expect(h.calls[0]).toEqual({ model: "mock/glm", maxTokens: 512, thinkingEnabled: false });
 	});
 	test("empty output → retry at 1024, verdict honored", async () => {
 		setConfig({});
