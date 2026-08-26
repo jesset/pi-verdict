@@ -28,3 +28,5 @@ jobs:
 
       - name: Test
         run: bun test
+
+# trigger re-registration: touch v2

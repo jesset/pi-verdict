@@ -76,3 +76,5 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
+
+# trigger re-registration: touch v2
