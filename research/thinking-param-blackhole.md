@@ -1,18 +1,18 @@
-# 分类器 thinking 参数黑洞:GLM系思考模型 灰区系统性 fail-closed 的根因(#7 可选修复项实证)
+# 分类器 thinking 参数黑洞:GLM 系思考模型 灰区系统性 fail-closed 的根因(#7 可选修复项实证)
 
-**结论:扩展传的 `reasoning: "minimal"` 在 内部网关(内部provider插件)provider 栈上被折叠为「不发任何思考参数」,GLM系思考模型 按自身默认档开思考,烧尽 512 maxTokens → 输出空/截断 → fail-closed;重思考拉长时延 → 15s 超时 aborted。**
+**结论:扩展传的 `reasoning: "minimal"` 在某内部 provider 插件的网关栈上被折叠为「不发任何思考参数」,GLM 系思考模型 按自身默认档开思考,烧尽 512 maxTokens → 输出空/截断 → fail-closed;重思考拉长时延 → 15s 超时 aborted。**
 
 ## 现象(本会话 5 次活体样本)
 
 | 时间(本地) | stopReason | 原始输出 | 对应 Langfuse 观测 |
 |---|---|---|---|
-| 12:53:32 | length | `""` | 58b0f83e… |
-| 12:53:53 | length | `""` | 5d316091… |
-| 12:54:16 | length | `""` | 085e23e4… |
-| ~14:4x | length | `"<verdict>allow"`(截断) | (某会话 会话外的另一次) |
+| 12:53:32 | length | `""` | (id 略) |
+| 12:53:53 | length | `""` | (id 略) |
+| 12:54:16 | length | `""` | (id 略) |
+| ~14:4x | length | `"<verdict>allow"`(截断) | (另一会话样本) |
 | ~14:4x | aborted | `""` | (15s 超时) |
 
-## 源码层(pi-provider-内部provider插件@0.9.0)
+## 源码层(内部 provider 插件@0.9.0,名称不公开)
 
 插件**不碰请求体**(只做 OAuth/header 注入/成本追踪/模型清单),但给所有推理模型(正则匹配 `glm-` 等)统一附加模型元数据:
 
@@ -25,7 +25,7 @@ A = { thinkingLevelMap: { max: "max" }, compat: { forceAdaptiveThinking: true } 
 
 ## 数据层(Langfuse 实证,2026-08-26)
 
-同实例同模型(GLM系思考模型)三类调用的 `modelParameters` 对比:
+同实例同模型(GLM 系思考模型)三类调用的 `modelParameters` 对比:
 
 | 调用类型 | max_tokens | thinking 字段 |
 |---|---|---|
@@ -42,7 +42,7 @@ A = { thinkingLevelMap: { max: "max" }, compat: { forceAdaptiveThinking: true } 
 ```
 扩展 reasoning:"minimal"
   → pi 核心: adaptive 栈 + map{max} 无 minimal 映射 → 思考字段省略
-  → LiteLLM 网关原样转发(GLM系思考模型 默认开思考)
+  → LiteLLM 网关原样转发(GLM 系思考模型 默认开思考)
   → 按默认高档推理 → 512 maxTokens 全烧(空输出/截断)或超 15s(超时)
   → fail-closed deny → 灰区系统性拦截
 ```
@@ -67,11 +67,11 @@ BigModel 官方文档(GLM Coding Plan 模型切换指南)的 effort 处理表:
 | 模型/栈 | `off` 的实际效果 | 证据 |
 |---|---|---|
 | 真实 Anthropic | 完全关思考 | pi 标准 anthropic 行为 |
-| GLM/BigModel(含 内部网关 网关) | 降到 effort low,无法归零 | 官方表 + 本网关实证 |
+| GLM/BigModel(经内部网关实证) | 降到 effort low,无法归零 | 官方表 + 实测 |
 | 无思考能力的模型(reasoning:false) | 无参数可发,no-op | pi 模型元数据 |
 | 无法关思考且拒收 disabled 的模型 | 可能报错 → fail-closed | 理论风险,需兜底 |
 
-关键实证:同网关 GLM系思考模型 上,CC 分类器以 `thinking:{disabled}` + **max_tokens 64** 运行,输出 `<block>no` 成功(当日数十条,偶发空输出 ~3.5%)——「effort low 轻思考 + 小预算」在真实流量中成立,512 余量更宽畅。
+关键实证:同网关 GLM 系思考模型 上,CC 分类器以 `thinking:{disabled}` + **max_tokens 64** 运行,输出 `<block>no` 成功(当日数十条,偶发空输出 ~3.5%)——「effort low 轻思考 + 小预算」在真实流量中成立,512 余量更宽畅。
 
 另一关键推论:除 `off` 外的低档(`minimal`/`low`)在本 provider 栈上同样面临「map 无键 → 省略参数 → GLM max」黑洞;`off` 是唯一有专用线上形态(`thinking:{type:disabled}`)且已在本网关验证送达的档位。
 
@@ -80,7 +80,7 @@ BigModel 官方文档(GLM Coding Plan 模型切换指南)的 effort 处理表:
 1. **扩展侧主修**:`reasoning: "off"` 替代 `"minimal"`——唯一有专用线上形态的档位;GLM 上降为 effort low 轻思考(64 tokens 实证够用,512 余量充足)。
 2. **防御兜底(必须保留,非可选)**:契约失败/空输出时重试一次并提高 maxTokens(如 1024)——覆盖「无视 disabled 的模型」与「无法关思考拒收参数的模型」两类长尾,这是模型无关的真正兼容层。
 3. **maxTokens 维持 512**:CC 在 64 下已验证 low 档可行,512 对其他模型的轻思考留了余量;重试时提升到 1024。
-4. **上游 pi-provider-内部provider插件**:`thinkingLevelMap` 宜补全低档映射(minimal/low → 低档或 disabled),消除「省略参数 = GLM max」陷阱;至少 README 标注。
+4. **上游(内部 provider 插件)**:`thinkingLevelMap` 宜补全低档映射(minimal/low → 低档或 disabled),消除「省略参数 = GLM max」陷阱;至少 README 标注。
 5. **上游 pi 核心**:per-call reasoning 在 adaptive 栈上折叠为省略参数,对「默认档=max」的模型不安全,值得提报讨论。
 
 ## 终版根因修正(第三层,决定性):`reasoning` 从未离开过扩展
@@ -94,7 +94,7 @@ BigModel 官方文档(GLM Coding Plan 模型切换指南)的 effort 处理表:
 
 **中途实验的教训**:`reasoning: "off"` 修复部署后 Langfuse 实测仍无 thinking 字段——正是这个实验暴露了真正根因。(另注:simple 层若真收到字符串 "off",`!options?.reasoning` 为 false → forceAdaptive 分支 → `mapThinkingLevelToEffort` switch default → **effort "high"**,字符串 "off" 在该层也≠关思考;等价关思考的是省略 reasoning。)
 
-**终版修复**:`thinkingEnabled: false`(anthropic-messages 原生字段,序列化条件 `thinkingLevelMap?.off !== null` 对 内部provider插件 的 `{max:"max"}` map 成立)→ 实测送达 `thinking:{"type":"disabled"}`;其他 API 为无害多余属性,由防御重试(512→1024)兜底。
+**终版修复**:`thinkingEnabled: false`(anthropic-messages 原生字段,序列化条件 `thinkingLevelMap?.off !== null` 对内部插件的 `{max:"max"}` map 成立)→ 实测送达 `thinking:{"type":"disabled"}`;其他 API 为无害多余属性,由防御重试(512→1024)兜底。
 
 ## 复现/验证方法
 

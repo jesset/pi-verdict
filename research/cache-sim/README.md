@@ -4,7 +4,7 @@
 
 ## 数据与方法
 
-- 数据源:`https://langfuse.已脱敏内部域名`(v4),2026-08-24 → 08-26 窗口,`type=GENERATION` + `max_tokens=64` 特征筛出 CC stage-1 分类器调用 **1,2xx 条 / 2x 会话**(元数据 数百MB 拉取 + 按 id 并行拉 io,零失败)
+- 数据源:自托管 Langfuse v4 实例(地址不公开),2026-08-24 → 08-26 窗口,`type=GENERATION` + `max_tokens=64` 特征筛出 CC stage-1 分类器调用 **1,2xx 条 / 2x 会话**(计数脱敏;元数据数百 MB 拉取 + 按 id 并行拉 io,零失败)
 - 关键结构发现:CC 分类器输入的 transcript 是**追加式 text parts**(每 part 恰好一个条目),待审动作 = `</transcript>` 前最后一个 part,user 消息 = `User: ` 开头的 part —— 条目边界精确,无需启发式切分
 - 键设计(对齐 #5 定案):`commandKey` = 待审动作 part 原文;`contextKey` = hash(最近 5 条 User 条目);LRU 128 按会话回放;失败输出(`<block>` 不可解析,47 条)不入缓存(对齐 fail-closed 不入缓存)
 - 一致性反事实:历史数据中每次调用都真实发生了,命中时可对比「缓存裁决 vs 实际产出裁决」

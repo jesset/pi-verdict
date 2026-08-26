@@ -3,14 +3,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const SRC = fs.readFileSync("./extensions/auto-mode.ts", "utf8");
+const SRC = fs.readFileSync(path.join(process.cwd(), "extensions/auto-mode.ts"), "utf8");
 const start = SRC.indexOf("const BASH_SAFE_UNCONDITIONAL");
 const end = SRC.indexOf("// ============================================================================\n// 规则层:文件路径敏感度");
 const js = new Bun.Transpiler({ loader: "ts" }).transformSync(SRC.slice(start, end));
 const lib = new Function("path", "os", "\n" + js + "\nreturn { classifyBash };")(path, os) as { classifyBash: (c: string) => { verdict: string; reason?: string } };
 
 // pi-permission 白名单(从其源码提取)
-const P = "~/tmp/pi-permission-pkg/package/src/rules/builtins.ts";
+const P = process.env.PI_PERM_PKG + "/src/rules/builtins.ts"; // npm 解包目录,经 PI_PERM_PKG 环境变量传入
 const PSRC = fs.readFileSync(P, "utf8");
 function extractSet(name: string): Set<string> {
 	const m = PSRC.match(new RegExp(`(?:const|export const) ${name}[^=]*=\\s*new Set\\(\\[([\\s\\S]*?)\\]\\)`));
@@ -52,7 +52,7 @@ const ours = commands.map((c) => lib.classifyBash(c));
 const { Parser, Language } = await import("web-tree-sitter");
 await Parser.init();
 const parser = new Parser();
-parser.setLanguage(await Language.load("~/tmp/ast-lab/node_modules/tree-sitter-bash/tree-sitter-basm.wasm".replace("basm", "bash")) as never);
+parser.setLanguage(await Language.load(process.env.TS_BASH_WASM + "/tree-sitter-bash.wasm") as never);
 const ALLOWED_KINDS = new Set(["program", "list", "pipeline", "command", "command_name", "word", "string", "string_content", "raw_string", "number", "concatenation"]);
 const ALLOWED_PUNCT = new Set(["&&", "||", ";", "|", '"', "'"]);
 function isClean(cmd: string): { clean: boolean; kinds: string[] } {
