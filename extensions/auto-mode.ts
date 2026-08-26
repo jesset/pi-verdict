@@ -524,7 +524,8 @@ export default function autoMode(pi: ExtensionAPI) {
 	const shadow = new ShadowCache();
 
 	function refreshStatus(ctx: ExtensionContext) {
-		ctx.ui.setStatus("auto-mode", enabled ? ctx.ui.theme.fg("accent", "🛡️ auto") : undefined);
+		// 双态恒显:on 高亮 / off 暗色(原来 off 直接隐藏,状态不可见)
+		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "accent" : "dim", enabled ? "auto mode on" : "auto mode off"));
 	}
 
 	// session_start 会重置 shadow(会话内存态,#5 定案)

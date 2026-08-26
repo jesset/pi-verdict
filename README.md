@@ -55,7 +55,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 
 - `/automode` —— 查看状态(只读,无副作用):当前开/关 + 本会话影子缓存统计
 - `/automode on` / `/automode off` —— 幂等设定(与现值相同不翻转,仅确认);未知参数严格拒绝并列出用法
-- footer 显示 `🛡️ auto` 表示生效中;拦截时弹出通知,展示裁决理由
+- footer 恒显状态:`auto mode on`(高亮)/ `auto mode off`(暗色);拦截时弹出通知,展示裁决理由
 
 配置:
 
