@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-27
+
+### Changed
+
+- 运行时 UI 提示统一英文化:bash 危险规则 reason、路径敏感度 reason、用户规则 reason、分类器失败诊断、影子缓存摘要/标注、notify/confirm 文案、配置模板 `_hint` 与 block reason 前缀;代码注释保持中文,测试断言同步(42 项全过)
+- README 开头重写(en/zh):一句话定位(pi 的 Claude Code auto mode 式权限门禁)+ 机制三要点列表;新增「问题 / 为什么是三态」小节,Quick start 上移至品类对比之前;弃用非官方术语 YOLO(pi 文档无此词,问题陈述改用 pi 官方表述并附安全文档链接)
+
 ## [0.2.2] - 2026-08-27
 
 ### Changed
