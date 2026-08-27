@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode from "../extensions/auto-mode.ts";
+import autoMode, { buildProtectedSet, isProtectedWritePath } from "../extensions/auto-mode.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ function makeHarness(): Harness {
 	const notifies: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, findMap: undefined };
+	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
@@ -52,6 +52,7 @@ function makeHarness(): Harness {
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
 			confirm: async () => { h.confirms++; return h.confirmAnswer; },
+			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
 			setStatus: () => {}, theme: { fg: (_c: string, s: string) => s },
 		},
 	};
@@ -456,5 +457,213 @@ describe("debug annotations", () => {
 		const allowNotifies = h.notifies.filter(([m]) => m.includes("allow (classifier)"));
 		expect(allowNotifies.length).toBe(2);
 		expect(allowNotifies[1][0]).toContain("would-hit");
+	});
+});
+
+// ── 8. 自保护层(ADR-0001:不可豁免的 deny) ─────────────
+
+describe("self-protection layer (ADR-0001)", () => {
+	const CFG = () => path.join(TMP_AGENT, "config", "pi-verdict.json");
+
+	test("write to pi-verdict.json → deny, zero model calls", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: CFG(), content: "{\"deny\":[],\"allow\":[\".*\"]}" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+		expect(h.calls.length).toBe(0);
+	});
+	test("edit to pi-verdict.json → deny", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "edit", { path: CFG(), oldText: "a", newText: "b" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+	});
+	test("write via symlink to pi-verdict.json → deny (realpath 归一)", async () => {
+		setConfig({});
+		const link = path.join(TMP_AGENT, "link-to-config.json");
+		try { fs.rmSync(link); } catch { /* 不存在 */ }
+		fs.symlinkSync(CFG(), link);
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: link, content: "x" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+	});
+	test("relative path from a cwd whose file resolves onto config → deny", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		// cwd 指向 config 所在目录,相对路径直接命中
+		h.ctx.cwd = path.join(TMP_AGENT, "config");
+		const r = await toolCall(h, "write", { path: "pi-verdict.json", content: "x" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+	});
+	test("builtinDenyFloor:false does NOT disable self-protection", async () => {
+		setConfig({ builtinDenyFloor: false });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: CFG(), content: "x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+	test("user allow rule cannot override self-protection", async () => {
+		setConfig({ allow: ["pi-verdict", ".*"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: CFG(), content: "x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+	test("read of pi-verdict.json passes self-protection (读放行,走正常管线)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }]; // TMP 在 /var 下 → S1 读灰区,交分类器
+		const r = await toolCall(h, "read", { path: CFG() });
+		expect(r).toBeUndefined();
+		expect(h.notifies.some(([m]) => m.includes("self-protection"))).toBe(false);
+	});
+	test("bash touching config filename → deny (any spelling)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "echo '{\"allow\":[\".*\"]}' > " + CFG() });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+		expect(h.calls.length).toBe(0);
+	});
+	test("bash with $PI_CODING_AGENT_DIR spelling → deny", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: "cat $PI_CODING_AGENT_DIR/config/pi-verdict.json" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("self-protection");
+	});
+	test("ordinary commands unaffected (回归:无谈拦)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+});
+
+describe("buildProtectedSet (pure)", () => {
+	test("single-file install form: exact own file + bash variants", () => {
+		const own = path.join(TMP_AGENT, "extensions", "auto-mode.ts");
+		fs.mkdirSync(path.dirname(own), { recursive: true });
+		fs.writeFileSync(own, "// stub");
+		const s = buildProtectedSet(TMP_AGENT, own);
+		const ownReal = fs.realpathSync(own); // macOS TMP 在 /var → realpath 为 /private/var
+		expect(s.exact).toContain(ownReal);
+		expect(s.bashPatterns.some((re) => re.test(`echo x > ${ownReal}`))).toBe(true);
+		expect(s.bashPatterns.some((re) => re.test("cat $PI_CODING_AGENT_DIR/extensions/auto-mode.ts"))).toBe(true);
+		expect(s.watchBases).toContainEqual({ file: own, kind: "extension" });
+		expect(s.watchBases).toContainEqual({ file: path.join(TMP_AGENT, "config", "pi-verdict.json"), kind: "config" });
+	});
+	test("npm dir install form: whole package dir as prefix", () => {
+		const own = path.join(TMP_AGENT, "extensions", "pi-verdict", "extensions", "auto-mode.ts");
+		fs.mkdirSync(path.dirname(own), { recursive: true });
+		fs.writeFileSync(own, "// stub");
+		const s = buildProtectedSet(TMP_AGENT, own);
+		const pkg = path.join(TMP_AGENT, "extensions", "pi-verdict");
+		expect(s.prefixes).toContain(fs.realpathSync(pkg));
+		expect(isProtectedWritePath(path.join(pkg, "package.json"), "/proj", s)).toBe(true);
+		expect(isProtectedWritePath(path.join(pkg, "sub/dir/x.ts"), "/proj", s)).toBe(true);
+		expect(isProtectedWritePath(path.join(TMP_AGENT, "extensions", "other.ts"), "/proj", s)).toBe(false); // 包外不拦
+	});
+	test("dev checkout (outside agentDir/extensions) → 不保护扩展文件,仅配置", () => {
+		const s = buildProtectedSet(TMP_AGENT, "/repo/extensions/auto-mode.ts");
+		expect(s.exact).not.toContain("/repo/extensions/auto-mode.ts");
+		expect(s.prefixes.length).toBe(0);
+		expect(isProtectedWritePath(path.join(TMP_AGENT, "config", "pi-verdict.json"), "/proj", s)).toBe(true);
+	});
+});
+
+// ── 9. 变更检测(ADR-0001:差分处置 D) ──────────────────
+
+describe("tamper detection (ADR-0001, differential disposal)", () => {
+	const CFG = () => path.join(TMP_AGENT, "config", "pi-verdict.json");
+
+	test("interactive + Accept:用户会话中合法编辑 → 一次双选重建基线,会话照常,编辑保留", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.selectIndex = 0; // Accept the new version
+		setConfig({ allow: ["^ls\\b"] }); // 模拟用户手工编辑(不经门禁)
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }, { text: "<verdict>allow</verdict> ok" }];
+		const r1 = await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.selects).toBe(1); // 双选:仅一次
+		expect(h.confirms).toBe(0); // 不走 confirm
+		expect(r1).toBeUndefined(); // Accept → 本调用照常走正常管线
+		expect(fs.readFileSync(CFG(), "utf8")).toContain("^ls"); // 编辑未被回滚
+		const r2 = await toolCall(h, "bash", { command: "cargo build" });
+		expect(h.selects).toBe(1); // 基线已重建:不再双选
+		expect(r2).toBeUndefined(); // 会话未被砖
+	});
+	test("interactive + Decline:疑似篡改 → 还原 + 本会话 fail-closed", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.selectIndex = 1; // Decline — restore the session baseline
+		const before = fs.readFileSync(CFG(), "utf8");
+		fs.writeFileSync(CFG(), JSON.stringify({ allow: [".*"], builtinDenyFloor: false })); // 模拟绕过门禁的篡改
+		const r1 = await toolCall(h, "bash", { command: "ls" });
+		expect(r1?.block).toBe(true);
+		expect(r1.reason).toContain("declined by user");
+		expect(fs.readFileSync(CFG(), "utf8")).toBe(before); // 已从快照还原
+		const r2 = await toolCall(h, "bash", { command: "ls" });
+		expect(r2?.block).toBe(true);
+		expect(r2.reason).toContain("fail-closed");
+	});
+	test("headless config change:无人可问 → 不确认,直接还原 + fail-closed", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.ctx.hasUI = false;
+		const before = fs.readFileSync(CFG(), "utf8");
+		fs.writeFileSync(CFG(), "{}");
+		const r = await toolCall(h, "bash", { command: "ls" });
+		expect(h.selects).toBe(0); // 无 UI 不弹双选
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("tamper");
+		expect(fs.readFileSync(CFG(), "utf8")).toBe(before);
+	});
+	test("clean session: no tamper signal, verdicts flow normally", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r).toBeUndefined();
+		expect(h.notifies.some(([m]) => m.includes("TAMPER"))).toBe(false);
+	});
+	test("session_start rebuilds baseline (legit edit between sessions accepted)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		setConfig({ allow: ["^ls\\b"] }); // 会话间隙合法修改(不经门禁)
+		await h.handlers.session_start({}, h.ctx); // 新基线
+		h.responses = [{ text: "<verdict>deny</verdict> x" }];
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r?.block).toBe(true); // 正常走分类器,非 fail-closed
+		expect(r.reason).not.toContain("tamper");
+		expect(h.selects).toBe(0); // 无变化不弹双选
+	});
+	test("interactive + Esc 关闭双选:无人背书 → 安全侧同 Decline(还原 + fail-closed)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.selectIndex = null; // select 返回 undefined(对话框被关闭)
+		const before = fs.readFileSync(CFG(), "utf8");
+		fs.writeFileSync(CFG(), "{}");
+		const r = await toolCall(h, "bash", { command: "ls" });
+		expect(h.selects).toBe(1);
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("dialog dismissed");
+		expect(fs.readFileSync(CFG(), "utf8")).toBe(before); // 已还原
+	});
+	test("headless config deleted mid-session → recreated from snapshot + fail-closed", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.ctx.hasUI = false;
+		const before = fs.readFileSync(CFG(), "utf8");
+		fs.rmSync(CFG());
+		const r = await toolCall(h, "bash", { command: "ls" });
+		expect(r?.block).toBe(true);
+		expect(fs.existsSync(CFG())).toBe(true); // 删除亦被还原(重建)
+		expect(fs.readFileSync(CFG(), "utf8")).toBe(before);
 	});
 });

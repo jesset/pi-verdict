@@ -60,12 +60,23 @@ pi --extension ./extensions/auto-mode.ts
 
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
 - 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
-- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在)
+- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在——下方自保护层永远开启)
 - `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
 - spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
 - 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
 
 为什么没有内置白名单?第三方安全审计(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+
+### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
+
+门禁自身的文件——`config/pi-verdict.json` 与 `<agentDir>/extensions/` 下的扩展安装副本(运行时经 `import.meta.url` 自锚定,覆盖单文件与 npm 目录两种安装形态)——**仅用户可改**:
+
+- `write`/`edit` 触碰 → 硬 **deny**(realpath 归一化比对,含符号链接间接路径);读放行
+- bash/powershell 命令串触碰 → **deny**(字面量/`~`/`$HOME`/`$PI_CODING_AGENT_DIR` 拼写的子串正则——诚实声明:可被混淆绕过,见下方兜底)
+- **不可经任何配置关闭**:`builtinDenyFloor: false` 关不掉它,任何用户 `allow` 规则也越不过它。理由:用户主权豁免的对象是「我的系统的风险」,不是门禁自身的完整性——一个能被其守护对象关掉的门禁,无法诚实兑现「风险自担」的承诺
+- **变更检测**(纵深兜底):受保护文件在 `session_start` 快照、每次裁决前复核,处置按文件差分——**扩展副本**被改(或 headless 会话中的任何变更)→ 从快照**自动还原** + 本会话 **fail-closed**(全量拦截)直至重启;交互会话中仅**配置文件**被改 → 弹一次双选,选项文案即动作本身:*接受新版本*(重建基线、会话照常——你的编辑得以保留,照旧下一会话生效)/*拒绝*(还原会话基线:回滚 + fail-closed);关闭对话框等同拒绝(安全侧)。无条件自动还原等于「pi 运行期间你永远改不了配置」;纯警告则可能让被忽略的警告把下一会话交给被篡改的配置——罕见而郑重的一次确认是中间道路
+
+门禁之内的一切写入按定义均由 agent 发发——deny 写入即等价于「仅用户可改」,你的编辑器修改不经门禁。最近的同构先例是 sudoers 必须经 visudo。
 
 需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
 
@@ -80,14 +91,23 @@ pi --extension ./extensions/auto-mode.ts
 
 完整全景:[`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · 与最近架构亲缘的收敛分析:[`research/pi-automode-convergence.md`](research/pi-automode-convergence.md)。
 
-诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、零依赖单文件(~700 行,刻意为之)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
+诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖单文件(~900 行,刻意为之)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
 
-零依赖单文件形态是有意为之——整个扩展就是一个可通读的 [~700 行文件](extensions/auto-mode.ts)。
+零依赖单文件形态是有意为之——整个扩展就是一个可通读的 [~900 行文件](extensions/auto-mode.ts)。
 
 ## 管线
 
 ```
 tool_call
+  │
+  ├─ 0. 自保护层(ADR-0001;不可经任何配置关闭)
+  │     ├─ write/edit/bash 触碰门禁自身文件
+  │     │   (config/pi-verdict.json + 扩展安装副本)→ deny
+  │     │   读放行;用户在 pi 之外的编辑不经门禁
+  │     └─ 变更检测:每次裁决前复核受保护文件;
+  │         扩展副本被改 / headless → 从会话快照自动还原
+  │         + 本会话 fail-closed(全量拦截);
+  │         仅配置被改且有 UI → 一次保留/还原确认
   │
   ├─ 1. 规则层(确定性,零延迟)
   │     ├─ 内置 deny floor:bash 危险正则(完整命令串)+ 路径敏感度 S0–S5
@@ -133,6 +153,8 @@ tool_call
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
 - 影子缓存按决议仅观察不生效;实测命中率达标后,生效开关是一行改动
+- 自保护 bash 匹配是子串正则——可被混淆绕过;变更检测兜底覆盖会话内绕过,跨会话基线(启动时哈希比对与变更确认,含升级 UX)按 ADR-0001 为二期
+- dev checkout(从仓库而非 `<agentDir>/extensions/` 运行扩展)不受自保护——下一个正常会话加载的安装副本只在其自身会话的门禁内受保护
 
 **verdict 不是沙箱。** 它在 pi 进程内裁决工具调用;不能遏制恶意代码、不能防护被攻陷的进程、不守护手工 `!` shell 逃逸。需要隔离请用操作系统级沙箱。
 
@@ -143,7 +165,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 42 个离线桩测试:deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
+bun test          # 61 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。

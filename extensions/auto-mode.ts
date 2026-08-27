@@ -5,6 +5,11 @@
  * 语义对齐 Claude Code Auto Mode,但方向相反:Pi 默认放行 → 本扩展自动拦截。
  *
  * 管线(tool_call 钩子):
+ *   0. 自保护层(ADR-0001,不可豁免):write/edit/bash 触碰门禁自身文件
+ *      (pi-verdict.json + 本扩展安装副本)→ 硬 deny,读放行;builtinDenyFloor:false
+ *      亦不能关,用户 allow 亦不可越过。变更检测兜底:每次裁决前复核受保护文件,
+ *      被绕过修改 → 差分处置:扩展副本被改/无 UI → 自动还原 + 本会话 fail-closed;
+ *      仅 config 被改且有 UI → 确认式(保留=重建基线照常,还原=回滚+fail-closed)。
  *   1. 规则层(内置 deny floor + 用户规则):
  *      - 内置 floor:bash 危险正则 + 路径敏感度分级(S0-S5)→ 硬 deny
  *        (默认开;配置 builtinDenyFloor:false 可整体关闭,风险自担)
@@ -30,7 +35,8 @@
  *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
  *   <agentDir>/config/pi-verdict.json   用户规则:{ allow: [regex], deny: [regex],
  *                                     builtinDenyFloor, classifierModel }
- *                                     匹配:bash=完整命令串 / 文件工具=绝对路径;新会话生效
+ *                                     匹配:bash=完整命令串 / 文件工具=绝对路径;新会话生效;
+ *                                     受自保护层保护(agent 不可改,仅用户手工编辑)
  *
  * 已知原型简化(见 README「已知限制」):
  *   - 无内置 bash 白名单;危险识别依赖正则 floor(无 AST 解析)——未知形态交分类器
@@ -45,6 +51,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
@@ -109,13 +116,16 @@ interface UserRules {
 
 const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true, classifierModel: null };
 
+function agentDirPath(): string {
+	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+}
+
 function userConfigPath(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
-	return path.join(agentDir, "config", "pi-verdict.json");
+	return path.join(agentDirPath(), "config", "pi-verdict.json");
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. builtinDenyFloor=false disables the built-in danger/path floor (at your own risk). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). Changes apply to new sessions.",
+	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	builtinDenyFloor: true,
@@ -221,14 +231,188 @@ function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: s
 	}
 }
 
+// ============================================================================
+// 自保护层(self-protection layer,ADR-0001)
+//
+// 门禁自身的完整性不受任何配置豁免:builtinDenyFloor:false 只关危险正则与路径
+// 敏感度,关不掉本层;用户 allow 规则亦不可越过。保护对象:
+//   - <agentDir>/config/pi-verdict.json(用户规则 = 门禁的判定输入)
+//   - 本扩展的安装副本(<agentDir>/extensions/ 下;自锚定 import.meta.url,
+//     覆盖单文件与 npm 包目录两种安装形态;dev checkout 不在此列)
+// 语义:门禁内一切写入按定义均由 agent 发起 → 恒 deny(reason 指引手工编辑);
+// 读放行(读门禁文件无害);用户经编辑器的修改不经门禁,不受影响。
+// bash 侧:命令串正则覆盖字面量/~/\$HOME/\$PI_CODING_AGENT_DIR 变体,可被混淆
+// 绕过(诚实声明,ADR-0001)——由扩展主体的变更检测兜底。
+// ============================================================================
+
+interface ProtectedSet {
+	/** 精确受保护文件(词法绝对路径 + realpath 双形) */
+	exact: string[];
+	/** 受保护目录前缀(npm 包安装形态:整个包目录) */
+	prefixes: string[];
+	/** bash/powershell 命令串危险特征(子串匹配,可绕——变更检测兜底) */
+	bashPatterns: RegExp[];
+	/** 变更检测基线(词法路径 + 类别;session_start 时快照全文) */
+	watchBases: Array<{ file: string; kind: WatchKind }>;
+}
+
+type WatchKind = "config" | "extension";
+
+function tryRealpath(p: string): string {
+	try {
+		return fs.realpathSync(p);
+	} catch {
+		return p;
+	}
+}
+
+/** 路径的全部规范形:词法绝对 + realpath(存在且不同时追加) */
+function pathForms(p: string): string[] {
+	const out = [p];
+	try {
+		const r = fs.realpathSync(p);
+		if (r !== p) out.push(r);
+	} catch {
+		/* 不存在:仅词法形 */
+	}
+	return out;
+}
+
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * 工具调用 → 规则层裁决。裁决序(#12):
+ * 构建受保护集合。
+ * ownFile:本模块文件路径(import.meta.url 解析;null = 不可解析,仅保护配置)。
+ * 仅当 ownFile 位于 <agentDir>/extensions/ 之下才视为安装副本加以保护:
+ * dev checkout(cwd 内源码)不保护——项目内开发写入是合法日常(ADR-0001)。
+ */
+export function buildProtectedSet(agentDir: string, ownFile: string | null): ProtectedSet {
+	const exact = new Set<string>();
+	const prefixes = new Set<string>();
+	const configPath = path.join(agentDir, "config", "pi-verdict.json");
+	const watchBases: Array<{ file: string; kind: WatchKind }> = [{ file: configPath, kind: "config" }];
+	for (const f of pathForms(configPath)) exact.add(f);
+
+	// 安装副本目标:单文件形态 → 文件本体(exact);npm 目录形态 → 包根目录(prefix)。
+	// extRoot 与 ownFile 各取词法/realpath 双形交叉判定,集合同样双形收录——
+	// 避免符号链接目录(如 macOS /var → /private/var)导致传入词法路径与集合错位。
+	const extTargets = new Set<string>();
+	if (ownFile) {
+		watchBases.push({ file: ownFile, kind: "extension" });
+		const extRoots = new Set([path.join(agentDir, "extensions"), tryRealpath(path.join(agentDir, "extensions"))]);
+		const ownForms = new Set([ownFile, tryRealpath(ownFile)]);
+		for (const extRoot of extRoots) {
+			for (const own of ownForms) {
+				if (!own.startsWith(extRoot + path.sep)) continue;
+				const rel = path.relative(extRoot, own);
+				const singleFile = !rel.includes(path.sep);
+				const target = singleFile ? own : path.join(extRoot, rel.split(path.sep)[0]);
+				for (const f of pathForms(target)) {
+					(singleFile ? exact : prefixes).add(f);
+					extTargets.add(f);
+				}
+			}
+		}
+	}
+	const extForms = [...extTargets];
+
+	// bash 命令串特征:文件名字面量(任何拼写变体都含它)+ 安装副本路径变体
+	const bashPatterns: RegExp[] = [/pi-verdict\.json/];
+	if (extForms.length > 0) {
+		const home = os.homedir();
+		const alts = new Set<string>(extForms.map(escapeRegExp));
+		for (const f of extForms) {
+			if (f.startsWith(home + path.sep)) {
+				const rel = f.slice(home.length + 1);
+				alts.add(escapeRegExp("~/" + rel));
+				alts.add("\\$HOME/" + escapeRegExp(rel));
+			}
+			// $PI_CODING_AGENT_DIR 变体:词法与 realpath 两种基名列举(符号链接目录容忍)
+			for (const base of new Set([agentDir, tryRealpath(agentDir)])) {
+				if (f.startsWith(base + path.sep)) {
+					alts.add("\\$PI_CODING_AGENT_DIR/" + escapeRegExp(f.slice(base.length + 1)));
+				}
+			}
+		}
+		bashPatterns.push(new RegExp(`(?:${[...alts].join("|")})`));
+	}
+
+	return { exact: [...exact], prefixes: [...prefixes], bashPatterns, watchBases };
+}
+
+/** 解析后的写入路径是否命中受保护集合(经 realpath 防 symlink 旁路) */
+export function isProtectedWritePath(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
+	if (!rawPath) return false;
+	for (const c of pathForms(path.resolve(cwd, expandHome(rawPath)))) {
+		if (prot.exact.includes(c)) return true;
+		for (const p of prot.prefixes) {
+			if (c === p || c.startsWith(p + path.sep)) return true;
+		}
+	}
+	return false;
+}
+
+/** 自保护层裁决(第 0 层,先于一切):触碰门禁自身文件 → 不可豁免的 deny;其余 null 交后续层 */
+export function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd: string, prot: ProtectedSet): RuleResult | null {
+	switch (toolName) {
+		case "write":
+		case "edit":
+			if (isProtectedWritePath(String(input.path ?? ""), cwd, prot)) {
+				return { verdict: "deny", reason: `self-protection layer (ADR-0001): ${input.path} is part of the permission gate itself; agent-side modification is denied — edit it manually outside pi if intended` };
+			}
+			return null;
+		case "bash":
+		case "powershell": {
+			const cmd = String(input.command ?? "");
+			if (prot.bashPatterns.some((re) => re.test(cmd))) {
+				return { verdict: "deny", reason: `self-protection layer (ADR-0001): command touches the permission gate's own files — user-editable only` };
+			}
+			return null;
+		}
+		default:
+			return null; // MCP/自定义工具不经规则层(ADR-0001:由变更检测兜底)
+	}
+}
+
+/** 变更检测双选文案(ADR-0001:选项即动作,消除 Yes/No 映射歧义;按钮惯例用动词原形) */
+const CONFIG_ACCEPT_CHOICE = "Accept the new version — re-baseline and continue (applies to new sessions as usual)";
+const CONFIG_DECLINE_CHOICE = "Decline — restore the session baseline (revert + fail-closed for the rest of this session)";
+
+/** 变更检测基线快照(ADR-0001 一期):全文读入内存;不存在/不可读 → content=null */
+function takeSnapshots(bases: Array<{ file: string; kind: WatchKind }>): Array<{ file: string; kind: WatchKind; content: Buffer | null }> {
+	const out: Array<{ file: string; kind: WatchKind; content: Buffer | null }> = [];
+	const seen = new Set<string>();
+	for (const b of bases) {
+		for (const f of pathForms(b.file)) {
+			if (seen.has(f)) continue;
+			seen.add(f);
+			let content: Buffer | null = null;
+			try {
+				content = fs.readFileSync(f);
+			} catch {
+				/* 不存在/不可读:仍占位(出现即篡改信号) */
+			}
+			out.push({ file: f, kind: b.kind, content });
+		}
+	}
+	return out;
+}
+
+/**
+ * 工具调用 → 规则层裁决。裁决序(#12,ADR-0001 增第 0 层):
+ *   0. 自保护层——deny 即终局(不可经任何配置豁免,builtinDenyFloor 亦不能关)
  *   1. 内置 base(bash 危险正则 floor / 路径敏感度分级)——deny 即终局(floor 可经 builtinDenyFloor 关闭)
  *   2. 用户黑名单 → deny(优先于白名单)
  *   3. 用户白名单 → allow
  *   4. base(路径类工具的默认 allow/gray;其余 gray)→ 交分类器
  */
-function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules): RuleResult {
+function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules, prot: ProtectedSet): RuleResult {
+	// 第 0 层:自保护层(ADR-0001)——先于一切,不可经任何配置豁免
+	const sp = selfProtectCheck(toolName, input, cwd, prot);
+	if (sp) return sp;
+
 	let base: RuleResult;
 	switch (toolName) {
 		case "bash":
@@ -563,16 +747,65 @@ export default function autoMode(pi: ExtensionAPI) {
 	const shadow = new ShadowCache();
 	let userRules: UserRules = loadUserRules().rules;
 
+	// 自保护层(ADR-0001):受保护集合自锚定 + 变更检测基线(会话内存态)
+	const ownFilePath = (() => {
+		try {
+			return fileURLToPath(import.meta.url);
+		} catch {
+			return null;
+		}
+	})();
+	const prot = buildProtectedSet(agentDirPath(), ownFilePath);
+	let snapshots = takeSnapshots(prot.watchBases);
+	let tampered = false;
+
+	/** 复核受保护文件,返回变化清单(不还原——处置按 kind 差分,ADR-0001 定稿 D) */
+	function detectTamper(): Array<{ file: string; kind: WatchKind }> {
+		const hit: Array<{ file: string; kind: WatchKind }> = [];
+		for (const s of snapshots) {
+			let current: Buffer | null = null;
+			try {
+				current = fs.readFileSync(s.file);
+			} catch {
+				/* 不存在 */
+			}
+			const same = (a: Buffer | null, b: Buffer | null): boolean => (a === null || b === null ? a === b : a.equals(b));
+			if (!same(current, s.content)) hit.push({ file: s.file, kind: s.kind });
+		}
+		return hit;
+	}
+
+	/** 从快照回写变化文件(扩展进程自身执行,不经门禁)+ fail-closed,返回 block 载荷 */
+	function restoreAndFailClose(changed: Array<{ file: string }>, ctx: ExtensionContext, cause: string): { block: true; reason: string } {
+		for (const c of changed) {
+			const s = snapshots.find((x) => x.file === c.file);
+			if (s && s.content !== null) {
+				try {
+					fs.writeFileSync(s.file, s.content);
+				} catch {
+					/* 还原失败:仍 fail-closed */
+				}
+			}
+		}
+		tampered = true;
+		const files = [...new Set(changed.map((c) => c.file))].join(", ");
+		ctx.ui.notify(`🛡️ pi-verdict TAMPER DETECTED${cause ? ` (${cause})` : ""}: ${files} modified bypassing the gate; restored from session snapshot where possible. Fail-closed for the rest of this session — review the file(s) and restart the session.`, "warning");
+		return { block: true, reason: `[auto-mode] self-protection: tamper detected${cause ? ` (${cause})` : ""} and restored (${files}); fail-closed until restart` };
+	}
+
 	function refreshStatus(ctx: ExtensionContext) {
 		// 双态恒显:on 高亮 / off 暗色(原来 off 直接隐藏,状态不可见)
 		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "accent" : "dim", enabled ? "auto mode on" : "auto mode off"));
 	}
 
 	// session_start:重置影子缓存(会话内存态,#5 定案)+ 重载用户规则(配置改动新会话生效)
+	// + 重建自保护基线(ADR-0001:受保护文件的会话启动快照)
 	pi.on("session_start", async (_event, ctx) => {
 		shadow.reset();
+		tampered = false;
 		const loaded = loadUserRules();
 		userRules = loaded.rules;
+		snapshots = takeSnapshots(prot.watchBases);
 		if (loaded.skipped.length > 0) {
 			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid regex(es) in config (${userConfigPath()})`, "warning");
 		}
@@ -657,8 +890,38 @@ export default function autoMode(pi: ExtensionAPI) {
 		const input = event.input as Record<string, unknown>;
 		const action = describeAction(event.toolName, input);
 
+		// 第 0 层前置:变更检测(ADR-0001)——篡改后本会话恒 deny(fail-closed)
+		if (tampered) {
+			ctx.ui.notify(`🛡️ Auto Mode blocked: self-protection fail-closed (tamper detected this session; restart to reset)\n  ${action}`, "warning");
+			return { block: true, reason: "[auto-mode] self-protection: fail-closed until session restart (protected file was tampered with)" };
+		}
+		const changed = detectTamper();
+		if (changed.length > 0) {
+			// 差分处置(ADR-0001 定稿 D):仅 config 变化且有 UI → select 双选(选项即动作);
+			// 扩展副本被改 / 无 UI → 一律还原 + fail-closed。
+			// 用户合法的会话中手工编辑经「保留」一次确认即重建基线、会话照常
+		// (新配置照旧下一会话生效);无条件自动还原会把长驻会话变成
+		// 「用户永远无法修改配置」,与「仅用户可改」的设计初衷相悖。
+			if (ctx.hasUI && changed.every((c) => c.kind === "config")) {
+				// select 双选:选项文案即按钮(避免 confirm 固定 Yes/No 的映射歧义);
+				// 关闭对话框(Esc → undefined)无人背书,取安全侧同 Decline
+				const choice = await ctx.ui.select(
+					"🛡️ pi-verdict: PROTECTED CONFIG CHANGED",
+					[CONFIG_ACCEPT_CHOICE, CONFIG_DECLINE_CHOICE],
+				);
+				if (choice === CONFIG_ACCEPT_CHOICE) {
+					snapshots = takeSnapshots(prot.watchBases); // 重建基线
+					ctx.ui.notify("pi-verdict: config change accepted — new baseline taken; applies to new sessions as usual", "info");
+				} else {
+					return restoreAndFailClose(changed, ctx, choice === undefined ? "config dialog dismissed" : "config change declined by user");
+				}
+			} else {
+				return restoreAndFailClose(changed, ctx, "");
+			}
+		}
+
 		// 第 1 层:规则
-		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules);
+		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules, prot);
 		if (rule.verdict === "allow") {
 			if (debug) ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 			return undefined;
