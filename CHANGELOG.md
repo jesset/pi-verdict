@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-27
+
+### Changed
+
+- package.json `description` 对齐 README 一句话定位(pi.dev catalog 列表页与 npm 搜索结果显示该字段,旧值为高密度技术罗列)
+- 文档清理:移除 research/pi-observational-memory.md,README(en/zh)微调
+
 ## [0.2.3] - 2026-08-27
 
 ### Changed
