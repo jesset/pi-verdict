@@ -53,20 +53,20 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 /** 危险模式:对完整命令串匹配(覆盖管道/复合命令),命中即 deny(源自研究报告 §4.3) */
 const BASH_DANGER_RULES: Array<{ id: string; pattern: RegExp; reason: string }> = [
-	{ id: "rm-recursive", pattern: /\brm\b[^;|&]*(\s-(?:[a-zA-Z]*r[a-zA-Z]*f?|[a-zA-Z]*f[a-zA-Z]*r)\b|--recursive)/i, reason: "递归删除 (rm -r)" },
-	{ id: "rm-root", pattern: /\brm\s+(-[a-zA-Z]*\s+)*(--recursive\s+)?(\/|\/etc|\/usr|\/var|~|\$HOME)(?:\s|$)/i, reason: "删除根/系统/家目录" },
-	{ id: "sudo", pattern: /\bsudo\b/i, reason: "提权 (sudo)" },
-	{ id: "chmod-777", pattern: /\bchmod\b[^;|&]*(777|a\+rwx|ugo\+rwx|ugo=rwx|[ug]\+s)\b/i, reason: "权限弱化 (chmod 777/setuid)" },
-	{ id: "raw-device", pattern: /(>\s*\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|of=\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|\bmkfs\.)/i, reason: "裸设备写/格式化" },
+	{ id: "rm-recursive", pattern: /\brm\b[^;|&]*(\s-(?:[a-zA-Z]*r[a-zA-Z]*f?|[a-zA-Z]*f[a-zA-Z]*r)\b|--recursive)/i, reason: "recursive delete (rm -r)" },
+	{ id: "rm-root", pattern: /\brm\s+(-[a-zA-Z]*\s+)*(--recursive\s+)?(\/|\/etc|\/usr|\/var|~|\$HOME)(?:\s|$)/i, reason: "delete root/system/home directory" },
+	{ id: "sudo", pattern: /\bsudo\b/i, reason: "privilege escalation (sudo)" },
+	{ id: "chmod-777", pattern: /\bchmod\b[^;|&]*(777|a\+rwx|ugo\+rwx|ugo=rwx|[ug]\+s)\b/i, reason: "permission weakening (chmod 777/setuid)" },
+	{ id: "raw-device", pattern: /(>\s*\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|of=\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|\bmkfs\.)/i, reason: "raw device write/format" },
 	{ id: "git-push-force", pattern: /\bgit\s+push\b[^;|&]*(-f\b|--force\b)/i, reason: "git push --force" },
 	{ id: "git-reset-hard", pattern: /\bgit\s+reset\s+--hard\b/i, reason: "git reset --hard" },
 	{ id: "git-clean-force", pattern: /\bgit\s+clean\b[^;|&]*(\s-[a-zA-Z]*f|--force)/i, reason: "git clean -f" },
-	{ id: "git-checkout-dot", pattern: /\bgit\s+checkout\s+(--\s+)?\.(?:\s|$)/i, reason: "git checkout . (丢弃工作区)" },
-	{ id: "git-restore", pattern: /\bgit\s+restore\b/i, reason: "git restore (丢弃修改)" },
-	{ id: "remote-exec", pattern: /\b(curl|wget)\b[^;|&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/i, reason: "远程代码执行 (curl|sh)" },
-	{ id: "gh-repo", pattern: /\bgh\s+repo\s+(create|delete|rename|archive)\b/i, reason: "GitHub 仓库级变更" },
-	{ id: "gh-release", pattern: /\bgh\s+release\s+(create|delete|edit)\b/i, reason: "GitHub release 变更" },
-	{ id: "fork-bomb", pattern: /:\(\)\s*\{/, reason: "fork 炸弹" },
+	{ id: "git-checkout-dot", pattern: /\bgit\s+checkout\s+(--\s+)?\.(?:\s|$)/i, reason: "git checkout . (discard working tree)" },
+	{ id: "git-restore", pattern: /\bgit\s+restore\b/i, reason: "git restore (discard changes)" },
+	{ id: "remote-exec", pattern: /\b(curl|wget)\b[^;|&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/i, reason: "remote code execution (curl|sh)" },
+	{ id: "gh-repo", pattern: /\bgh\s+repo\s+(create|delete|rename|archive)\b/i, reason: "GitHub repository-level change" },
+	{ id: "gh-release", pattern: /\bgh\s+release\s+(create|delete|edit)\b/i, reason: "GitHub release change" },
+	{ id: "fork-bomb", pattern: /:\(\)\s*\{/, reason: "fork bomb" },
 ];
 
 type RuleVerdict = "allow" | "deny" | "gray";
@@ -79,12 +79,12 @@ function classifyBash(command: string, floorOn: boolean): RuleResult {
 	// 内置 deny floor:危险正则对完整命令串匹配;可经 builtinDenyFloor 整体关闭
 	if (floorOn) {
 		for (const rule of BASH_DANGER_RULES) {
-			if (rule.pattern.test(command)) return { verdict: "deny", reason: `规则 ${rule.id}: ${rule.reason}` };
+			if (rule.pattern.test(command)) return { verdict: "deny", reason: `rule ${rule.id}: ${rule.reason}` };
 		}
 	}
-	if (!command.trim()) return { verdict: "allow", reason: "空命令" };
+	if (!command.trim()) return { verdict: "allow", reason: "empty command" };
 	// 无内置白名单(#12):一切非危险命令交用户规则与分类器
-	return { verdict: "gray", reason: "无内置白名单" };
+	return { verdict: "gray", reason: "no built-in allowlist" };
 }
 
 // ============================================================================
@@ -115,7 +115,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict 用户规则。allow/deny 为 JS 正则数组;deny 优先于 allow;匹配目标:bash=完整命令串,文件工具=绝对路径。builtinDenyFloor=false 可关闭内置危险规则/路径敏感度拦截(风险自担)。classifierModel 可持久指定分类器模型(provider/id,如 zai/glm-4-flash;可带 pi 原生思考后缀如 zai/glm-4-flash:low;留空=自省继承会话模型)。修改后新会话生效。",
+	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. builtinDenyFloor=false disables the built-in danger/path floor (at your own risk). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	builtinDenyFloor: true,
@@ -189,16 +189,16 @@ function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: b
 		? (reason: string): RuleResult => ({ verdict: "deny", reason })
 		: (reason: string): RuleResult => ({ verdict: "gray", reason });
 
-	if (hit(S0_SECRET)) return D(`S0 密钥/凭证路径: ${rawPath}`);
+	if (hit(S0_SECRET)) return D(`S0 secrets/credential path: ${rawPath}`);
 	if (!isWrite) {
-		if (hit(S1_SYSTEM)) return { verdict: "gray", reason: `读取系统配置路径: ${rawPath}` };
+		if (hit(S1_SYSTEM)) return { verdict: "gray", reason: `read system config path: ${rawPath}` };
 		return { verdict: "allow" };
 	}
-	if (hit(S1_SYSTEM)) return D(`写入系统目录: ${rawPath}`);
-	if (hit(S3_GIT_META)) return D(`写入 .git 元数据(可执行代码入口): ${rawPath}` );
-	if (hit(S2_USER_RC)) return { verdict: "gray", reason: `写入用户配置/持久化入口: ${rawPath}` };
+	if (hit(S1_SYSTEM)) return D(`write to system directory: ${rawPath}`);
+	if (hit(S3_GIT_META)) return D(`write to .git metadata (executable code entry point): ${rawPath}` );
+	if (hit(S2_USER_RC)) return { verdict: "gray", reason: `write to user config/persistence entry point: ${rawPath}` };
 	if (abs === cwd || abs.startsWith(cwd + path.sep)) return { verdict: "allow" };
-	return { verdict: "gray", reason: `写入项目目录(CWD)外: ${rawPath}` };
+	return { verdict: "gray", reason: `write outside project directory (CWD): ${rawPath}` };
 }
 
 /** 用户规则匹配目标:bash/powershell=完整命令串;路径类工具=解析后绝对路径;其余工具不参与 */
@@ -250,17 +250,17 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 			break;
 		}
 		default:
-			base = { verdict: "gray", reason: `未内置规则覆盖的工具: ${toolName}` };
+			base = { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
 	}
 	if (base.verdict === "deny") return base; // 内置 floor:deny 优先于一切用户规则
 
 	const target = userRuleTarget(toolName, input, cwd);
 	if (target !== null) {
 		for (const re of user.deny) {
-			if (re.test(target)) return { verdict: "deny", reason: `用户黑名单: ${re.source}` };
+			if (re.test(target)) return { verdict: "deny", reason: `user deny rule: ${re.source}` };
 		}
 		for (const re of user.allow) {
-			if (re.test(target)) return { verdict: "allow", reason: "用户白名单" };
+			if (re.test(target)) return { verdict: "allow", reason: "user allow rule" };
 		}
 	}
 	return base;
@@ -415,19 +415,19 @@ async function classifyWithModel(
 		if (ctx.signal?.aborted) break; // 用户已取消,不再重试
 		const r = await callClassifierOnce(ctx, model, userMessage, maxTokens, thinking);
 		if (r.ok) {
-			const diag = `stopReason=${r.stopReason}, model=${model.id}, 原始输出=${JSON.stringify(r.text.slice(0, 200))}`;
+			const diag = `stopReason=${r.stopReason}, model=${model.id}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
 				const parsed = parseVerdict(r.text);
 				if (parsed) return { ...parsed, source: "model" };
-				failures.push(`第${n}次(${maxTokens}t)输出违反契约: ${diag}`);
+				failures.push(`attempt ${n} (${maxTokens}t) contract violation: ${diag}`);
 			} else {
-				failures.push(`第${n}次(${maxTokens}t)中止/出错: ${diag}`);
+				failures.push(`attempt ${n} (${maxTokens}t) aborted/errored: ${diag}`);
 			}
 		} else {
-			failures.push(`第${n}次(${maxTokens}t)异常: ${r.error}`);
+			failures.push(`attempt ${n} (${maxTokens}t) exception: ${r.error}`);
 		}
 	}
-	return { verdict: "deny", reason: `分类器失败(fail-closed): ${failures.join("; ")}`, source: "fail-closed" };
+	return { verdict: "deny", reason: `classifier failure (fail-closed): ${failures.join("; ")}`, source: "fail-closed" };
 }
 
 // ============================================================================
@@ -528,9 +528,9 @@ class ShadowCache {
 	/** /automode 展示用摘要 */
 	summary(): string {
 		const s = this.stats;
-		if (s.gray === 0) return "影子缓存: 本会话暂无灰区裁决";
+		if (s.gray === 0) return "shadow cache: no gray-zone verdicts yet this session";
 		const rate = ((100 * s.hits) / s.gray).toFixed(1);
-		return `影子缓存: 灰区 ${s.gray} · 双键命中 ${s.hits} (${rate}%) · miss 无条目 ${s.missNoEntry}/上下文变 ${s.missCtx} · 命令重复 ${s.cmdRepeats} · 分歧 危险 ${s.divergeDangerous}/保守 ${s.divergeConservative}`;
+		return `shadow cache: gray ${s.gray} · two-key hits ${s.hits} (${rate}%) · miss no-entry ${s.missNoEntry}/ctx-changed ${s.missCtx} · cmd repeats ${s.cmdRepeats} · divergence dangerous ${s.divergeDangerous}/conservative ${s.divergeConservative}`;
 	}
 }
 
@@ -544,9 +544,9 @@ function shadowContextKey(ctx: ExtensionContext): string {
 }
 
 function shadowTag(probe: ShadowProbe): string {
-	if (probe.result === "hit") return `(影子缓存: would-hit ${probe.entry.verdict})`;
-	if (probe.result === "ctx-changed") return `(影子缓存: miss:context-changed, 原裁决 ${probe.prevVerdict})`;
-	return `(影子缓存: miss:no-entry)`;
+	if (probe.result === "hit") return `(shadow cache: would-hit ${probe.entry.verdict})`;
+	if (probe.result === "ctx-changed") return `(shadow cache: miss:context-changed, previous ${probe.prevVerdict})`;
+	return `(shadow cache: miss:no-entry)`;
 }
 
 // ============================================================================
@@ -574,7 +574,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		const loaded = loadUserRules();
 		userRules = loaded.rules;
 		if (loaded.skipped.length > 0) {
-			ctx.ui.notify(`pi-verdict:配置中 ${loaded.skipped.length} 条非法正则已跳过(${userConfigPath()})`, "warning");
+			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid regex(es) in config (${userConfigPath()})`, "warning");
 		}
 		refreshStatus(ctx);
 	});
@@ -585,7 +585,7 @@ export default function autoMode(pi: ExtensionAPI) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode:开启" : "Auto Mode:关闭"}\n${shadow.summary()}\n用法: /automode on|off`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${shadow.summary()}\nUsage: /automode on|off`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -595,13 +595,13 @@ export default function autoMode(pi: ExtensionAPI) {
 				enabled = next;
 				refreshStatus(ctx);
 				const head = next
-					? `🛡️ Auto Mode 已开启${changed ? "" : "(未变化)"}:工具调用由规则+分类器自动裁决`
-					: `Auto Mode 已关闭${changed ? "" : "(未变化)"}:工具调用直接执行`;
+					? `🛡️ Auto Mode enabled${changed ? "" : " (unchanged)"}: tool calls adjudicated by rules + classifier`
+					: `Auto Mode disabled${changed ? "" : " (unchanged)"}: tool calls execute directly`;
 				ctx.ui.notify(`${head}\n${shadow.summary()}`, "info");
 				return;
 			}
 			// 未知参数:严格拒绝并列出用法(大小写已归一化)
-			ctx.ui.notify(`未知参数: ${arg}\n用法: /automode(查看状态)| /automode on | /automode off`, "warning");
+			ctx.ui.notify(`unknown argument: ${arg}\nUsage: /automode (status) | /automode on | /automode off`, "warning");
 		},
 	});
 
@@ -618,7 +618,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		}
 		if (colon > slash + 1 && !warnedClassifierModel) {
 			warnedClassifierModel = true;
-			ctx.ui.notify(`pi-verdict:思考级别后缀 "${raw.slice(colon + 1)}" 无效(合法:${[...THINKING_LEVELS].join("/")}),已忽略`, "warning");
+			ctx.ui.notify(`pi-verdict: invalid thinking-level suffix "${raw.slice(colon + 1)}" (valid: ${[...THINKING_LEVELS].join("/")}), ignored`, "warning");
 		}
 		return { specPart: raw, level: null };
 	}
@@ -641,7 +641,7 @@ export default function autoMode(pi: ExtensionAPI) {
 			}
 			if (!warnedClassifierModel) {
 				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
-				ctx.ui.notify(`pi-verdict:分类器模型 "${raw}" 不可用(未找到或未配置凭证),回退会话模型(自省)`, "warning");
+				ctx.ui.notify(`pi-verdict: classifier model "${raw}" unavailable (not found or no configured auth), falling back to session model (self-reflection)`, "warning");
 			}
 		}
 		return ctx.model ?? null; // 自省:继承当前会话模型
@@ -660,19 +660,19 @@ export default function autoMode(pi: ExtensionAPI) {
 		// 第 1 层:规则
 		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules);
 		if (rule.verdict === "allow") {
-			if (debug) ctx.ui.notify(`🛡️ allow(规则): ${action}`, "info");
+			if (debug) ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 			return undefined;
 		}
 		if (rule.verdict === "deny") {
-			ctx.ui.notify(`🛡️ Auto Mode 拦截: ${rule.reason}\n  ${action}`, "warning");
-			return { block: true, reason: `[auto-mode 规则拦截] ${rule.reason}` };
+			ctx.ui.notify(`🛡️ Auto Mode blocked: ${rule.reason}\n  ${action}`, "warning");
+			return { block: true, reason: `[auto-mode rule block] ${rule.reason}` };
 		}
 
 		// 第 2 层:灰区 → 模型分类器
 		const model = resolveClassifierModel(ctx);
 		if (!model) {
-			ctx.ui.notify(`🛡️ Auto Mode 拦截: 无可用分类器模型(fail-closed)\n  ${action}`, "warning");
-			return { block: true, reason: "[auto-mode] 无可用分类器模型(fail-closed)" };
+			ctx.ui.notify(`🛡️ Auto Mode blocked: no classifier model available (fail-closed)\n  ${action}`, "warning");
+			return { block: true, reason: "[auto-mode] no classifier model available (fail-closed)" };
 		}
 
 		// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
@@ -690,21 +690,21 @@ export default function autoMode(pi: ExtensionAPI) {
 		}
 
 		if (outcome.verdict === "allow") {
-			if (debug) ctx.ui.notify(`🛡️ allow(分类器): ${outcome.reason}\n  ${action} ${shadowTag(probe)}`, "info");
+			if (debug) ctx.ui.notify(`🛡️ allow (classifier): ${outcome.reason}\n  ${action} ${shadowTag(probe)}`, "info");
 			return undefined;
 		}
 		if (outcome.verdict === "deny") {
-			ctx.ui.notify(`🛡️ Auto Mode 拦截: ${outcome.reason}\n  ${action}${debug ? " " + shadowTag(probe) : ""}`, "warning");
-			return { block: true, reason: `[auto-mode 分类器拦截] ${outcome.reason}` };
+			ctx.ui.notify(`🛡️ Auto Mode blocked: ${outcome.reason}\n  ${action}${debug ? " " + shadowTag(probe) : ""}`, "warning");
+			return { block: true, reason: `[auto-mode classifier block] ${outcome.reason}` };
 		}
 
 		// ask:转人工;非交互模式 fail-closed 降级为拦截
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`🛡️ Auto Mode 拦截(非交互,ask→deny): ${outcome.reason}\n  ${action}`, "warning");
-			return { block: true, reason: `[auto-mode] 非交互模式下 ask 降级为拦截: ${outcome.reason}` };
+			ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, ask→deny): ${outcome.reason}\n  ${action}`, "warning");
+			return { block: true, reason: `[auto-mode] ask degraded to block in non-interactive mode: ${outcome.reason}` };
 		}
-		const ok = await ctx.ui.confirm("🛡️ Auto Mode 需要确认", `${action}\n\n分类器意见: ${outcome.reason}\n\n允许执行?`);
+		const ok = await ctx.ui.confirm("🛡️ Auto Mode confirmation", `${action}\n\nClassifier opinion: ${outcome.reason}\n\nAllow execution?`);
 		if (ok) return undefined;
-		return { block: true, reason: "[auto-mode] 用户拒绝" };
+		return { block: true, reason: "[auto-mode] user declined" };
 	});
 }

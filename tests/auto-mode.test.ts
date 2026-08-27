@@ -146,7 +146,7 @@ describe("user rules (deny > allow > gray)", () => {
 		const h = makeHarness(); h.install();
 		const r = await toolCall(h, "bash", { command: "git push origin main" });
 		expect(r?.block).toBe(true);
-		expect(r.reason).toContain("用户黑名单");
+		expect(r.reason).toContain("user deny rule");
 	});
 	test("user deny beats path-based rule allow (directory semantics)", async () => {
 		setConfig({ deny: ["^/proj/"] });
@@ -325,8 +325,8 @@ describe("classifier", () => {
 		h.responses = [{ text: "", stopReason: "length" }, new Error("gateway boom")];
 		const r = await toolCall(h, "bash", { command: "cargo build" });
 		expect(r?.block).toBe(true);
-		expect(r.reason).toContain("第1次(512t)");
-		expect(r.reason).toContain("第2次(1024t)");
+		expect(r.reason).toContain("attempt 1 (512t)");
+		expect(r.reason).toContain("attempt 2 (1024t)");
 	});
 	test("ask + interactive confirm → allow; headless → deny", async () => {
 		setConfig({});
@@ -351,7 +351,7 @@ function shadowStats(h: Harness): Record<string, number> {
 	h.commands.automode.handler("", h.ctx); // 裸调用 = 只读状态
 	const line = h.notifies[0]?.[0].split("\n")[1] ?? "";
 	const out: Record<string, number> = { gray: 0, hits: 0, rate: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, dangerous: 0, conservative: 0 };
-	const m = line.match(/灰区 (\d+).*命中 (\d+) \(([\d.]+)%\).*无条目 (\d+)\/上下文变 (\d+).*命令重复 (\d+).*危险 (\d+)\/保守 (\d+)/);
+	const m = line.match(/gray (\d+).*hits (\d+) \(([\d.]+)%\).*no-entry (\d+)\/ctx-changed (\d+).*repeats (\d+).*dangerous (\d+)\/conservative (\d+)/);
 	if (m) [out.gray, out.hits, out.rate, out.missNoEntry, out.missCtx, out.cmdRepeats, out.dangerous, out.conservative] =
 		[+m[1], +m[2], +m[3], +m[4], +m[5], +m[6], +m[7], +m[8]];
 	return out;
@@ -414,19 +414,19 @@ describe("/automode command", () => {
 		setConfig({});
 		const h = makeHarness(); h.install();
 		h.commands.automode.handler("", h.ctx);
-		expect(h.notifies[0][0]).toContain("开启");
-		expect(h.notifies[0][0]).toContain("影子缓存");
-		expect(h.notifies[0][0]).toContain("用法");
+		expect(h.notifies[0][0]).toContain("Auto Mode: on");
+		expect(h.notifies[0][0]).toContain("shadow cache");
+		expect(h.notifies[0][0]).toContain("Usage");
 	});
 	test("on/off are idempotent, annotated (未变化) when same", async () => {
 		setConfig({});
 		const h = makeHarness(); h.install();
 		await h.commands.automode.handler("on", h.ctx);
-		expect(h.notifies.at(-1)![0]).toContain("已开启(未变化)");
+		expect(h.notifies.at(-1)![0]).toContain("enabled (unchanged)");
 		await h.commands.automode.handler("off", h.ctx);
-		expect(h.notifies.at(-1)![0]).toContain("已关闭");
+		expect(h.notifies.at(-1)![0]).toContain("disabled");
 		await h.commands.automode.handler("OFF", h.ctx);
-		expect(h.notifies.at(-1)![0]).toContain("已关闭(未变化)"); // 大小写归一化
+		expect(h.notifies.at(-1)![0]).toContain("disabled (unchanged)"); // 大小写归一化
 	});
 	test("off actually disables gating", async () => {
 		setConfig({});
@@ -439,7 +439,7 @@ describe("/automode command", () => {
 		setConfig({});
 		const h = makeHarness(); h.install();
 		await h.commands.automode.handler(" of", h.ctx);
-		expect(h.notifies.at(-1)![0]).toContain("未知参数");
+		expect(h.notifies.at(-1)![0]).toContain("unknown argument");
 		expect(h.notifies.at(-1)![1]).toBe("warning");
 	});
 });
@@ -453,7 +453,7 @@ describe("debug annotations", () => {
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		await toolCall(h, "bash", { command: "cargo build" });
 		await toolCall(h, "bash", { command: "cargo build" });
-		const allowNotifies = h.notifies.filter(([m]) => m.includes("allow(分类器)"));
+		const allowNotifies = h.notifies.filter(([m]) => m.includes("allow (classifier)"));
 		expect(allowNotifies.length).toBe(2);
 		expect(allowNotifies[1][0]).toContain("would-hit");
 	});
