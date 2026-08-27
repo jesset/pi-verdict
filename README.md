@@ -61,7 +61,7 @@ pi --extension ./extensions/auto-mode.ts
 - `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
 - matched against the **full command string** for bash, the **absolute path** for file tools (read/write/edit/grep/find/ls); other tools (MCP etc.) always go to the classifier
 - `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain)
-- `classifierModel: "provider/model-id"` persistently sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
+- `classifierModel: "provider/model-id"` sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
 - the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off — the [measured](research/thinking-param-blackhole.md) default)
 - first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
 

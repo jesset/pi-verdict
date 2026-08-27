@@ -47,7 +47,7 @@ pi --extension ./extensions/auto-mode.ts
 | `PI_AUTO_MODE_MODEL` | — | 模型配置的环境变量形式 |
 | `PI_AUTO_MODE_DEBUG=1` | 关 | 调试的环境变量形式(flag 优先) |
 
-### 用户规则(`config/pi-verdict.json`)
+### 用户自定义规则(`config/pi-verdict.json`)
 
 ```json
 {
@@ -61,7 +61,7 @@ pi --extension ./extensions/auto-mode.ts
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
 - 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
 - `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在)
-- `classifierModel: "provider/model-id"` 持久指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
+- `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
 - spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
 - 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
 
