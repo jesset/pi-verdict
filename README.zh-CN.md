@@ -6,11 +6,68 @@
 [![npm](https://img.shields.io/npm/v/pi-verdict)](https://www.npmjs.com/package/pi-verdict)
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://pi.dev)
 
-> Pi 默认以 YOLO 模式运行:所有工具调用不经确认直接执行。
-> **verdict 给每次调用一个三态裁决 —— `allow / ask / deny`。**
-> 内置 deny floor 与你的 allow/deny 规则先行;其余交给携带会话上下文的模型分类器;任何失败路径一律 fail-closed。
+**pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 的 Auto mode 式的权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
+
+- 内置危险规则与你的 allow/deny 规则以零延迟先行裁决明确情形
+- 其余交给携带会话上下文的模型分类器
+- 任何不确定或失败一律 fail-closed, 绝不静默放行
+- 只有几百行的极简代码
+
+## 问题
+
+pi 没有内置的逐次权限确认——每次工具调用都以 pi 进程自身的权限直接执行([pi 安全文档](https://pi.dev/docs/latest/security))。
+
+pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图判定是否可以运行.
+
+## 为什么是三态
 
 **verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」。
+
+## 快速开始
+
+```bash
+# 从 npm 安装(已收录 pi 官方包目录: https://pi.dev/packages/pi-verdict)
+pi install npm:pi-verdict
+
+# 或直接从源码 —— 试用一次
+pi --extension ./extensions/auto-mode.ts
+
+```
+
+- `/automode` —— 显示当前状态:开/关 + 本会话影子缓存统计
+- `/automode on`
+- `/automode off`
+- footer 恒显 `auto mode on`(高亮)/ `auto mode off`(暗色)
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `--auto-mode` / `--no-auto-mode` | 开 | 总开关 |
+| `--auto-mode-model provider/id` | 会话模型 | 分类器模型(默认"自省") |
+| `--auto-mode-debug` | 关 | 全量裁决通知 |
+| `PI_AUTO_MODE_MODEL` | — | 模型配置的环境变量形式 |
+| `PI_AUTO_MODE_DEBUG=1` | 关 | 调试的环境变量形式(flag 优先) |
+
+### 用户规则(`config/pi-verdict.json`)
+
+```json
+{
+  "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
+  "deny":  ["rm ", "docker ", "^/etc/"],
+  "builtinDenyFloor": true,
+  "classifierModel": null
+}
+```
+
+- `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
+- 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
+- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在)
+- `classifierModel: "provider/model-id"` 持久指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
+- spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
+- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
+
+为什么没有内置白名单?第三方安全审计(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+
+需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
 
 ## 与品类对比
 
@@ -55,54 +112,6 @@ tool_call
 
 **fail-closed**:分类器异常 / 超时(15s)/ 输出违反契约 → 拦截,绝不静默放行。
 
-## 快速开始
-
-```bash
-# 从 npm 安装(已收录 pi 官方包目录: https://pi.dev/packages/pi-verdict)
-pi install npm:pi-verdict
-
-# 或直接从源码 —— 试用一次
-pi --extension ./extensions/auto-mode.ts
-
-# 或全局安装(自动发现)
-cp extensions/auto-mode.ts ~/.pi/agent/extensions/
-```
-
-- `/automode` —— 只读状态:开/关 + 本会话影子缓存统计
-- `/automode on` / `/automode off` —— 幂等设定;未知参数严格拒绝并列出用法
-- footer 恒显 `auto mode on`(高亮)/ `auto mode off`(暗色)
-- `pi --auto-mode-debug` —— 全量裁决通知(含放行),附影子缓存标注
-
-| 配置 | 默认 | 说明 |
-|---|---|---|
-| `--auto-mode` / `--no-auto-mode` | 开 | 总开关 |
-| `--auto-mode-model provider/id` | 会话模型 | 分类器模型(默认"自省") |
-| `--auto-mode-debug` | 关 | 全量裁决通知 |
-| `PI_AUTO_MODE_MODEL` | — | 模型配置的环境变量形式 |
-| `PI_AUTO_MODE_DEBUG=1` | 关 | 调试的环境变量形式(flag 优先) |
-
-### 用户规则(`config/pi-verdict.json`)
-
-```json
-{
-  "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
-  "deny":  ["rm ", "docker ", "^/etc/"],
-  "builtinDenyFloor": true,
-  "classifierModel": null
-}
-```
-
-- `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
-- 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
-- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在)
-- `classifierModel: "provider/model-id"` 持久指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
-- spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-4-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
-- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
-
-为什么没有内置白名单?第三方安全审计(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
-
-需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
-
 ## 证据驱动,不靠直觉
 
 这里的设计决策用测量收敛,实验记录随仓库发布:
@@ -134,7 +143,7 @@ cp extensions/auto-mode.ts ~/.pi/agent/extensions/
 ```bash
 bun install
 bun run typecheck
-bun test          # 36 个离线桩测试:deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
+bun test          # 42 个离线桩测试:deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。
