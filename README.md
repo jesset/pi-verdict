@@ -65,7 +65,7 @@ pi --extension ./extensions/auto-mode.ts
 - the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off — the [measured](research/thinking-param-blackhole.md) default)
 - first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
 
-Why no built-in allowlist? A third-party security audit ([`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+Why no built-in allowlist? Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
@@ -141,7 +141,7 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 - [`research/thinking-param-blackhole.md`](research/thinking-param-blackhole.md) — three-layer forensic root-cause of thinking models burning the classifier budget; why the fix is `thinkingEnabled: false`
 - [`research/rule-engine-sim`](research/rule-engine-sim/README.md) — measured a tree-sitter rule-engine port against 746 real bash calls (**absorbs 0 gray calls**) and rejected it
 - [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) — the competitive landscape this README's positioning is checked against
-- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) — third-party audit of the rule layer (8/8 reproduced → fixed architecturally in 0.2.0)
+- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) — rule-layer bypass testing (8/8 reproduced → fixed architecturally in 0.2.0)
 - [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md) — where this project genuinely converges with pi-automode, and what remains distinct
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) — structural reconstruction of Claude Code's classifier design (via self-hosted Langfuse observations) that this extension's transcript contract descends from
 
@@ -149,7 +149,7 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 
 Prototype quality — usable, not hardened:
 
-- no built-in allowlist by design (see the [security audit](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
+- no built-in allowlist by design (see the [bypass writeup](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
 - AGENTS.md is not passed to the classifier as downweighted intent evidence (Claude Code does this)
 - parallel gray-zone calls are adjudicated serially
 - self-reflection means the session model adjudicates — point `--auto-mode-model` at a lighter model if verdict latency/cost matters (open question tracked in the issue tracker)
@@ -166,7 +166,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
-bun test          # 61 offline stub tests: self-protection, tamper detection, deny floor, user rules, audit regression, classifier retry, shadow cache, commands
+bun test          # 61 offline stub tests: self-protection, tamper detection, deny floor, user rules, bypass regression, classifier retry, shadow cache, commands
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).

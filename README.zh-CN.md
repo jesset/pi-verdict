@@ -65,7 +65,7 @@ pi --extension ./extensions/auto-mode.ts
 - spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
 - 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
 
-为什么没有内置白名单?第三方安全审计(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+为什么没有内置白名单?对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 
@@ -140,7 +140,7 @@ tool_call
 - [`research/thinking-param-blackhole.md`](research/thinking-param-blackhole.md) —— 思考模型烧尽分类器预算的三层取证,以及为什么修复是 `thinkingEnabled: false`
 - [`research/rule-engine-sim`](research/rule-engine-sim/README.md) —— 用 746 条真实 bash 调用实测 tree-sitter 规则引擎移植(**灰区吸收 0 条**)并否决
 - [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) —— 本 README 定位所对照的竞品全景
-- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) —— 规则层第三方安全审计(8/8 复现 → 0.2.0 架构性修复)
+- [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md) —— 规则层绕过测试(8/8 复现 → 0.2.0 架构性修复)
 - [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md) —— 与 pi-automode 何处真正收敛、何处仍然不同
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) —— Claude Code 分类器设计的结构化还原(基于自托管 Langfuse 观测),本扩展 transcript 契约的血统来源
 
@@ -148,7 +148,7 @@ tool_call
 
 原型质量 —— 可用,未硬化:
 
-- 设计上无内置白名单(见[安全审计](research/rule-layer-security-audit.md)与[用户规则](#用户规则configpi-verdictjson));allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
+- 设计上无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户规则](#用户规则configpi-verdictjson));allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
@@ -165,7 +165,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 61 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 审计回归 / 分类器重试 / 影子缓存 / 命令
+bun test          # 61 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 绕过回归 / 分类器重试 / 影子缓存 / 命令
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。
