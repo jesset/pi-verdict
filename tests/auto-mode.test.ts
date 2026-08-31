@@ -25,6 +25,7 @@ interface Harness {
 	calls: any[];
 	responses: any[];
 	confirms: number;
+	confirmMsgs: string[];
 	confirmAnswer: boolean;
 	findMap: Record<string, any> | undefined;
 	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => void;
@@ -38,14 +39,14 @@ function makeHarness(): Harness {
 	const statusSets: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
+	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
 			complete: async (_m: any, _req: any, opts: any) => {
-				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort });
+				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort, systemPrompt: _req?.systemPrompt ?? null, messages: _req?.messages ?? [] });
 				const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
 				if (r instanceof Error) throw r;
 				return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
@@ -55,7 +56,7 @@ function makeHarness(): Harness {
 		},
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
-			confirm: async () => { h.confirms++; return h.confirmAnswer; },
+			confirm: async (_t: string, m: string) => { h.confirms++; h.confirmMsgs.push(m); return h.confirmAnswer; },
 			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
 			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (_c: string, s: string) => s },
 		},
@@ -81,7 +82,7 @@ function makeHarness(): Harness {
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -89,6 +90,8 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: 
 	if (cfg.classifierModel !== undefined) raw.classifierModel = cfg.classifierModel;
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
+	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
+	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
 	fs.writeFileSync(p, JSON.stringify(raw));
@@ -316,7 +319,7 @@ describe("classifier", () => {
 		const r = await toolCall(h, "bash", { command: "cargo build" });
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(1);
-		expect(h.calls[0]).toEqual({ model: "mock/glm", maxTokens: 512, thinkingEnabled: false });
+		expect(h.calls[0]).toMatchObject({ model: "mock/glm", maxTokens: 512, thinkingEnabled: false });
 	});
 	test("empty output → retry at 1024, verdict honored", async () => {
 		setConfig({});
@@ -739,5 +742,269 @@ describe("tamper detection (ADR-0001, differential disposal)", () => {
 		expect(r?.block).toBe(true);
 		expect(fs.existsSync(CFG())).toBe(true); // 删除亦被还原(重建)
 		expect(fs.readFileSync(CFG(), "utf8")).toBe(before);
+	});
+});
+
+// ── denyPaths (ADR-0002): deterministic ask + classifier existence hint ──
+// A local extractor (evidence producer, never an adjudicator) feeds a per-segment
+// prefix comparison over dual-form normalized paths (lexical + realpath);
+// a hit routes to a terminal ask; the classifier only ever sees an existence hint.
+describe("denyPaths (ADR-0002)", () => {
+	const SENS = path.join(TMP_AGENT, "sensitive"); // real dir under the temp agent dir
+	beforeAll(() => {
+		fs.mkdirSync(SENS, { recursive: true });
+		fs.writeFileSync(path.join(SENS, "secret.md"), "secret");
+	});
+
+	test("read of a denyPath → interactive ask: one confirm, zero model calls, allow on confirm", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirms).toBe(1);
+		expect(r).toBeUndefined(); // confirmAnswer defaults to true
+		expect(h.calls.length).toBe(0); // deterministic — never reaches the classifier
+	});
+
+	test("declined confirm → block, user-declined reason", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.confirmAnswer = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirms).toBe(1);
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("declined");
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("headless hit → ask degrades to deny, zero confirms", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirms).toBe(0);
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("non-interactive");
+	});
+
+	test("write/edit/grep/find/ls over a denyPath all hit (file names leak too)", async () => {
+		// write/edit use a home-based base: SENS lives under os.tmpdir() → /var/... (S1
+		// system dir), where a write is floor-denied BEFORE denyPaths (ADR-0002 priority:
+		// built-in floor deny > denyPaths ask) — the block, not a confirm, would fire
+		const homeBase = path.join(os.homedir(), ".pi-verdict-denypaths-wtest");
+		for (const [tool, base, input] of [
+			["write", homeBase, { path: path.join(homeBase, "new.md"), content: "x" }],
+			["edit", homeBase, { path: path.join(homeBase, "secret.md") }],
+			["grep", SENS, { path: SENS }],
+			["find", SENS, { path: SENS }],
+			["ls", SENS, { path: SENS }],
+		] as const) {
+			setConfig({ denyPaths: [base] });
+			const h = makeHarness(); h.install();
+			await toolCall(h, tool, input);
+			expect(h.confirms).toBe(1);
+			expect(h.calls.length).toBe(0);
+		}
+	});
+
+	test("normalization matrix: ~, $HOME, relative, .., and glob spellings hit the same base", async () => {
+		// lexical bases (nonexistent targets): ~/ and $HOME/ under the real home, /proj-relative
+		const home = os.homedir();
+		const cases: Array<[string[], string, string]> = [
+			[[`${home}/.pi-verdict-denypaths-test`], "~/.pi-verdict-denypaths-test/a.md", "read"],
+			[[`${home}/.pi-verdict-denypaths-test`], "$HOME/.pi-verdict-denypaths-test/a.md", "read"],
+			// bash absolute token + ../ variant + glob + heredoc inline body
+			[["/proj/sensitive-rel"], "cat /proj/sensitive-rel/x.md", "bash"],
+			[["/proj/sensitive-rel"], "cat /proj/ok/../sensitive-rel/x.md", "bash"],
+			[["/proj/sensitive-rel"], "cat /proj/sensitive-rel/*.md", "bash"],
+			[["/proj/sensitive-rel"], "bash -s <<'EOF'\ncat /proj/sensitive-rel/x.md\nEOF", "bash"],
+			// relative path form (read tool): resolves against cwd (/proj)
+			[["/proj/sensitive-rel"], "sensitive-rel/x.md", "read"],
+		];
+		for (const [bases, input, tool] of cases) {
+			setConfig({ denyPaths: bases });
+			const h = makeHarness(); h.install();
+			await toolCall(h, tool, tool === "bash" ? { command: input } : { path: input });
+			expect(h.confirms).toBe(1);
+			expect(h.calls.length).toBe(0);
+		}
+		// bash word/word relative form resolves against cwd as well
+		setConfig({ denyPaths: ["/proj/sensitive-rel"] });
+		const h2 = makeHarness(); h2.install();
+		await toolCall(h2, "bash", { command: "cat sensitive-rel/x.md" });
+		expect(h2.confirms).toBe(1);
+	});
+
+	test("symlink indirection onto a denyPath hits via realpath", async () => {
+		const link = path.join(TMP_AGENT, "sens-link");
+		try { fs.rmSync(link); } catch { /* not present */ }
+		fs.symlinkSync(SENS, link);
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "read", { path: path.join(link, "secret.md") });
+		expect(h.confirms).toBe(1);
+		// bash token through the same symlink
+		const h2 = makeHarness(); h2.install();
+		await toolCall(h2, "bash", { command: `cat ${path.join(link, "secret.md")}` });
+		expect(h2.confirms).toBe(1);
+	});
+
+	test("negative: sibling sharing a prefix does not hit (segment boundary)", async () => {
+		setConfig({ denyPaths: ["/proj/personal"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: "/proj/personal-x/f.md" });
+		expect(h.confirms).toBe(0);
+		expect(h.calls.length).toBe(0); // no denyPath hit → rule-layer allow for plain reads
+		expect(r).toBeUndefined();
+	});
+
+	test("negative: unrelated command produces zero confirms (classifier path, hint only)", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> routine" }];
+		const r = await toolCall(h, "bash", { command: "git status" });
+		expect(h.confirms).toBe(0);
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+
+	test("priority: user deny beats denyPaths (deny reason, zero confirms)", async () => {
+		setConfig({ denyPaths: [SENS], deny: ["sensitive"] });
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "bash", { command: `cat ${path.join(SENS, "secret.md")}` });
+		expect(h.confirms).toBe(0);
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("user deny rule");
+	});
+
+	test("priority: denyPaths hit overrides user allow (^ls\\b + ls over denyPath → confirm)", async () => {
+		setConfig({ allow: ["^ls\\b"], denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "ls", { path: SENS });
+		expect(h.confirms).toBe(1); // ask despite the allow rule
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("builtinDenyFloor:false does not disable denyPaths", async () => {
+		setConfig({ denyPaths: [SENS], builtinDenyFloor: false });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirms).toBe(1);
+	});
+
+	test("master switch off → denyPaths inert (direct pass-through)", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install({ flag: false });
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirms).toBe(0);
+		expect(h.calls.length).toBe(0);
+		expect(r).toBeUndefined();
+	});
+
+	test("classifier existence hint: present when denyPaths non-empty, absent when empty; zero path plaintext", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		await toolCall(h, "bash", { command: "git status" }); // gray → classifier
+		expect(h.calls.length).toBe(1);
+		expect(String(h.calls[0].systemPrompt)).toContain("protected paths");
+		// leakage regression: the denyPath string itself never appears in the prompt
+		expect(String(h.calls[0].systemPrompt)).not.toContain(SENS);
+		expect(JSON.stringify(h.calls[0].messages)).not.toContain(SENS);
+		// empty denyPaths → no hint sentence
+		setConfig({ denyPaths: [] });
+		const h2 = makeHarness(); h2.install();
+		h2.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		await toolCall(h2, "bash", { command: "git status" });
+		expect(String(h2.calls[0].systemPrompt)).not.toContain("protected paths");
+	});
+
+	test("config template contains the denyPaths field", () => {
+		fs.rmSync(path.join(TMP_AGENT, "config", "pi-verdict.json"));
+		const h = makeHarness(); h.install(); // first run → template
+		expect(fs.readFileSync(path.join(TMP_AGENT, "config", "pi-verdict.json"), "utf8")).toContain("denyPaths");
+	});
+
+	test("/automode status shows the active denyPaths count", async () => {
+		setConfig({ denyPaths: [SENS, "/proj/other"] });
+		const h = makeHarness(); h.install();
+		await h.commands["automode"].handler("", h.ctx);
+		const status = h.notifies.map(([m]) => m).join("\n");
+		expect(status).toContain("denyPaths: 2 active");
+	});
+
+	test("invalid (non-string) denyPaths entries are skipped with a session_start warning", async () => {
+		setConfig({ denyPaths: ["/ok/path", 42 as unknown as string] });
+		const h = makeHarness(); h.install();
+		await h.handlers["session_start"]({}, h.ctx);
+		const warnings = h.notifies.filter(([, level]) => level === "warning").map(([m]) => m).join("\n");
+		expect(warnings).toContain("denyPaths");
+	});
+
+	// story 16: obfuscation/boundary regression payloads — freeze the documented holes
+	// (base64-embedded paths → classifier + hint) and the covered spellings (literal
+	// path inside $(), quoted $HOME/…) so refactors cannot silently widen the hole surface
+	test("obfuscation payloads: base64-embedded path falls to the classifier with the hint; literal-in-$() and quoted $HOME still hit", async () => {
+		setConfig({ denyPaths: ["/proj/sensitive-rel"] });
+		// base64 of "/proj/sensitive-rel/x.md": no literal path in the command string →
+		// the declared hole: no hit, gray → classifier carrying the existence hint
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> encoded-path probe" }];
+		const r = await toolCall(h, "bash", { command: "echo L3Byb2ovc2Vuc2l0aXZlLXJlbC94Lm1k== | base64 -d | xargs cat" });
+		expect(h.confirms).toBe(0);
+		expect(h.calls.length).toBe(1);
+		expect(String(h.calls[0].systemPrompt)).toContain("protected paths");
+		expect(r?.block).toBe(true);
+	});
+
+	test("literal path inside command substitution still hits (the string itself is evidence)", async () => {
+		setConfig({ denyPaths: ["/proj/sensitive-rel"] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "bash", { command: "cat $(echo /proj/sensitive-rel/x.md)" });
+		expect(h.confirms).toBe(1);
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("quoted \"$HOME/…\" spelling still hits (quotes are not part of the token)", async () => {
+		const home = os.homedir();
+		setConfig({ denyPaths: [path.join(home, ".pi-verdict-denypaths-test")] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "bash", { command: `cat "$HOME/.pi-verdict-denypaths-test/a.md"` });
+		expect(h.confirms).toBe(1);
+		expect(h.calls.length).toBe(0);
+	});
+
+	// story 11: zero path plaintext outside the machine — the matched path may appear
+	// ONLY in the local confirm dialog; block reasons and notifications travel back
+	// into the agent context (model provider) and must carry no plaintext
+	test("path plaintext appears only in the confirm dialog, never in block reason or notifications", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.confirmAnswer = false; // declined → block; confirm message was already shown
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirmMsgs.join("\n")).toContain(SENS); // the dialog does name the path
+		expect(String(r?.reason)).not.toContain(SENS);
+		expect(h.notifies.map(([m]) => m).join("\n")).not.toContain(SENS);
+	});
+
+	test("headless block reason and notify carry no path plaintext either", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).not.toContain(SENS);
+		expect(h.notifies.map(([m]) => m).join("\n")).not.toContain(SENS);
+	});
+
+	// ADR-0002: bases are normalized ONCE at session start, anchored to the session cwd —
+	// a later tool_call from a different cwd must not re-anchor the declaration
+	test("relative denyPath entry stays anchored to the session cwd after session_start", async () => {
+		setConfig({ denyPaths: ["sensitive-rel"] });
+		const h = makeHarness(); h.install();
+		await h.handlers["session_start"]({}, { ...h.ctx, cwd: "/proj" }); // anchor at /proj/sensitive-rel
+		h.ctx.cwd = "/proj/sub";
+		const r = await toolCall(h, "read", { path: "sensitive-rel/x.md" }); // resolves to /proj/sub/sensitive-rel/… — NOT the anchored base
+		expect(h.confirms).toBe(0);
+		expect(r).toBeUndefined(); // rule-layer allow (non-S0/S1 read): the declaration did not follow the cwd
 	});
 });

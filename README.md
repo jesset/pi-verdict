@@ -54,6 +54,7 @@ pi --extension ./extensions/auto-mode.ts
 {
   "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
   "deny":  ["rm ", "docker ", "^/etc/"],
+  "denyPaths": ["~/Documents/private", "~/work/company"],
   "builtinDenyFloor": true,
   "classifierModel": null,
   "toggleShortcut": "ctrl+shift+a"
@@ -62,6 +63,7 @@ pi --extension ./extensions/auto-mode.ts
 
 - `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
 - matched against the **full command string** for bash, the **absolute path** for file tools (read/write/edit/grep/find/ls); other tools (MCP etc.) always go to the classifier
+- `denyPaths` are plain paths (not regexes) you declare **protected** ([ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)): any tool call touching them — file tools via their path, bash via path tokens extracted from the command string — triggers a **terminal ask** you adjudicate (non-interactive sessions degrade to deny). The tool owns normalization: `~`, `$HOME/`, relative, `..` and symlink spellings all resolve, compared per path segment. Priority: after your `deny` rules, **before your `allow` rules** (not even your own allowlist may touch these), and not affected by `builtinDenyFloor: false` — it is your declaration, not a built-in claim. The classifier only ever learns that protected paths *exist* (a fixed system-prompt hint to judge copy-then-read/archiving/indirection strictly); the paths themselves never leave your machine, and a hit never reaches the classifier at all — the matched path shows **only** in the local confirm dialog; block reasons and notifications carry none (they return into the agent context). Entries are normalized once at session start, anchored to the session cwd — mid-session symlink creation or cwd drift does not change what the declaration covers. When S0 secrets paths deny outright while your `denyPaths` merely ask, that asymmetry is deliberate: the exception to a *user-declared* path belongs to the user; S0 is an author-vetted set (see the ADR)
 - `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain — the self-protection layer below always stays on)
 - `classifierModel: "provider/model-id"` sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
 - the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off — the [measured](research/thinking-param-blackhole.md) default)
@@ -94,9 +96,9 @@ Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) s
 
 Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · convergence analysis with the closest architectural relative: [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md).
 
-Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file (~900 lines, deliberate), and the measurement habit — every design decision in this repo is backed by shipped research.
+Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file (~1.2k lines and growing by features, still one file on purpose), and the measurement habit — every design decision in this repo is backed by shipped research.
 
-The single-file, zero-dependency shape is deliberate — the whole extension is one readable [~900-line file](extensions/auto-mode.ts).
+The single-file, zero-dependency shape is deliberate — the whole extension is one readable [file](extensions/auto-mode.ts), ~1.2k lines and growing with features.
 
 ## Pipeline
 
@@ -116,12 +118,18 @@ tool_call
   │     ├─ built-in deny floor: bash danger regexes (full-string) +
   │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny)
   │     ├─ your rules: user deny beats user allow (regex, see below)
+  │     ├─ denyPaths (ADR-0002): user-declared protected paths, tool-owned
+  │     │   normalization (~, $HOME, relative, .., symlink) → terminal ask,
+  │     │   before user allow; classifier sees an existence hint only
   │     └─ no built-in allowlist — every "always allow" claim is yours to make
   │
   ├─ 2. Gray zone → model classifier (defaults to session model — "self-reflection")
   │     ├─ input: CC-style <transcript> (last 5 user messages + last 10 tool calls,
   │     │        action under review always last) — user intent is evidence
   │     ├─ output contract: <verdict>allow|ask|deny</verdict> prefix-anchored
+  │     ├─ existence hint when denyPaths are configured: the classifier knows
+  │     │   protected paths exist (never what they are) and judges
+  │     │   copy-then-read/archiving/indirection strictly
   │     ├─ thinking explicitly disabled (thinkingEnabled: false) + retry 512→1024
   │     └─ configurable via --auto-mode-model
   │
@@ -157,6 +165,8 @@ Prototype quality — usable, not hardened:
 - parallel gray-zone calls are adjudicated serially
 - self-reflection means the session model adjudicates — point `--auto-mode-model` at a lighter model if verdict latency/cost matters (open question tracked in the issue tracker)
 - shadow cache is observe-only by decision; the serving switch is a one-line change once measured hit rates justify it
+- `denyPaths` bash extraction is token-level ([ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)): command substitution, base64-embedded paths and external script contents produce no hit signal — those calls fall back to the classifier's existence-hint vigilance. MCP and custom tools bypass the extractor entirely (their gray-zone adjudication still carries the hint). Honest framing, same as the self-protection substring precedent: the deterministic layer is obfuscatable, which is exactly why a hit routes to *you* rather than silently deciding
+- `denyPaths` bash tokens contain no spaces: a *declared* path containing spaces cannot be spelled in a bash command in a way the extractor sees — `cat "/path with space/x"` splits into two tokens and never hits (file tools still hit, their path is not tokenized). A glob covering the final segment of a base (`cat /proj/pers*` against `denyPaths: ["/proj/personal"]`) also misses — the base's own name never appears literally. Both holes fall back to the classifier's existence hint, alongside substitution/base64 above
 - self-protection bash matching is substring regex — obfuscatable; the tamper-detection backstop catches within-session bypasses, but a cross-session baseline (hash + change confirmation at startup, incl. upgrade UX) is phase 2 per [ADR-0001](docs/adr/0001-self-protection-layer.md)
 - dev checkouts (running the extension from a repo, not `<agentDir>/extensions/`) are not self-protected — the installed copy the *next* normal session loads is only covered by its own sessions' gate
 
@@ -169,7 +179,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
-bun test          # 69 offline stub tests: self-protection, tamper detection, deny floor, user rules, bypass regression, classifier retry, shadow cache, commands, toggle shortcut
+bun test          # 91 offline stub tests: self-protection, tamper detection, deny floor, user rules, denyPaths, bypass regression, classifier retry, shadow cache, commands, toggle shortcut
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).
