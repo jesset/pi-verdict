@@ -1,7 +1,7 @@
 {
 	"name": "pi-verdict",
 	"version": "0.4.0",
-	"description": "A permission gate for Pi in the style of Claude Code's auto mode",
+	"description": "A minimal permission gate for Pi in the style of Claude Code's auto mode",
 	"author": "Jesset (https://github.com/jesset)",
 	"type": "module",
 	"main": "extensions/auto-mode.ts",

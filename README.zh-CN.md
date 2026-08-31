@@ -6,12 +6,12 @@
 [![npm](https://img.shields.io/npm/v/pi-verdict)](https://www.npmjs.com/package/pi-verdict)
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://pi.dev)
 
-**pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 的 Auto mode 式的权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
+**pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 的 Auto mode 式的极简权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
 
+- 只有几百行的极简代码
 - 内置危险规则与你的 allow/deny 规则以零延迟先行裁决明确情形
 - 其余交给携带会话上下文的模型分类器
 - 任何不确定或失败一律 fail-closed, 绝不静默放行
-- 只有几百行的极简代码
 
 ## 问题
 
@@ -48,7 +48,7 @@ pi --extension ./extensions/auto-mode.ts
 | `PI_AUTO_MODE_MODEL` | — | 模型配置的环境变量形式 |
 | `PI_AUTO_MODE_DEBUG=1` | 关 | 调试的环境变量形式(flag 优先) |
 
-### 用户自定义规则(`config/pi-verdict.json`)
+### 用户自定义规则(`~/.pi/agent/config/pi-verdict.json`)
 
 ```json
 {
@@ -68,7 +68,7 @@ pi --extension ./extensions/auto-mode.ts
 - `toggleShortcut` 重绑主开关快捷键(任意 pi 键组合,如 `ctrl+shift+x`;`null` 或空串禁用;非法组合在会话启动时一次性警告并跳过注册)。快捷键与 `/automode on|off` **语义等价**——运行中生效、无确认弹窗、不持久化(持久需求由 `--no-auto-mode` flag 承担;扩展运行时从不写自己的受保护配置)
 - 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
 
-为什么没有内置白名单?对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+**为什么没有内置白名单?**对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 

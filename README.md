@@ -6,12 +6,12 @@
 [![npm](https://img.shields.io/npm/v/pi-verdict)](https://www.npmjs.com/package/pi-verdict)
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://pi.dev)
 
-**pi-verdict is a permission gate for [pi](https://pi.dev) in the style of Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
+**pi-verdict is a minimal permission gate for [pi](https://pi.dev) in the style of Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
 
+- Minimal — just a few hundred lines of code
 - Built-in danger rules and your own allow/deny rules settle the clear cases first, at zero latency
 - Everything else goes to a model classifier that sees the conversation context
 - Any uncertainty or failure fails closed; nothing ever runs silently
-- Minimal — just a few hundred lines of code
 
 ## The problem
 
@@ -48,7 +48,7 @@ pi --extension ./extensions/auto-mode.ts
 | `PI_AUTO_MODE_MODEL` | — | env form of the model flag |
 | `PI_AUTO_MODE_DEBUG=1` | off | env form of debug (flag wins) |
 
-### User rules (`config/pi-verdict.json`)
+### User rules (`~/.pi/agent/config/pi-verdict.json`)
 
 ```json
 {
@@ -68,7 +68,7 @@ pi --extension ./extensions/auto-mode.ts
 - `toggleShortcut` rebinds the master-switch toggle key (any pi key combo, e.g. `ctrl+shift+x`; `null` or empty disables the shortcut; an invalid combo warns once at session start and skips registration). The toggle is semantically identical to `/automode on|off` — works mid-run, no confirmation, never persisted (persistence stays with the `--no-auto-mode` flag; the extension never writes its own protected config)
 - first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
 
-Why no built-in allowlist? Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+**Why no built-in allowlist?** Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
