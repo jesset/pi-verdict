@@ -20,6 +20,8 @@ interface Harness {
 	shortcuts: Record<string, any>;
 	notifies: Array<[string, string]>;
 	statusSets: Array<[string, string]>;
+	/** theme.fg calls: [color, text] — asserts footer status colors */
+	fgCalls: Array<[string, string]>;
 	branch: any[];
 	ctx: any;
 	calls: any[];
@@ -37,9 +39,10 @@ function makeHarness(): Harness {
 	const shortcuts: Record<string, any> = {};
 	const notifies: Array<[string, string]> = [];
 	const statusSets: Array<[string, string]> = [];
+	const fgCalls: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
+	const h: any = { handlers, commands, shortcuts, notifies, statusSets, fgCalls, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
@@ -58,7 +61,7 @@ function makeHarness(): Harness {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
 			confirm: async (_t: string, m: string) => { h.confirms++; h.confirmMsgs.push(m); return h.confirmAnswer; },
 			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
-			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (_c: string, s: string) => s },
+			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (c: string, s: string) => (fgCalls.push([c, s]), s) },
 		},
 	};
 	h.ctx = ctx;
@@ -501,6 +504,15 @@ describe("toggle shortcut", () => {
 		expect(await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" })).toBeUndefined(); // 关:放行
 		h.shortcuts["ctrl+shift+a"].handler(h.ctx); // 再按:恢复开启
 		expect((await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" }))?.block).toBe(true);
+	});
+	test("footer status colors: on → success, off → warning", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		await h.handlers.session_start({}, h.ctx); // on (default)
+		expect(h.statusSets.at(-1)).toEqual(["auto-mode", "auto mode on"]);
+		expect(h.fgCalls.at(-1)).toEqual(["success", "auto mode on"]); // green: gate active
+		h.shortcuts["ctrl+shift+a"].handler(h.ctx); // silent toggle off
+		expect(h.fgCalls.at(-1)).toEqual(["warning", "auto mode off"]); // yellow: a note, not a fault
 	});
 	test("/automode bare call shows toggle hint; hidden when disabled", () => {
 		setConfig({});

@@ -38,7 +38,7 @@ pi --extension ./extensions/auto-mode.ts
 - `/automode on`
 - `/automode off`
 - `ctrl+shift+a` —— 静默切换主开关(footer 始终显示为唯一反馈;键位可经 `toggleShortcut` 重绑或禁用)
-- footer 恒显 `auto mode on`(高亮)/ `auto mode off`(暗色)
+- footer 恒显 `auto mode on`(绿色)/ `auto mode off`(黄色)
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
