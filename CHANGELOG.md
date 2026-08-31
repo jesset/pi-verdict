@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-31
+
 ### Added
 
-- `denyPaths`: user-declared protected paths (#16, [ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)). A plain-path list in `config/pi-verdict.json`; any tool call touching a protected path — file tools via their path, bash via path tokens extracted from the command string (heredoc bodies included) — triggers a terminal ask adjudicated by the user (non-interactive sessions degrade to deny). Tool-owned normalization: `~`, `$HOME/`, relative, `..` and symlink spellings all resolve (lexical resolve + realpath, degrading to lexical), compared per path segment in dual form; entries anchor to the session cwd once at session start — mid-session symlink creation or cwd drift cannot re-anchor the declaration. Priority: after user `deny`, before user `allow` (not even the user's own allowlist may touch these); not affected by `builtinDenyFloor: false`; subject to the master switch. The classifier receives only a fixed existence-hint sentence (edge-probing judged strictly) — zero path plaintext, and a hit never reaches the classifier; the matched path appears only in the local confirm dialog, never in block reasons or notifications (they return into the agent context). When S0 secrets deny outright while `denyPaths` merely ask, that asymmetry is deliberate (declaration source owns the exception). `/automode` shows the active count; invalid entries are skipped with a session-start warning. Known coverage holes (documented in the README): command substitution, base64-embedded paths, external script contents, space-containing bash spellings and globs covering the base's final segment produce no hit signal — those fall back to the classifier's existence-hint vigilance
+- `denyPaths`: user-declared protected paths (#16, [ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)):
+  - plain-path list in `config/pi-verdict.json`; the tool owns normalization — `~`, `$HOME/`, relative, `..`, symlink spellings all resolve, compared per path segment; anchored once per session, so cwd drift or mid-session symlinks cannot re-anchor the declaration
+  - any touch — file tools by their path, bash by path tokens from the command string (heredocs included) — triggers a terminal **ask** the user adjudicates; headless sessions degrade to deny
+  - priority: after user `deny`, before user `allow` (not even your own allowlist may touch these); unaffected by `builtinDenyFloor: false`; subject to the master switch
+  - the classifier sees only a fixed existence hint — zero path plaintext; the matched path appears solely in the local confirm dialog, never in block reasons or notifications
+  - `/automode` shows the active count; the config template gains the field; invalid entries warn once at session start
+  - known holes (substitution, base64, script contents, spaces, final-segment globs → classifier vigilance) documented in the README and frozen by regression payloads
 
 ## [0.4.1] - 2026-08-31
 
