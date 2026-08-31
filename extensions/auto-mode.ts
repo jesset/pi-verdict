@@ -6,7 +6,7 @@
  * inverted: pi defaults to allowing → this extension intercepts.
  *
  * Pipeline (tool_call hook):
- *   0. Self-protection layer (ADR-0001, exempt from no config): write/edit/bash
+ *   0. Self-protection layer (ADR-0001, cannot be exempted by any config): write/edit/bash
  *      touching the gate's own files (pi-verdict.json + the installed extension
  *      copy) → hard deny, reads pass; builtinDenyFloor:false cannot turn it off,
  *      user allow cannot override it. Tamper-detection backstop: watched files are
@@ -112,6 +112,10 @@ type RuleVerdict = "allow" | "deny" | "gray" | "ask";
 interface RuleResult {
 	verdict: RuleVerdict;
 	reason?: string;
+	/** UI-only plaintext (e.g. the matched protected path). Never reaches the agent
+	 *  context: block reasons and notifications travel back to the model, so only the
+	 *  local confirm dialog may show it (ADR-0002 story: zero path plaintext leaves the machine). */
+	detail?: string;
 }
 
 function classifyBash(command: string, floorOn: boolean): RuleResult {
@@ -372,10 +376,11 @@ function denyPathCandidates(toolName: string, input: Record<string, unknown>): s
 	}
 }
 
-/** Does the call touch a user-declared protected path? Returns the matched base for the ask dialog */
-function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules): string | null {
-	if (user.denyPaths.length === 0) return null;
-	const bases = user.denyPaths.flatMap((b) => denyPathForms(b, cwd));
+/** Does the call touch a user-declared protected path? `bases` are the denyPaths
+ *  pre-normalized ONCE at session start (anchored to the session cwd) — mid-session
+ *  symlink creation or cwd drift must not change what the declaration covers.
+ *  Returns the matched base for the ask dialog (UI-only plaintext, see RuleResult.detail). */
+function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: string, bases: string[]): string | null {
 	if (bases.length === 0) return null;
 	for (const candidate of denyPathCandidates(toolName, input)) {
 		for (const c of denyPathForms(candidate, cwd)) {
@@ -557,14 +562,16 @@ function takeSnapshots(bases: Array<{ file: string; kind: WatchKind }>): Array<{
 }
 
 /**
- * 工具调用 → 规则层裁决。裁决序(#12,ADR-0001 增第 0 层):
- *   0. 自保护层——deny 即终局(不可经任何配置豁免,builtinDenyFloor 亦不能关)
- *   1. 内置 base(bash 危险正则 floor / 路径敏感度分级)——deny 即终局(floor 可经 builtinDenyFloor 关闭)
- *   2. 用户黑名单 → deny(优先于白名单)
- *   3. 用户白名单 → allow
- *   4. base(路径类工具的默认 allow/gray;其余 gray)→ 交分类器
+ * Tool call → rule-layer verdict. Order (#12; ADR-0001 adds layer 0; ADR-0002 inserts denyPaths):
+ *   0. self-protection — deny is terminal (no config exempts it, not even builtinDenyFloor:false)
+ *   1. built-in base (bash danger regex floor / path sensitivity grading) — deny is terminal
+ *      (the floor can be turned off via builtinDenyFloor)
+ *   2. user deny → deny (beats allow)
+ *   3. denyPaths hit → terminal ask (ADR-0002: the declaring user adjudicates; before user allow)
+ *   4. user allow → allow
+ *   5. base (path tools' default allow/gray; everything else gray) → classifier
  */
-function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules, prot: ProtectedSet): RuleResult {
+function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules, prot: ProtectedSet, denyPathBases: string[]): RuleResult {
 	// 第 0 层:自保护层(ADR-0001)——先于一切,不可经任何配置豁免
 	const sp = selfProtectCheck(toolName, input, cwd, prot);
 	if (sp) return sp;
@@ -600,9 +607,11 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 			if (re.test(target)) return { verdict: "deny", reason: `user deny rule: ${re.source}` };
 		}
 		// denyPaths hit → terminal ask (ADR-0002): after user deny, before user allow —
-		// a protected path is the user's exception to their own allow rules
-		const hit = hitDenyPaths(toolName, input, cwd, user);
-		if (hit) return { verdict: "ask", reason: `user-declared protected path (denyPaths): ${hit}` };
+		// a protected path is the user's exception to their own allow rules.
+		// The matched path goes to `detail` (confirm dialog only): reasons travel back
+		// into the agent context, so plaintext there would leak the declaration.
+		const hit = hitDenyPaths(toolName, input, cwd, denyPathBases);
+		if (hit) return { verdict: "ask", reason: "user-declared protected path (denyPaths) [path withheld; see pi-verdict.json]", detail: hit };
 		for (const re of user.allow) {
 			if (re.test(target)) return { verdict: "allow", reason: "user allow rule" };
 		}
@@ -634,7 +643,7 @@ Your ENTIRE response MUST begin with <verdict>. No preamble, no reasoning before
  * protected paths exist and stay strict about edge-probing (copy-then-read, archiving,
  * indirection) — never WHAT they are. Path plaintext never leaves the machine.
  */
-const DENYPATHS_HINT =
+const DENY_PATHS_HINT =
 	"\n\nThe user has configured protected paths (denyPaths). Any action that reads, writes, copies, archives, or exfiltrates their contents — including indirection such as copying to a temporary location first — must be denied or asked about, never silently allowed.";
 
 const MAX_USER_MESSAGES = 5;
@@ -764,7 +773,7 @@ async function classifyWithModel(
 ): Promise<ClassifierOutcome> {
 	const transcript = buildTranscript(ctx, actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
-	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENYPATHS_HINT : CLASSIFIER_SYSTEM;
+	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
 	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
 	const failures: string[] = [];
 	for (const [n, maxTokens] of attempts) {
@@ -918,6 +927,15 @@ export default function autoMode(pi: ExtensionAPI) {
 	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
 	const shadow = new ShadowCache();
 	let userRules: UserRules = loadUserRules().rules;
+	// denyPath bases, normalized ONCE per session anchored to the session cwd (ADR-0002):
+	// mid-session symlink creation or cwd drift must not change what the declaration covers.
+	// session_start anchors it; the lazy null-fallback only guards an out-of-order first
+	// tool_call (pi's normal order is session_start first) and, once set, it is never re-derived.
+	let denyPathBases: string[] | null = null;
+	const anchoredDenyPathBases = (cwd: string): string[] => {
+		if (denyPathBases === null) denyPathBases = userRules.denyPaths.flatMap((b) => denyPathForms(b, cwd));
+		return denyPathBases;
+	};
 
 	// 自保护层(ADR-0001):受保护集合自锚定 + 变更检测基线(会话内存态)
 	const ownFilePath = (() => {
@@ -983,6 +1001,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		tampered = false;
 		const loaded = loadUserRules();
 		userRules = loaded.rules;
+		denyPathBases = userRules.denyPaths.flatMap((b) => denyPathForms(b, ctx.cwd)); // anchored to the session cwd, once (ADR-0002)
 		snapshots = takeSnapshots(prot.watchBases);
 		if (loaded.skipped.length > 0) {
 			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid config value(s) in config (${userConfigPath()}): ${loaded.skipped.join(", ")}`, "warning");
@@ -1117,7 +1136,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		}
 
 		// 第 1 层:规则
-		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules, prot);
+		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules, prot, anchoredDenyPathBases(ctx.cwd));
 		if (rule.verdict === "allow") {
 			if (debug) ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 			return undefined;
@@ -1130,10 +1149,12 @@ export default function autoMode(pi: ExtensionAPI) {
 		// the exception; non-interactive sessions degrade to deny (existing ask rule)
 		if (rule.verdict === "ask") {
 			if (!ctx.hasUI) {
-				ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, protected-path ask→deny): ${rule.reason}\n  ${action}`, "warning");
+				// no action line here: the action string can embed the touched path, and
+				// notifications must not carry protected-path plaintext (ADR-0002 story 11)
+				ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, protected-path ask→deny): ${rule.reason}`, "warning");
 				return { block: true, reason: `[auto-mode] protected-path ask degraded to block in non-interactive mode: ${rule.reason}` };
 			}
-			const ok = await ctx.ui.confirm("🛡️ Auto Mode: protected path", `${action}\n\n${rule.reason}\n\nAllow this access?`);
+			const ok = await ctx.ui.confirm("🛡️ Auto Mode: protected path", `${action}\n\n${rule.reason}\n\nProtected path: ${rule.detail ?? "(see pi-verdict.json)"}\n\nAllow this access?`);
 			if (ok) {
 				if (debug) ctx.ui.notify(`🛡️ allow (protected-path confirm): ${action}`, "info");
 				return undefined;

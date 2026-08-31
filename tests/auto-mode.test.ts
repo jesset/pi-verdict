@@ -25,6 +25,7 @@ interface Harness {
 	calls: any[];
 	responses: any[];
 	confirms: number;
+	confirmMsgs: string[];
 	confirmAnswer: boolean;
 	findMap: Record<string, any> | undefined;
 	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => void;
@@ -38,7 +39,7 @@ function makeHarness(): Harness {
 	const statusSets: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
+	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
@@ -55,7 +56,7 @@ function makeHarness(): Harness {
 		},
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
-			confirm: async () => { h.confirms++; return h.confirmAnswer; },
+			confirm: async (_t: string, m: string) => { h.confirms++; h.confirmMsgs.push(m); return h.confirmAnswer; },
 			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
 			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (_c: string, s: string) => s },
 		},
@@ -89,7 +90,7 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.classifierModel !== undefined) raw.classifierModel = cfg.classifierModel;
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
-	// denyPaths(ADR-0002): unknown[] 支持混入非字符串条目的负例
+	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
@@ -937,5 +938,73 @@ describe("denyPaths (ADR-0002)", () => {
 		await h.handlers["session_start"]({}, h.ctx);
 		const warnings = h.notifies.filter(([, level]) => level === "warning").map(([m]) => m).join("\n");
 		expect(warnings).toContain("denyPaths");
+	});
+
+	// story 16: obfuscation/boundary regression payloads — freeze the documented holes
+	// (base64-embedded paths → classifier + hint) and the covered spellings (literal
+	// path inside $(), quoted $HOME/…) so refactors cannot silently widen the hole surface
+	test("obfuscation payloads: base64-embedded path falls to the classifier with the hint; literal-in-$() and quoted $HOME still hit", async () => {
+		setConfig({ denyPaths: ["/proj/sensitive-rel"] });
+		// base64 of "/proj/sensitive-rel/x.md": no literal path in the command string →
+		// the declared hole: no hit, gray → classifier carrying the existence hint
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> encoded-path probe" }];
+		const r = await toolCall(h, "bash", { command: "echo L3Byb2ovc2Vuc2l0aXZlLXJlbC94Lm1k== | base64 -d | xargs cat" });
+		expect(h.confirms).toBe(0);
+		expect(h.calls.length).toBe(1);
+		expect(String(h.calls[0].systemPrompt)).toContain("protected paths");
+		expect(r?.block).toBe(true);
+	});
+
+	test("literal path inside command substitution still hits (the string itself is evidence)", async () => {
+		setConfig({ denyPaths: ["/proj/sensitive-rel"] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "bash", { command: "cat $(echo /proj/sensitive-rel/x.md)" });
+		expect(h.confirms).toBe(1);
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("quoted \"$HOME/…\" spelling still hits (quotes are not part of the token)", async () => {
+		const home = os.homedir();
+		setConfig({ denyPaths: [path.join(home, ".pi-verdict-denypaths-test")] });
+		const h = makeHarness(); h.install();
+		await toolCall(h, "bash", { command: `cat "$HOME/.pi-verdict-denypaths-test/a.md"` });
+		expect(h.confirms).toBe(1);
+		expect(h.calls.length).toBe(0);
+	});
+
+	// story 11: zero path plaintext outside the machine — the matched path may appear
+	// ONLY in the local confirm dialog; block reasons and notifications travel back
+	// into the agent context (model provider) and must carry no plaintext
+	test("path plaintext appears only in the confirm dialog, never in block reason or notifications", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.confirmAnswer = false; // declined → block; confirm message was already shown
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(h.confirmMsgs.join("\n")).toContain(SENS); // the dialog does name the path
+		expect(String(r?.reason)).not.toContain(SENS);
+		expect(h.notifies.map(([m]) => m).join("\n")).not.toContain(SENS);
+	});
+
+	test("headless block reason and notify carry no path plaintext either", async () => {
+		setConfig({ denyPaths: [SENS] });
+		const h = makeHarness(); h.install();
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).not.toContain(SENS);
+		expect(h.notifies.map(([m]) => m).join("\n")).not.toContain(SENS);
+	});
+
+	// ADR-0002: bases are normalized ONCE at session start, anchored to the session cwd —
+	// a later tool_call from a different cwd must not re-anchor the declaration
+	test("relative denyPath entry stays anchored to the session cwd after session_start", async () => {
+		setConfig({ denyPaths: ["sensitive-rel"] });
+		const h = makeHarness(); h.install();
+		await h.handlers["session_start"]({}, { ...h.ctx, cwd: "/proj" }); // anchor at /proj/sensitive-rel
+		h.ctx.cwd = "/proj/sub";
+		const r = await toolCall(h, "read", { path: "sensitive-rel/x.md" }); // resolves to /proj/sub/sensitive-rel/… — NOT the anchored base
+		expect(h.confirms).toBe(0);
+		expect(r).toBeUndefined(); // rule-layer allow (non-S0/S1 read): the declaration did not follow the cwd
 	});
 });

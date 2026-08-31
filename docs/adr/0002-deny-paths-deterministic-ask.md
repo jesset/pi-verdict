@@ -102,4 +102,15 @@ classifier prompt leaves the machine bound for the model provider.
 - Config template gains a commented `denyPaths: []` example; `/automode`
   shows the active count; the pipeline diagram and options table update
   accordingly.
-- Estimated footprint +150–250 lines, inside the "~900-line minimal" budget.
+- The matched path is UI-only plaintext: it names the path in the local
+  confirm dialog (story 6) but never in block reasons or notifications —
+  those travel back into the agent context (model provider), so embedding
+  the path there would leak the declaration (story 11).
+- Entries anchor to the **session cwd** once at session start; per-verdict
+  candidates still resolve against the current call's cwd. Mid-session
+  symlink creation or cwd drift therefore cannot re-anchor what the
+  declaration covers.
+- Landed footprint: ~+230 lines (extensions/auto-mode.ts 1046 → ~1200 at
+  review time). The "~900-line minimal" positioning no longer holds
+  numerically; the README restates it as a deliberate single-file
+  constraint rather than a line-count claim.
