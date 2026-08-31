@@ -1156,7 +1156,9 @@ export default function autoMode(pi: ExtensionAPI) {
 			}
 			const ok = await ctx.ui.confirm("🛡️ Auto Mode: protected path", `${action}\n\n${rule.reason}\n\nProtected path: ${rule.detail ?? "(see pi-verdict.json)"}\n\nAllow this access?`);
 			if (ok) {
-				if (debug) ctx.ui.notify(`🛡️ allow (protected-path confirm): ${action}`, "info");
+				// debug notify stays plaintext-free too: the action line can embed the
+				// touched path, and notifications must not carry protected-path plaintext
+				if (debug) ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
 				return undefined;
 			}
 			return { block: true, reason: "[auto-mode] user declined protected-path access" };

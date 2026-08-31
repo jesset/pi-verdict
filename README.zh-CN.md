@@ -98,7 +98,7 @@ pi --extension ./extensions/auto-mode.ts
 
 诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖单文件(~1.2k 行,随功能增长,仍刻意单文件)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
 
-零依赖单文件形态是有意为之——整个扩展就是一个可通读的 [~900 行文件](extensions/auto-mode.ts)。
+零依赖单文件形态是有意为之——整个扩展就是一个可通读的[单文件](extensions/auto-mode.ts),~1.2k 行,随功能增长。
 
 ## 管线
 
@@ -177,7 +177,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 85 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
+bun test          # 91 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。
