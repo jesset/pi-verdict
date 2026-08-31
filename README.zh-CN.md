@@ -37,6 +37,7 @@ pi --extension ./extensions/auto-mode.ts
 - `/automode` —— 显示当前状态:开/关 + 本会话影子缓存统计
 - `/automode on`
 - `/automode off`
+- `ctrl+shift+a` —— 静默切换主开关(footer 始终显示为唯一反馈;键位可经 `toggleShortcut` 重绑或禁用)
 - footer 恒显 `auto mode on`(高亮)/ `auto mode off`(暗色)
 
 | 配置 | 默认 | 说明 |
@@ -54,7 +55,8 @@ pi --extension ./extensions/auto-mode.ts
   "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
   "deny":  ["rm ", "docker ", "^/etc/"],
   "builtinDenyFloor": true,
-  "classifierModel": null
+  "classifierModel": null,
+  "toggleShortcut": "ctrl+shift+a"
 }
 ```
 
@@ -63,6 +65,7 @@ pi --extension ./extensions/auto-mode.ts
 - `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在——下方自保护层永远开启)
 - `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
 - spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
+- `toggleShortcut` 重绑主开关快捷键(任意 pi 键组合,如 `ctrl+shift+x`;`null` 或空串禁用;非法组合在会话启动时一次性警告并跳过注册)。快捷键与 `/automode on|off` **语义等价**——运行中生效、无确认弹窗、不持久化(持久需求由 `--no-auto-mode` flag 承担;扩展运行时从不写自己的受保护配置)
 - 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
 
 为什么没有内置白名单?对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
@@ -165,7 +168,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 61 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 绕过回归 / 分类器重试 / 影子缓存 / 命令
+bun test          # 69 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。

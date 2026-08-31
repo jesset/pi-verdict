@@ -17,7 +17,9 @@ let config: { allow: string[]; deny: string[] } = { allow: [], deny: [] };
 interface Harness {
 	handlers: Record<string, any>;
 	commands: Record<string, any>;
+	shortcuts: Record<string, any>;
 	notifies: Array<[string, string]>;
+	statusSets: Array<[string, string]>;
 	branch: any[];
 	ctx: any;
 	calls: any[];
@@ -31,10 +33,12 @@ interface Harness {
 function makeHarness(): Harness {
 	const handlers: Record<string, any> = {};
 	const commands: Record<string, any> = {};
+	const shortcuts: Record<string, any> = {};
 	const notifies: Array<[string, string]> = [];
+	const statusSets: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, notifies, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
+	const h: any = { handlers, commands, shortcuts, notifies, statusSets, branch, calls: [], responses: [], confirms: 0, confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
@@ -53,7 +57,7 @@ function makeHarness(): Harness {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
 			confirm: async () => { h.confirms++; return h.confirmAnswer; },
 			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
-			setStatus: () => {}, theme: { fg: (_c: string, s: string) => s },
+			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (_c: string, s: string) => s },
 		},
 	};
 	h.ctx = ctx;
@@ -67,6 +71,7 @@ function makeHarness(): Harness {
 			getFlag: (n: string) => flags[n],
 			on: (e: string, fn: any) => { handlers[e] = fn; },
 			registerCommand: (n: string, c: any) => { commands[n] = c; },
+			registerShortcut: (k: string, o: any) => { shortcuts[k] = o; },
 		} as any);
 		if (prev !== undefined) process.env.PI_AUTO_MODE_DEBUG = prev; else delete process.env.PI_AUTO_MODE_DEBUG;
 	};
@@ -76,13 +81,14 @@ function makeHarness(): Harness {
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean; classifierModel?: string | null }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
 	const raw: Record<string, unknown> = { ...config };
 	if (cfg.classifierModel !== undefined) raw.classifierModel = cfg.classifierModel;
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
+	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
 	fs.writeFileSync(p, JSON.stringify(raw));
@@ -442,6 +448,74 @@ describe("/automode command", () => {
 		await h.commands.automode.handler(" of", h.ctx);
 		expect(h.notifies.at(-1)![0]).toContain("unknown argument");
 		expect(h.notifies.at(-1)![1]).toBe("warning");
+	});
+});
+
+// ── 6.5 toggle 快捷键(#15:默认 ctrl+shift+a,可配可禁用)──
+
+describe("toggle shortcut", () => {
+	test("default installs ctrl+shift+a with description", () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		expect(Object.keys(h.shortcuts)).toEqual(["ctrl+shift+a"]);
+		expect(h.shortcuts["ctrl+shift+a"].description).toContain("Toggle Auto Mode");
+	});
+	test("custom key from config wins; default not registered", () => {
+		setConfig({ toggleShortcut: "ctrl+shift+x" });
+		const h = makeHarness(); h.install();
+		expect(Object.keys(h.shortcuts)).toEqual(["ctrl+shift+x"]);
+		setConfig({ toggleShortcut: "f9" }); // 裸功能键合法(不与文本输入冲突)
+		const h2 = makeHarness(); h2.install();
+		expect(Object.keys(h2.shortcuts)).toEqual(["f9"]);
+	});
+	test("null / empty string disable registration entirely", () => {
+		setConfig({ toggleShortcut: null });
+		const h = makeHarness(); h.install();
+		expect(Object.keys(h.shortcuts)).toEqual([]);
+		setConfig({ toggleShortcut: "  " });
+		const h2 = makeHarness(); h2.install();
+		expect(Object.keys(h2.shortcuts)).toEqual([]);
+	});
+	test("invalid key combo → not registered + one warning at session_start", async () => {
+		setConfig({ toggleShortcut: "banana" });
+		const h = makeHarness(); h.install();
+		expect(Object.keys(h.shortcuts)).toEqual([]);
+		await h.handlers.session_start({}, h.ctx);
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("toggleShortcut"));
+		expect(warns.length).toBe(1); // 对齐 classifierModel:一次,不刷屏
+		setConfig({ toggleShortcut: "a" }); // 裸可打印字符:会劫持文本输入,拒绝
+		const h2 = makeHarness(); h2.install();
+		expect(Object.keys(h2.shortcuts)).toEqual([]);
+	});
+	test("handler flips master switch silently — footer refresh, no notify, gating off", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		expect((await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" }))?.block).toBe(true); // 开:floor 拦
+		const notifiesBefore = h.notifies.length;
+		h.shortcuts["ctrl+shift+a"].handler(h.ctx);
+		expect(h.notifies.length).toBe(notifiesBefore); // 静默:无新增 notify
+		expect(h.statusSets.at(-1)![0]).toBe("auto-mode"); // footer 刷新
+		expect(await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" })).toBeUndefined(); // 关:放行
+		h.shortcuts["ctrl+shift+a"].handler(h.ctx); // 再按:恢复开启
+		expect((await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" }))?.block).toBe(true);
+	});
+	test("/automode bare call shows toggle hint; hidden when disabled", () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.commands.automode.handler("", h.ctx);
+		expect(h.notifies.at(-1)![0]).toContain("toggle: ctrl+shift+a");
+		setConfig({ toggleShortcut: null });
+		const h2 = makeHarness(); h2.install();
+		h2.commands.automode.handler("", h2.ctx);
+		expect(h2.notifies.at(-1)![0].includes("toggle:")).toBe(false);
+	});
+	test("config template contains toggleShortcut with default key", () => {
+		fs.rmSync(path.join(TMP_AGENT, "config"), { recursive: true, force: true });
+		const h = makeHarness(); h.install(); // 无既有配置 → loadUserRules 生成模板
+		const raw = fs.readFileSync(path.join(TMP_AGENT, "config", "pi-verdict.json"), "utf8");
+		expect(raw).toContain("toggleShortcut");
+		expect(raw).toContain("ctrl+shift+a");
+		expect(raw).toContain("toggleShortcut sets the master-switch toggle key"); // _hint 说明文案
 	});
 });
 

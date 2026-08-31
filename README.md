@@ -37,6 +37,7 @@ pi --extension ./extensions/auto-mode.ts
 - `/automode` — show current status: on/off + shadow-cache stats for the session
 - `/automode on`
 - `/automode off`
+- `ctrl+shift+a` — toggle the master switch silently (the always-on footer is the only feedback; rebind or disable via `toggleShortcut`)
 - footer always shows `auto mode on` (highlighted) / `auto mode off` (dimmed)
 
 | Option | Default | Description |
@@ -54,7 +55,8 @@ pi --extension ./extensions/auto-mode.ts
   "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
   "deny":  ["rm ", "docker ", "^/etc/"],
   "builtinDenyFloor": true,
-  "classifierModel": null
+  "classifierModel": null,
+  "toggleShortcut": "ctrl+shift+a"
 }
 ```
 
@@ -63,6 +65,7 @@ pi --extension ./extensions/auto-mode.ts
 - `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain — the self-protection layer below always stays on)
 - `classifierModel: "provider/model-id"` sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
 - the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off — the [measured](research/thinking-param-blackhole.md) default)
+- `toggleShortcut` rebinds the master-switch toggle key (any pi key combo, e.g. `ctrl+shift+x`; `null` or empty disables the shortcut; an invalid combo warns once at session start and skips registration). The toggle is semantically identical to `/automode on|off` — works mid-run, no confirmation, never persisted (persistence stays with the `--no-auto-mode` flag; the extension never writes its own protected config)
 - first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
 
 Why no built-in allowlist? Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
@@ -166,7 +169,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
-bun test          # 61 offline stub tests: self-protection, tamper detection, deny floor, user rules, bypass regression, classifier retry, shadow cache, commands
+bun test          # 69 offline stub tests: self-protection, tamper detection, deny floor, user rules, bypass regression, classifier retry, shadow cache, commands, toggle shortcut
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).

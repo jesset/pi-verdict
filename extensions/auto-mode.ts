@@ -28,13 +28,15 @@
  *
  * 配置:
  *   --auto-mode / --no-auto-mode   CLI flag,总开关(默认开)
+ *   ctrl+shift+a                  主开关 toggle 快捷键(默认键位;静默切换,footer 始终显示为
+ *                                  唯一反馈;config 的 toggleShortcut 可改/null 禁用,新会话生效)
  *   --auto-mode-model provider/id[:thinking]  分类器模型 + 可选思考级别后缀
  *                                  (pi 原生 --model 语法;缺省 off = 显式关思考)
  *   PI_AUTO_MODE_MODEL             同上的环境变量形式
  *   --auto-mode-debug             所有裁决(含放行)都弹通知;影子缓存标注同步开启
  *   PI_AUTO_MODE_DEBUG=1           同上的环境变量形式(兼容保留)
  *   <agentDir>/config/pi-verdict.json   用户规则:{ allow: [regex], deny: [regex],
- *                                     builtinDenyFloor, classifierModel }
+ *                                     builtinDenyFloor, classifierModel, toggleShortcut }
  *                                     匹配:bash=完整命令串 / 文件工具=绝对路径;新会话生效;
  *                                     受自保护层保护(agent 不可改,仅用户手工编辑)
  *
@@ -105,6 +107,48 @@ function classifyBash(command: string, floorOn: boolean): RuleResult {
 // 非法正则跳过并通知(配置错误不导致扩展失效);新会话生效。
 // ============================================================================
 
+// ============================================================================
+// 主开关 toggle 快捷键(#15)
+//
+// 与 /automode 命令语义等价:同一翻转入口,不因操作面引入额外规则
+// (运行中生效 / 无确认弹窗 / 无持久化写回——写回会模糊 ADR-0001 的「仅用户手编」边界)。
+// 反馈静默:footer 始终显示(auto-mode 双态)是唯一反馈,不 notify。
+// 键位:config 的 toggleShortcut 字段,缺省 ctrl+shift+a(与 pi 全部默认键位无冲突,
+// 双修饰降误触,避开依赖 Kitty 协议的 super);null/空串禁用;新会话生效。
+// ============================================================================
+
+/** toggle 快捷键默认键位:主编辑器上下文空闲、语义好记(A for Auto)、不易误触 */
+const DEFAULT_TOGGLE_SHORTCUT = "ctrl+shift+a";
+
+/** 键名词表(功能键与特殊键;词表对齐 pi keybindings 文档) */
+const KEY_NAME_ALT = "f(?:[1-9]|1[0-2])|escape|esc|enter|return|tab|space|backspace|delete|insert|clear|home|end|pageup|pagedown|up|down|left|right";
+const KEY_PRINTABLE = "[a-z0-9]|[-=`\\[\\];',./!@#$%^&*()_+|~{}:<>?]";
+/**
+ * key 组合格式校验:修饰键 ≥1(modifier+任意键),或裸键为功能/特殊键——
+ * 裸可打印字符(如 "a")拒绝,会劫持正常文本输入。词表对齐 pi keybindings 文档,
+ * 零依赖约束下不引入 pi 内部校验 API;pi 侧另有兜底:与内置键冲突自动跳过并提示。
+ */
+const KEY_COMBO_RE = new RegExp(`^(?:(?:ctrl|shift|alt|super)\\+)+(?:${KEY_NAME_ALT}|${KEY_PRINTABLE})$|^(?:${KEY_NAME_ALT})$`, "i");
+
+/**
+ * 解析配置 toggleShortcut:缺省 → 默认键位;null/空白/类型错误 → 禁用;
+ * 非法格式 → 禁用 + 警告文案(session_start 经 ctx 发出,对齐 skipped 正则的模式;
+ * 配置错误不静默失效,但也不阻止扩展其余部分工作)。
+ */
+function resolveToggleShortcut(raw: unknown): { key: string | null; warning: string | null } {
+	if (raw === undefined) return { key: DEFAULT_TOGGLE_SHORTCUT, warning: null };
+	if (raw === null) return { key: null, warning: null };
+	if (typeof raw !== "string") {
+		return { key: null, warning: `toggleShortcut must be a pi key combo string (e.g. "${DEFAULT_TOGGLE_SHORTCUT}"), or null/empty to disable — got ${JSON.stringify(raw)}` };
+	}
+	const s = raw.trim();
+	if (!s) return { key: null, warning: null };
+	if (!KEY_COMBO_RE.test(s)) {
+		return { key: null, warning: `toggleShortcut "${raw}" is not a valid pi key combo (modifier+key, e.g. "${DEFAULT_TOGGLE_SHORTCUT}") — shortcut not registered; fix config/pi-verdict.json` };
+	}
+	return { key: s, warning: null };
+}
+
 interface UserRules {
 	allow: RegExp[];
 	deny: RegExp[];
@@ -112,9 +156,11 @@ interface UserRules {
 	builtinDenyFloor: boolean;
 	/** 分类器模型 spec(provider/id);null = 未配置(自省继承会话模型) */
 	classifierModel: string | null;
+	/** 主开关 toggle 快捷键键位(#15);null = 禁用;缺省 DEFAULT_TOGGLE_SHORTCUT */
+	toggleShortcut: string | null;
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true, classifierModel: null };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT };
 
 function agentDirPath(): string {
 	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
@@ -125,18 +171,20 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
+	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). toggleShortcut sets the master-switch toggle key (pi key combo, e.g. ctrl+shift+a; null or empty disables the shortcut). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	builtinDenyFloor: true,
 	classifierModel: null,
+	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
 }, null, 2)}\n`;
 
 /**
  * 加载用户规则。首启生成带注释模板(allow 内示例默认仅 ^ls\b 可用,其余为说明占位);
- * 配置缺失/损坏/字段非法一律回退空规则(安全默认,不失效),非法正则收集回报。
+ * 配置缺失/损坏/字段非法一律回退空规则(安全默认,不失效),非法正则收集回报,
+ * 非法 toggleShortcut 收集警告文案(与 skipped 同经 session_start 发出)。
  */
-function loadUserRules(): { rules: UserRules; skipped: string[] } {
+function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning: string | null } {
 	try {
 		const p = userConfigPath();
 		if (!fs.existsSync(p)) {
@@ -144,9 +192,9 @@ function loadUserRules(): { rules: UserRules; skipped: string[] } {
 				fs.mkdirSync(path.dirname(p), { recursive: true });
 				fs.writeFileSync(p, USER_CONFIG_TEMPLATE);
 			} catch { /* 只读环境静默跳过 */ }
-			return { rules: EMPTY_RULES, skipped: [] };
+			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown };
+		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
 		const skipped: string[] = [];
 		const compile = (list: unknown): RegExp[] =>
 			(Array.isArray(list) ? list : []).filter((x): x is string => typeof x === "string").flatMap((src) => {
@@ -157,17 +205,20 @@ function loadUserRules(): { rules: UserRules; skipped: string[] } {
 					return [];
 				}
 			});
+		const shortcut = resolveToggleShortcut(raw.toggleShortcut);
 		return {
 			rules: {
 				allow: compile(raw.allow),
 				deny: compile(raw.deny),
 				builtinDenyFloor: raw.builtinDenyFloor !== false,
 				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
+				toggleShortcut: shortcut.key,
 			},
 			skipped,
+			shortcutWarning: shortcut.warning,
 		};
 	} catch {
-		return { rules: EMPTY_RULES, skipped: [] };
+		return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 	}
 }
 
@@ -798,6 +849,12 @@ export default function autoMode(pi: ExtensionAPI) {
 		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "accent" : "dim", enabled ? "auto mode on" : "auto mode off"));
 	}
 
+	/** 主开关设定(共用,#15):/automode 命令与 toggle 快捷键同一入口,不因操作面引入额外规则 */
+	function setMasterSwitch(next: boolean, ctx: ExtensionContext) {
+		enabled = next;
+		refreshStatus(ctx);
+	}
+
 	// session_start:重置影子缓存(会话内存态,#5 定案)+ 重载用户规则(配置改动新会话生效)
 	// + 重建自保护基线(ADR-0001:受保护文件的会话启动快照)
 	pi.on("session_start", async (_event, ctx) => {
@@ -809,8 +866,25 @@ export default function autoMode(pi: ExtensionAPI) {
 		if (loaded.skipped.length > 0) {
 			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid regex(es) in config (${userConfigPath()})`, "warning");
 		}
+		if (loaded.shortcutWarning) ctx.ui.notify(`pi-verdict: ${loaded.shortcutWarning}`, "warning");
 		refreshStatus(ctx);
 	});
+
+	// 主开关 toggle 快捷键(#15):键位取首次加载的用户规则(会话内固定——改配置后
+	// /reload 重载扩展或新会话生效);handler 与 /automode 语义等价,静默切换,
+	// footer 始终显示是唯一反馈
+	const registeredToggleKey = userRules.toggleShortcut;
+	if (registeredToggleKey) {
+		// KeyId 是 pi 的编译期联合类型(运行时即 string);用户配置键位经 KEY_COMBO_RE
+		// 运行时校验后断言转入,零依赖约束下不引入 pi 内部类型路径
+		type PiShortcutKey = Parameters<ExtensionAPI["registerShortcut"]>[0];
+		pi.registerShortcut(registeredToggleKey as PiShortcutKey, {
+			description: "Toggle Auto Mode (pi-verdict)",
+			handler: (ctx) => setMasterSwitch(!enabled, ctx),
+		});
+	}
+	/** Usage 行的 toggle 提示(#15):无注册键位时不显示;显示注册时固定的键 */
+	const toggleHint = () => (registeredToggleKey ? ` · toggle: ${registeredToggleKey}` : "");
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
@@ -818,15 +892,14 @@ export default function autoMode(pi: ExtensionAPI) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${shadow.summary()}\nUsage: /automode on|off`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${shadow.summary()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
 			if (arg === "on" || arg === "off") {
 				const next = arg === "on";
 				const changed = next !== enabled;
-				enabled = next;
-				refreshStatus(ctx);
+				setMasterSwitch(next, ctx);
 				const head = next
 					? `🛡️ Auto Mode enabled${changed ? "" : " (unchanged)"}: tool calls adjudicated by rules + classifier`
 					: `Auto Mode disabled${changed ? "" : " (unchanged)"}: tool calls execute directly`;
@@ -834,7 +907,7 @@ export default function autoMode(pi: ExtensionAPI) {
 				return;
 			}
 			// 未知参数:严格拒绝并列出用法(大小写已归一化)
-			ctx.ui.notify(`unknown argument: ${arg}\nUsage: /automode (status) | /automode on | /automode off`, "warning");
+			ctx.ui.notify(`unknown argument: ${arg}\nUsage: /automode (status) | /automode on | /automode off${toggleHint()}`, "warning");
 		},
 	});
 
