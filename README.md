@@ -38,7 +38,7 @@ pi --extension ./extensions/auto-mode.ts
 - `/automode on`
 - `/automode off`
 - `ctrl+shift+a` — toggle the master switch silently (the always-on footer is the only feedback; rebind or disable via `toggleShortcut`)
-- footer always shows `auto mode on` (highlighted) / `auto mode off` (dimmed)
+- footer always shows `auto mode on` (green) / `auto mode off` (yellow)
 
 | Option | Default | Description |
 |---|---|---|

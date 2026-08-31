@@ -986,8 +986,9 @@ export default function autoMode(pi: ExtensionAPI) {
 	}
 
 	function refreshStatus(ctx: ExtensionContext) {
-		// 双态恒显:on 高亮 / off 暗色(原来 off 直接隐藏,状态不可见)
-		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "accent" : "dim", enabled ? "auto mode on" : "auto mode off"));
+		// Always-on dual-state footer: on = success (gate active), off = warning
+		// (ungated YOLO is a deliberate user choice — a note, not a fault, hence not error)
+		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "success" : "warning", enabled ? "auto mode on" : "auto mode off"));
 	}
 
 	/** 主开关设定(共用,#15):/automode 命令与 toggle 快捷键同一入口,不因操作面引入额外规则 */
