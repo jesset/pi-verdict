@@ -1,6 +1,7 @@
 ## 通用
 
 - YOU MUST: 始终使用简体中文回复
+- Language convention: code comments, docs, CHANGELOG entries and release notes are written in English; Chinese only in README.zh-CN.md. Do not mass-rewrite existing Chinese content — convert when a file is touched anyway
 - 技术表述必须使用规范的书面化术语，不要自造口语化隐喻（如"盲窗"）；若概念需要简称，用标准术语或首次出现时在括号中标注规范语义
 - YOU MUST: 功能变更须同步文档:README.md / README.zh-CN.md / CHANGELOG.md(`[Unreleased]`)/ 术语变化时 CONTEXT.md / 架构决策时 docs/adr/ / 配置模板 `_hint` 文案
 
