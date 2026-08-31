@@ -54,6 +54,7 @@ pi --extension ./extensions/auto-mode.ts
 {
   "allow": ["^ls\\b", "^git (status|log|diff)\\b"],
   "deny":  ["rm ", "docker ", "^/etc/"],
+  "denyPaths": ["~/Documents/private", "~/work/company"],
   "builtinDenyFloor": true,
   "classifierModel": null,
   "toggleShortcut": "ctrl+shift+a"
@@ -62,6 +63,7 @@ pi --extension ./extensions/auto-mode.ts
 
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
 - 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
+- `denyPaths` 是你声明**受保护**的普通路径列表(非正则,[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)):任何触碰它们的工具调用——文件类工具取其路径、bash 从命令串提取路径 token——触发**终局 ask**,由你裁决(非交互会话降级 deny)。归一化由工具负责:`~`、`$HOME/`、相对、`..`、symlink 拼写全部消解,按路径段前缀比对。优先级:在你的 `deny` 规则之后、**`allow` 规则之前**(连你自己的白名单也不得触碰),且不受 `builtinDenyFloor: false` 影响——这是你的声明而非内置声明。分类器只被告知受保护路径**存在**(固定 system prompt 话术,对先拷贝再读取/打包/间接引用从紧裁决);路径明文永不出本机,命中调用根本到不了分类器。S0 机密路径直接 deny 而你的 `denyPaths` 仅 ask 的不对称是刻意的:用户声明的例外归用户,S0 是作者审定集(见 ADR)
 - `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在——下方自保护层永远开启)
 - `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
 - spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
@@ -115,12 +117,17 @@ tool_call
   ├─ 1. 规则层(确定性,零延迟)
   │     ├─ 内置 deny floor:bash 危险正则(完整命令串)+ 路径敏感度 S0–S5
   │     ├─ 用户规则:deny 优先于 allow(正则,见下)
+  │     ├─ denyPaths(ADR-0002):用户声明的受保护路径,工具负责归一化
+  │     │   (~、$HOME、相对、..、symlink)→ 终局 ask,先于用户 allow;
+  │     │   分类器只见存在性话术
   │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
   ├─ 2. 灰区 → 模型分类器(默认继承会话模型 —— "自省")
   │     ├─ 输入:CC 风格 <transcript>(最近 5 条用户消息 + 最近 10 次工具调用,
   │     │        待审动作固定在末尾)—— 用户意图是证据
   │     ├─ 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
+  │     ├─ 配置了 denyPaths 时注入存在性话术:分类器知道受保护路径存在
+  │     │   (永不知其内容),对先拷贝再读取/打包/间接引用从紧裁决
   │     ├─ 显式关思考(thinkingEnabled: false)+ 两档重试 512→1024
   │     └─ 可用 --auto-mode-model 配置
   │
@@ -156,6 +163,7 @@ tool_call
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
 - 影子缓存按决议仅观察不生效;实测命中率达标后,生效开关是一行改动
+- `denyPaths` 的 bash 提取是 token 级([ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)):命令替换、base64 内嵌路径、外部脚本内容不产生命中信号——这些调用回落到分类器的存在性话术警戒。MCP 与自定义工具完全绕过提取器(其灰区裁决仍带话术)。诚实表述,与自保护子串正则同例:确定性层可被混淆——这正是命中交由**你**裁决而非静默决定的原因
 - 自保护 bash 匹配是子串正则——可被混淆绕过;变更检测兜底覆盖会话内绕过,跨会话基线(启动时哈希比对与变更确认,含升级 UX)按 ADR-0001 为二期
 - dev checkout(从仓库而非 `<agentDir>/extensions/` 运行扩展)不受自保护——下一个正常会话加载的安装副本只在其自身会话的门禁内受保护
 
@@ -168,7 +176,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 69 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
+bun test          # 85 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。
