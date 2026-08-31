@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
-### Changed
-
-- Footer status colors: `auto mode on` renders in success green, `auto mode off` in warning yellow (was accent/dim) — an ungated session stays visible at a glance instead of fading into the dim channel. Semantic theme colors adapt to light/dark themes; the `/automode` notifications are unchanged
-
 ## [0.5.0] - 2026-08-31
 
 ### Added
@@ -22,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
   - the classifier sees only a fixed existence hint — zero path plaintext; the matched path appears solely in the local confirm dialog, never in block reasons or notifications
   - `/automode` shows the active count; the config template gains the field; invalid entries warn once at session start
   - known holes (substitution, base64, script contents, spaces, final-segment globs → classifier vigilance) documented in the README and frozen by regression payloads
+
+### Changed
+
+- Footer status colors: `auto mode on` renders in success green, `auto mode off` in warning yellow (was accent/dim) — an ungated session stays visible at a glance instead of fading into the dim channel. Semantic theme colors adapt to light/dark themes; the `/automode` notifications are unchanged
 
 ## [0.4.1] - 2026-08-31
 
