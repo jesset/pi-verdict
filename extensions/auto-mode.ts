@@ -309,24 +309,38 @@ function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: b
 	return { verdict: "gray", reason: `write outside project directory (CWD): ${rawPath}` };
 }
 
-/** 用户规则匹配目标:bash/powershell=完整命令串;路径类工具=解析后绝对路径;其余工具不参与 */
-function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: string): string | null {
+/** Tool family shared by the three toolName dispatches below (user-rule target,
+ *  built-in grading, denyPaths extraction): "command" tools carry a command string,
+ *  "file" tools carry a path argument; null = outside both families (MCP/custom →
+ *  classifier only). Adding a file tool means extending this one map. The
+ *  self-protection layer is deliberately NOT a consumer: it matches write paths +
+ *  bash only (reads pass — its set is not the file family). */
+function toolKind(toolName: string): "command" | "file" | null {
 	switch (toolName) {
 		case "bash":
 		case "powershell":
-			return String(input.command ?? "");
+			return "command";
 		case "read":
 		case "write":
 		case "edit":
 		case "grep":
 		case "find":
-		case "ls": {
-			const p = typeof input.path === "string" && input.path ? input.path : null;
-			return p ? path.resolve(cwd, expandHome(p)) : null;
-		}
+		case "ls":
+			return "file";
 		default:
 			return null;
 	}
+}
+
+/** 用户规则匹配目标:bash/powershell=完整命令串;路径类工具=解析后绝对路径;其余工具不参与 */
+function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: string): string | null {
+	const kind = toolKind(toolName);
+	if (kind === "command") return String(input.command ?? "");
+	if (kind === "file") {
+		const p = typeof input.path === "string" && input.path ? input.path : null;
+		return p ? path.resolve(cwd, expandHome(p)) : null;
+	}
+	return null;
 }
 
 // ============================================================================
@@ -356,24 +370,18 @@ function denyPathForms(raw: string, cwd: string): string[] {
 	return pathForms(path.resolve(cwd, expanded));
 }
 
+/** Normalize the configured denyPaths against one cwd (ADR-0002: anchored once per session, never re-derived) */
+const anchorDenyPaths = (paths: string[], cwd: string): string[] => paths.flatMap((b) => denyPathForms(b, cwd));
+
 /** Every path candidate a tool call exposes to denyPaths comparison (MCP/custom tools: none — classifier + hint covers) */
 function denyPathCandidates(toolName: string, input: Record<string, unknown>): string[] {
-	switch (toolName) {
-		case "bash":
-		case "powershell":
-			return [...String(input.command ?? "").matchAll(BASH_PATH_TOKENS)].map((m) => m[0]);
-		case "read":
-		case "write":
-		case "edit":
-		case "grep":
-		case "find":
-		case "ls": {
-			const p = typeof input.path === "string" ? input.path : "";
-			return p ? [p] : [];
-		}
-		default:
-			return [];
+	const kind = toolKind(toolName);
+	if (kind === "command") return [...String(input.command ?? "").matchAll(BASH_PATH_TOKENS)].map((m) => m[0]);
+	if (kind === "file") {
+		const p = typeof input.path === "string" ? input.path : "";
+		return p ? [p] : [];
 	}
+	return [];
 }
 
 /** Does the call touch a user-declared protected path? `bases` are the denyPaths
@@ -577,27 +585,21 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 	if (sp) return sp;
 
 	let base: RuleResult;
-	switch (toolName) {
-		case "bash":
-		case "powershell":
-			base = classifyBash(String(input.command ?? ""), user.builtinDenyFloor);
-			break;
-		case "write":
-		case "edit":
-			base = classifyPath(toolName, String(input.path ?? ""), cwd, true, user.builtinDenyFloor);
-			break;
-		case "read":
-			base = classifyPath(toolName, String(input.path ?? ""), cwd, false, user.builtinDenyFloor);
-			break;
-		case "grep":
-		case "find":
-		case "ls": {
-			const p = typeof input.path === "string" ? input.path : undefined;
-			base = p ? classifyPath(toolName, p, cwd, false, user.builtinDenyFloor) : { verdict: "allow" };
-			break;
-		}
-		default:
-			base = { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
+	const kind = toolKind(toolName);
+	if (kind === "command") {
+		base = classifyBash(String(input.command ?? ""), user.builtinDenyFloor);
+	} else if (toolName === "write" || toolName === "edit") {
+		// isWrite grading nuance stays per-tool (not part of the family map)
+		base = classifyPath(toolName, String(input.path ?? ""), cwd, true, user.builtinDenyFloor);
+	} else if (toolName === "read") {
+		// read keeps classifyPath even with an empty path: resolved to cwd, it still
+		// carries the system-directory gray grading (bit-for-bit with the old switch)
+		base = classifyPath(toolName, String(input.path ?? ""), cwd, false, user.builtinDenyFloor);
+	} else if (kind === "file") { // grep/find/ls: optional path, absent → plain allow
+		const p = typeof input.path === "string" ? input.path : undefined;
+		base = p ? classifyPath(toolName, p, cwd, false, user.builtinDenyFloor) : { verdict: "allow" };
+	} else {
+		base = { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
 	}
 	if (base.verdict === "deny") return base; // 内置 floor:deny 优先于一切用户规则
 
@@ -933,7 +935,7 @@ export default function autoMode(pi: ExtensionAPI) {
 	// tool_call (pi's normal order is session_start first) and, once set, it is never re-derived.
 	let denyPathBases: string[] | null = null;
 	const anchoredDenyPathBases = (cwd: string): string[] => {
-		if (denyPathBases === null) denyPathBases = userRules.denyPaths.flatMap((b) => denyPathForms(b, cwd));
+		if (denyPathBases === null) denyPathBases = anchorDenyPaths(userRules.denyPaths, cwd);
 		return denyPathBases;
 	};
 
@@ -1001,7 +1003,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		tampered = false;
 		const loaded = loadUserRules();
 		userRules = loaded.rules;
-		denyPathBases = userRules.denyPaths.flatMap((b) => denyPathForms(b, ctx.cwd)); // anchored to the session cwd, once (ADR-0002)
+		denyPathBases = anchorDenyPaths(userRules.denyPaths, ctx.cwd); // anchored to the session cwd, once (ADR-0002)
 		snapshots = takeSnapshots(prot.watchBases);
 		if (loaded.skipped.length > 0) {
 			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid config value(s) in config (${userConfigPath()}): ${loaded.skipped.join(", ")}`, "warning");
