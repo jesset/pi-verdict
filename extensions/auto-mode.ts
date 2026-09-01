@@ -530,6 +530,31 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 	// 安装副本目标:单文件形态 → 文件本体(exact);npm 目录形态 → 包根目录(prefix)。
 	// extRoot 与 ownFile 各取词法/realpath 双形交叉判定,集合同样双形收录——
 	// 避免符号链接目录(如 macOS /var → /private/var)导致传入词法路径与集合错位。
+	/** List every file under a package root (npm dir install form) for the tamper
+	 *  baseline (#26): write protection covers the whole package dir, so the watch
+	 *  scope must not lag behind it — a planted manifest entry must not survive to
+	 *  the next session undetected. node_modules/.git are skipped to keep the
+	 *  snapshot bounded (a pi extension package is small). */
+	const listPackageFiles = (root: string): string[] => {
+		const out: string[] = [];
+		const walk = (dir: string): void => {
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const e of entries) {
+				if (e.name === "node_modules" || e.name === ".git") continue;
+				const full = path.join(dir, e.name);
+				if (e.isDirectory()) walk(full);
+				else if (e.isFile()) out.push(full);
+			}
+		};
+		walk(root);
+		return out;
+	};
+
 	const extTargets = new Set<string>();
 	if (ownFile) {
 		watchBases.push({ file: ownFile, kind: "extension" });
@@ -544,6 +569,9 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 				for (const f of pathForms(target)) {
 					(singleFile ? exact : prefixes).add(f);
 					extTargets.add(f);
+				}
+				if (!singleFile) {
+					for (const f of listPackageFiles(target)) watchBases.push({ file: f, kind: "extension" });
 				}
 			}
 		}

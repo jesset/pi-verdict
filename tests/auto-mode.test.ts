@@ -913,6 +913,26 @@ describe("self-protection layer (ADR-0001)", () => {
 });
 
 describe("buildProtectedSet (pure)", () => {
+	// #26: npm dir install form — tamper watch must not lag behind write protection
+	test("npm dir install form: tamper watch covers the whole package dir, excluding node_modules/.git", () => {
+		const agent = fs.mkdtempSync(path.join(os.homedir(), ".pv-t26-"));
+		try {
+			const pkgDir = path.join(agent, "extensions", "pi-verdict");
+			fs.mkdirSync(path.join(pkgDir, "sub"), { recursive: true });
+			fs.mkdirSync(path.join(pkgDir, "node_modules", "dep"), { recursive: true });
+			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
+			fs.writeFileSync(path.join(pkgDir, "index.ts"), "x");
+			fs.writeFileSync(path.join(pkgDir, "sub", "lib.ts"), "x");
+			fs.writeFileSync(path.join(pkgDir, "node_modules", "dep", "y.js"), "x");
+			const prot = buildProtectedSet(agent, path.join(pkgDir, "index.ts"));
+			const watched = prot.watchBases.filter((w) => w.kind === "extension").map((w) => w.file);
+			expect(watched).toContain(path.join(pkgDir, "package.json"));
+			expect(watched).toContain(path.join(pkgDir, "index.ts"));
+			expect(watched).toContain(path.join(pkgDir, "sub", "lib.ts"));
+			expect(watched.some((f) => f.includes("node_modules"))).toBe(false);
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
+	});
+
 	test("single-file install form: exact own file + bash variants", () => {
 		const own = path.join(TMP_AGENT, "extensions", "auto-mode.ts");
 		fs.mkdirSync(path.dirname(own), { recursive: true });
