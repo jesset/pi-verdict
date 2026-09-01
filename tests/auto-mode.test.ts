@@ -182,6 +182,35 @@ describe("user rules (deny > allow > gray)", () => {
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(0); // 合法条目仍生效
 	});
+	// #25 (F6): a malformed config must not silently disarm the user's rules
+	test("malformed config JSON warns at session_start; floor and self-protection unaffected", async () => {
+		const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
+		fs.writeFileSync(p, '{"allow": ["^ls\\b",}');
+		const h = makeHarness(); h.install();
+		await h.handlers["session_start"]({}, h.ctx);
+		const warnings = h.notifies.filter(([, level]) => level === "warning").map(([m]) => m).join("\n");
+		expect(warnings).toContain("parse");
+		// the built-in floor still denies
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+	// #25 (F7): danger-regex matching is capped — self-DoS length commands cannot stall adjudication
+	test("bash commands longer than the match cap are truncated before rule matching", async () => {
+		setConfig({});
+		const head = "a".repeat(8192);
+		// danger within the capped prefix → rule-layer deny, zero model calls
+		const h = makeHarness(); h.install();
+		const r1 = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x && " + head });
+		expect(r1?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+		// danger beyond the cap loses rule matching (truncation) → gray → classifier
+		const h2 = makeHarness(); h2.install();
+		h2.responses = [{ text: "<verdict>deny</verdict> mock" }];
+		const r2 = await toolCall(h2, "bash", { command: head + " ; rm " + "-rf /tmp/x" });
+		expect(h2.calls.length).toBe(1);
+		expect(r2?.block).toBe(true);
+	});
 	test("builtinDenyFloor: false disables the whole built-in deny floor (risk accepted by user)", async () => {
 		setConfig({ builtinDenyFloor: false });
 		const h = makeHarness(); h.install();
