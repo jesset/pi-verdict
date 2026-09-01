@@ -122,6 +122,7 @@ tool_call
   │
   ├─ 1. 规则层(确定性,零延迟)
   │     ├─ 内置 deny floor:bash 危险正则(完整命令串)+ 路径敏感度 S0–S5
+  │     │   (双形匹配 —— 词法 + realpath,符号链接别名会被解析)
   │     ├─ 用户规则:deny 优先于 allow(正则,见下)
   │     ├─ denyPaths(ADR-0002):用户声明的受保护路径,工具负责归一化
   │     │   (~、$HOME、相对、..、symlink)→ 终局 ask,先于用户 allow;

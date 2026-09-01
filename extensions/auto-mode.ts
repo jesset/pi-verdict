@@ -288,10 +288,39 @@ const S1_SYSTEM = [/^\/etc(\/|$)/, /^\/usr(\/|$)/, /^\/var(\/|$)/, /^\/System(\/
 const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/, /crontab/, /Library\/LaunchAgents(\/|$)/, /\.config\/systemd(\/|$)/];
 const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/, /(^|\/)\.gitmodules$/];
 
+/**
+ * All canonical forms of a path for rule matching: the lexical absolute plus,
+ * whenever an existing ancestor can be resolved, the form rebuilt from that
+ * ancestor's realpath. Read and write targets may both not exist yet — walking
+ * up to the nearest existing ancestor means a symlink alias exposes its real
+ * form even when the final segments do not exist (#20).
+ */
+function targetForms(abs: string): string[] {
+	const out = new Set<string>([abs]);
+	let dir = abs;
+	const tail: string[] = [];
+	for (;;) {
+		try {
+			const real = fs.realpathSync(dir);
+			out.add(path.join(real, ...tail));
+			return [...out];
+		} catch {
+			const parent = path.dirname(dir);
+			if (parent === dir) return [...out];
+			tail.unshift(path.basename(dir));
+			dir = parent;
+		}
+	}
+}
+
 /** read 类工具:S0 读取即高危(deny),其余读取放行。isWrite: write/edit 走完整分级 */
 function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: boolean, floorOn: boolean): RuleResult {
 	const abs = path.resolve(cwd, expandHome(rawPath));
-	const hit = (rules: RegExp[]) => rules.some((r) => r.test(abs));
+	// Dual-form matching (#20): rules test every canonical form of the target —
+	// a project-local symlink aliasing ~/.ssh or a .git/hooks dir must not pass
+	// the floor on its lexical spelling alone.
+	const forms = targetForms(abs);
+	const hit = (rules: RegExp[]) => forms.some((f) => rules.some((r) => r.test(f)));
 	// floor 关闭时:内置 deny 一律降级 gray(永不升格 allow);非 deny 分支(allow/gray)保持
 	const D = floorOn
 		? (reason: string): RuleResult => ({ verdict: "deny", reason })
@@ -305,7 +334,12 @@ function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: b
 	if (hit(S1_SYSTEM)) return D(`write to system directory: ${rawPath}`);
 	if (hit(S3_GIT_META)) return D(`write to .git metadata (executable code entry point): ${rawPath}` );
 	if (hit(S2_USER_RC)) return { verdict: "gray", reason: `write to user config/persistence entry point: ${rawPath}` };
-	if (abs === cwd || abs.startsWith(cwd + path.sep)) return { verdict: "allow" };
+	// In-cwd write allowance (#20): every canonical form must sit inside the cwd
+	// (in either its lexical or real form) — a lexical prefix hit whose real
+	// form escapes the project (symlink alias) grades as an outside-cwd write.
+	const cwdBases = new Set([cwd, tryRealpath(cwd)]);
+	const inCwd = (f: string) => [...cwdBases].some((b) => f === b || f.startsWith(b + path.sep));
+	if (forms.every(inCwd)) return { verdict: "allow" };
 	return { verdict: "gray", reason: `write outside project directory (CWD): ${rawPath}` };
 }
 
@@ -511,10 +545,11 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 	return { exact: [...exact], prefixes: [...prefixes], bashPatterns, watchBases };
 }
 
-/** 解析后的写入路径是否命中受保护集合(经 realpath 防 symlink 旁路) */
+/** 解析后的写入路径是否命中受保护集合(经 realpath 防 symlink 旁路;目标不存在时
+ *  经最近存在祖先重建真实形,#20) */
 export function isProtectedWritePath(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
 	if (!rawPath) return false;
-	for (const c of pathForms(path.resolve(cwd, expandHome(rawPath)))) {
+	for (const c of targetForms(path.resolve(cwd, expandHome(rawPath)))) {
 		if (prot.exact.includes(c)) return true;
 		for (const p of prot.prefixes) {
 			if (c === p || c.startsWith(p + path.sep)) return true;

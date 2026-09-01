@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Security
+
+- Path sensitivity floor (S0–S5) and the self-protection write check now match every canonical form of the target path (lexical + realpath, rebuilding from the nearest existing ancestor when the target does not exist yet); the in-cwd write allowance requires all forms to sit inside the session cwd's real path. Fixes a symlink-alias bypass where a single classifier-adjudicated `ln -s` aliasing `~/.ssh` or a `.git/hooks` directory let subsequent reads and cwd-scoped writes through the floor with zero model calls (#20)
+
 ## [0.5.0] - 2026-08-31
 
 ### Added
