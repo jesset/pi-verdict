@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { buildProtectedSet, isProtectedWritePath } from "../extensions/auto-mode.ts";
+import autoMode, { BASH_MAX_MATCH_LEN, buildProtectedSet, isProtectedWritePath } from "../extensions/auto-mode.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -198,7 +198,7 @@ describe("user rules (deny > allow > gray)", () => {
 	// #25 (F7): danger-regex matching is capped — self-DoS length commands cannot stall adjudication
 	test("bash commands longer than the match cap are truncated before rule matching", async () => {
 		setConfig({});
-		const head = "a".repeat(8192);
+		const head = "a".repeat(BASH_MAX_MATCH_LEN);
 		// danger within the capped prefix → rule-layer deny, zero model calls
 		const h = makeHarness(); h.install();
 		const r1 = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x && " + head });

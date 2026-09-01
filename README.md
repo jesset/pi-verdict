@@ -121,7 +121,7 @@ tool_call
   │         config changed + interactive → one keep/restore confirm
   │
   ├─ 1. Rule layer (deterministic, zero latency)
-  │     ├─ built-in deny floor: bash danger regexes (full-string) +
+  │     ├─ built-in deny floor: bash danger regexes (full-string, capped at 8192 chars) +
   │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny;
   │     │   dual-form matching — lexical + realpath, symlink aliases resolve)
   │     ├─ your rules: user deny beats user allow (regex, see below)

@@ -122,14 +122,13 @@ interface RuleResult {
  *  classes plus nested alternations can backtrack quadratically on very long
  *  separator-free strings. Beyond the cap, rule matching is lost and the call
  *  falls to the classifier (fail-closed direction). */
-const BASH_MAX_MATCH_LEN = 8192;
+export const BASH_MAX_MATCH_LEN = 8192;
 
 function classifyBash(command: string, floorOn: boolean): RuleResult {
-	// 内置 deny floor:危险正则对完整命令串匹配;可经 builtinDenyFloor 整体关闭
 	if (floorOn) {
-		const s = command.length > BASH_MAX_MATCH_LEN ? command.slice(0, BASH_MAX_MATCH_LEN) : command;
+		const capped = command.length > BASH_MAX_MATCH_LEN ? command.slice(0, BASH_MAX_MATCH_LEN) : command;
 		for (const rule of BASH_DANGER_RULES) {
-			if (rule.pattern.test(s)) return { verdict: "deny", reason: `rule ${rule.id}: ${rule.reason}` };
+			if (rule.pattern.test(capped)) return { verdict: "deny", reason: `rule ${rule.id}: ${rule.reason}` };
 		}
 	}
 	if (!command.trim()) return { verdict: "allow", reason: "empty command" };
