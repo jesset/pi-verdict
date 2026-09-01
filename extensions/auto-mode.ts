@@ -207,7 +207,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. denyPaths is a list of protected path prefixes (plain paths, not regexes; the tool owns normalization — ~, $HOME, relative, .. and symlink forms all resolve — and any access attempt, including from bash command strings, asks for your confirmation, degrading to deny in non-interactive sessions; priority: after your deny rules, before your allow rules; never sent to the classifier). builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). toggleShortcut sets the master-switch toggle key (pi key combo, e.g. ctrl+shift+a; null or empty disables the shortcut). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
+	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. denyPaths is a list of protected path prefixes (plain paths, not regexes; the tool owns normalization — ~, $HOME, relative, .. and symlink forms all resolve, case folds on macOS/Windows — and any access attempt, including from bash command strings, asks for your confirmation, degrading to deny in non-interactive sessions; priority: after your deny rules, before your allow rules; never sent to the classifier). builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). toggleShortcut sets the master-switch toggle key (pi key combo, e.g. ctrl+shift+a; null or empty disables the shortcut). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	denyPaths: [],
@@ -407,8 +407,9 @@ const BASH_PATH_TOKENS =
  *  case-folded; realpath already normalizes case whenever it resolves, this covers
  *  the lexical-only forms of nonexistent targets (#21). Linux stays case-sensitive. */
 const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
-const pathEquals = (a: string, b: string): boolean => (CASE_INSENSITIVE_FS ? a.toLowerCase() === b.toLowerCase() : a === b);
-const pathStartsWith = (c: string, b: string): boolean => (CASE_INSENSITIVE_FS ? c.toLowerCase().startsWith(b.toLowerCase() + path.sep) : c.startsWith(b + path.sep));
+const fold = (s: string): string => (CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
+const pathEquals = (a: string, b: string): boolean => fold(a) === fold(b);
+const pathStartsWith = (child: string, base: string): boolean => fold(child).startsWith(fold(base) + path.sep);
 
 /** Normalized forms of one path (lexical + realpath when it exists) for denyPaths comparison */
 function denyPathForms(raw: string, cwd: string): string[] {

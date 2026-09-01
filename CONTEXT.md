@@ -30,7 +30,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### denyPaths (受保护路径)
 
-用户在 config 中声明的敏感路径列表,是**路径语义声明**:归一化(`~` 展开、词法 resolve、realpath 消解符号链接,realpath 失败降级词法层)与路径段前缀比对由**工具负责**,提取范围覆盖文件类工具的绝对路径与 bash 命令串中可提取的路径 token。命中即 **ask 终局**(非交互降级 deny),优先于用户 allow、劣后于用户 deny 与内置 floor。与用户规则的 deny(正则黑名单,用户自负归一化假设)相对:同一安全声明,声明更强的通道。路径提取与命中判定全部在本地完成,分类器只见**存在性话术**(不知路径明文、不见命中调用的裁决)。_Avoid_: denyPath(单数)。泛指 "protected paths" 单独出现时易与自保护层的 protected files 混淆——本词条语境优先用全称 "user-declared protected path (denyPaths)" 或中文「受保护路径(用户声明)」。
+用户在 config 中声明的敏感路径列表,是**路径语义声明**:归一化(`~` 展开、词法 resolve、realpath 消解符号链接,realpath 失败降级词法层,macOS/Windows 上大小写折叠)与路径段前缀比对由**工具负责**,提取范围覆盖文件类工具的绝对路径与 bash 命令串中可提取的路径 token。命中即 **ask 终局**(非交互降级 deny),优先于用户 allow、劣后于用户 deny 与内置 floor。与用户规则的 deny(正则黑名单,用户自负归一化假设)相对:同一安全声明,声明更强的通道。路径提取与命中判定全部在本地完成,分类器只见**存在性话术**(不知路径明文、不见命中调用的裁决)。_Avoid_: denyPath(单数)。泛指 "protected paths" 单独出现时易与自保护层的 protected files 混淆——本词条语境优先用全称 "user-declared protected path (denyPaths)" 或中文「受保护路径(用户声明)」。
 
 ### 存在性话术 (existence hint)
 

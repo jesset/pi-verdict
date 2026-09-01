@@ -395,13 +395,17 @@ describe("S-rule case folding + firmlink prefixes (#21)", () => {
 		expect(h.calls.length).toBe(0);
 	});
 
-	// S2 (/i) has no externally distinguishable behavior here: a user-rc hit grades
-	// gray exactly like an outside-cwd write, so the /i flag is applied for
-	// consistency only and carries no dedicated test
+	test("write to a case-variant user rc path inside cwd grades gray (S2 /i flips in-cwd allow to gray)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> mock" }];
+		const r = await toolCall(h, "write", { path: "/proj/.BASHRC", content: "x" });
+		expect(h.calls.length).toBe(1); // previously in-cwd allow with zero model calls
+		expect(r?.block).toBe(true);
+	});
 
-	test("denyPaths comparison folds case on darwin/win32 (nonexistent lexical target)", async () => {
-		// linux keeps case-sensitive comparison — skip there
-		if (process.platform !== "darwin" && process.platform !== "win32") return;
+	test.skipIf(process.platform !== "darwin" && process.platform !== "win32")("denyPaths comparison folds case on darwin/win32 (nonexistent lexical target)", async () => {
+		// linux keeps case-sensitive comparison — skipped there
 		const base = fs.mkdtempSync(path.join(os.homedir(), ".pv-t21-base-"));
 		try {
 			setConfig({ denyPaths: [base] });
