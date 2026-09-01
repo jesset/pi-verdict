@@ -530,9 +530,48 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 	// 安装副本目标:单文件形态 → 文件本体(exact);npm 目录形态 → 包根目录(prefix)。
 	// extRoot 与 ownFile 各取词法/realpath 双形交叉判定,集合同样双形收录——
 	// 避免符号链接目录(如 macOS /var → /private/var)导致传入词法路径与集合错位。
+	/** List every file under a package root (npm dir install form) for the tamper
+	 *  baseline (#26): write protection covers the whole package dir, so the watch
+	 *  scope must not lag behind it — a planted manifest entry must not survive to
+	 *  the next session undetected. node_modules/.git are skipped; depth and file
+	 *  count are bounded so a planted oversized tree cannot blow up the next
+	 *  session's baseline build (defense in depth, requires a prior bypass). */
+	const listPackageFiles = (root: string): string[] => {
+		const out: string[] = [];
+		const walk = (dir: string, depth: number): void => {
+			if (depth > 16 || out.length >= 500) return;
+			let names: string[];
+			try {
+				names = fs.readdirSync(dir);
+			} catch {
+				return;
+			}
+			for (const name of names) {
+				if (name === "node_modules" || name === ".git") continue;
+				const full = path.join(dir, name);
+				// stat (not lstat) follows symlinks: a package file replaced by a
+				// symlink to outside content must not silently drop out of the
+				// baseline — the watched path stays the lexical entry; a symlink
+				// cycle (ELOOP) throws and is skipped (#26 review)
+				let st: fs.Stats;
+				try {
+					st = fs.statSync(full);
+				} catch {
+					continue;
+				}
+				if (st.isDirectory()) walk(full, depth + 1);
+				else if (st.isFile() && out.length < 500) out.push(full);
+			}
+		};
+		walk(root, 0);
+		return out;
+	};
+
 	const extTargets = new Set<string>();
 	if (ownFile) {
 		watchBases.push({ file: ownFile, kind: "extension" });
+		const seenWatch = new Set<string>([ownFile]);
+		let pkgRoot: string | null = null;
 		const extRoots = new Set([path.join(agentDir, "extensions"), tryRealpath(path.join(agentDir, "extensions"))]);
 		const ownForms = new Set([ownFile, tryRealpath(ownFile)]);
 		for (const extRoot of extRoots) {
@@ -545,6 +584,16 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 					(singleFile ? exact : prefixes).add(f);
 					extTargets.add(f);
 				}
+				if (!singleFile && pkgRoot === null) pkgRoot = target;
+			}
+		}
+		// one walk of the package root (lexical form; takeSnapshots' pathForms
+		// expansion picks up real forms per file) — no duplicate entries
+		if (pkgRoot !== null) {
+			for (const f of listPackageFiles(pkgRoot)) {
+				if (seenWatch.has(f)) continue;
+				seenWatch.add(f);
+				watchBases.push({ file: f, kind: "extension" });
 			}
 		}
 	}

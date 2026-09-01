@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 - A malformed `pi-verdict.json` (e.g. a trailing comma) no longer silently loads empty user rules: the parse failure is reported through the session-start skip channel (the built-in floor and self-protection layer were never affected) (#25)
 - Danger-regex matching is capped at 8192 characters: very long separator-free commands could backtrack quadratically and stall adjudication; beyond the cap the call falls to the classifier (fail-closed direction) (#25)
+- npm package-directory installs: the tamper-detection baseline now covers every file in the package directory (node_modules/.git excluded) — write protection already covered the whole dir, but only the entry file was watched, so a tampered manifest would have loaded next session undetected (#26)
 
 ## [0.5.1] - 2026-09-01
 

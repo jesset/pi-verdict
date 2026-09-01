@@ -913,6 +913,35 @@ describe("self-protection layer (ADR-0001)", () => {
 });
 
 describe("buildProtectedSet (pure)", () => {
+	// #26: npm dir install form — tamper watch must not lag behind write protection
+	test("npm dir install form: tamper watch covers the whole package dir, excluding node_modules/.git", () => {
+		const agent = fs.mkdtempSync(path.join(os.homedir(), ".pv-t26-"));
+		try {
+			const pkgDir = path.join(agent, "extensions", "pi-verdict");
+			fs.mkdirSync(path.join(pkgDir, "sub"), { recursive: true });
+			fs.mkdirSync(path.join(pkgDir, "node_modules", "dep"), { recursive: true });
+			fs.mkdirSync(path.join(pkgDir, ".git"), { recursive: true });
+			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
+			fs.writeFileSync(path.join(pkgDir, "index.ts"), "x");
+			fs.writeFileSync(path.join(pkgDir, "sub", "lib.ts"), "x");
+			fs.writeFileSync(path.join(pkgDir, "node_modules", "dep", "y.js"), "x");
+			fs.writeFileSync(path.join(pkgDir, ".git", "config"), "[core]");
+			// a package file replaced by a symlink to outside content stays watched
+			// (stat follows; the lexical entry is the watched path)
+			fs.writeFileSync(path.join(agent, "outside-payload.ts"), "evil");
+			fs.symlinkSync(path.join(agent, "outside-payload.ts"), path.join(pkgDir, "linked.ts"));
+			const prot = buildProtectedSet(agent, path.join(pkgDir, "index.ts"));
+			const watched = prot.watchBases.filter((w) => w.kind === "extension").map((w) => w.file);
+			expect(watched).toContain(path.join(pkgDir, "package.json"));
+			expect(watched).toContain(path.join(pkgDir, "index.ts"));
+			expect(watched).toContain(path.join(pkgDir, "sub", "lib.ts"));
+			expect(watched).toContain(path.join(pkgDir, "linked.ts"));
+			expect(watched.some((f) => f.includes("node_modules"))).toBe(false);
+			expect(watched.some((f) => f.includes(".git"))).toBe(false);
+			expect(new Set(watched).size).toBe(watched.length); // no duplicate watch entries
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
+	});
+
 	test("single-file install form: exact own file + bash variants", () => {
 		const own = path.join(TMP_AGENT, "extensions", "auto-mode.ts");
 		fs.mkdirSync(path.dirname(own), { recursive: true });
