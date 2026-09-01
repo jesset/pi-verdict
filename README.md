@@ -122,7 +122,8 @@ tool_call
   │
   ├─ 1. Rule layer (deterministic, zero latency)
   │     ├─ built-in deny floor: bash danger regexes (full-string) +
-  │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny)
+  │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny;
+  │     │   dual-form matching — lexical + realpath, symlink aliases resolve)
   │     ├─ your rules: user deny beats user allow (regex, see below)
   │     ├─ denyPaths (ADR-0002): user-declared protected paths, tool-owned
   │     │   normalization (~, $HOME, relative, .., symlink) → terminal ask,

@@ -33,7 +33,7 @@ interface Harness {
 	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => void;
 }
 
-function makeHarness(): Harness {
+function makeHarness(cwd: string = "/proj"): Harness {
 	const handlers: Record<string, any> = {};
 	const commands: Record<string, any> = {};
 	const shortcuts: Record<string, any> = {};
@@ -45,7 +45,7 @@ function makeHarness(): Harness {
 	const h: any = { handlers, commands, shortcuts, notifies, statusSets, fgCalls, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
-		cwd: "/proj", hasUI: true, signal: undefined, model: { id: "mock/glm" },
+		cwd, hasUI: true, signal: undefined, model: { id: "mock/glm" },
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
 			complete: async (_m: any, _req: any, opts: any) => {
@@ -243,6 +243,100 @@ describe("security audit regression (all payloads must NOT be rule-allowed)", ()
 		const r = await toolCall(h, "read", { path: "~/.npmrc" });
 		expect(r?.block).toBe(true);
 		expect(h.calls.length).toBe(0);
+	});
+});
+
+// ── 3.4 path floor dual-form matching (#20: symlink alias bypass regression) ──
+
+describe("path floor dual-form matching (#20)", () => {
+	// Fixtures live under the real home: macOS TMPDIR sits under /var/folders,
+	// which collides with the S1 system-prefix rule and contaminates the cases.
+	const root = fs.mkdtempSync(path.join(os.homedir(), ".pv-t20-"));
+	const proj = path.join(root, "proj");
+	const secrets = path.join(root, "secrets", ".ssh");
+	const gitMeta = path.join(proj, ".git");
+	const outside = path.join(root, "outside");
+
+	beforeAll(() => {
+		fs.mkdirSync(secrets, { recursive: true });
+		fs.mkdirSync(path.join(gitMeta, "hooks"), { recursive: true });
+		fs.mkdirSync(outside, { recursive: true });
+		fs.symlinkSync(secrets, path.join(proj, "s"));
+		fs.symlinkSync(gitMeta, path.join(proj, "g"));
+		fs.symlinkSync(outside, path.join(proj, "o"));
+	});
+	afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+	test("read via project-local symlink to a .ssh dir: files without an S0 basename signature deny, zero model calls", async () => {
+		setConfig({});
+		for (const f of ["id_ed25519", "config"]) {
+			const h = makeHarness(proj); h.install();
+			const r = await toolCall(h, "read", { path: path.join(proj, "s", f) });
+			expect(r?.block).toBe(true);
+			expect(String(r?.reason)).toContain("S0");
+			expect(h.calls.length).toBe(0);
+		}
+	});
+
+	test("write of a new key file via that symlink denies via the real form", async () => {
+		setConfig({});
+		const h = makeHarness(proj); h.install();
+		const r = await toolCall(h, "write", { path: path.join(proj, "s", "newkey"), content: "x" });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("S0");
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("write via symlink into .git/hooks denies (S3 via real form)", async () => {
+		setConfig({});
+		const h = makeHarness(proj); h.install();
+		const r = await toolCall(h, "write", { path: path.join(proj, "g", "hooks", "pre-commit"), content: "x" });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain(".git metadata");
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("write via symlink to a plain outside dir is no longer rule-allowed (gray → classifier)", async () => {
+		setConfig({});
+		const h = makeHarness(proj); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> mock" }];
+		const r = await toolCall(h, "write", { path: path.join(proj, "o", "x.txt"), content: "x" });
+		expect(h.calls.length).toBe(1); // the silent zero-call rule-allow is gone
+		expect(r?.block).toBe(true);
+	});
+
+	test("ordinary direct-path behavior unchanged", async () => {
+		setConfig({});
+		const h = makeHarness(proj); h.install();
+		// plain in-cwd write still rule-allows (target need not exist)
+		expect(await toolCall(h, "write", { path: path.join(proj, "normal.txt"), content: "x" })).toBeUndefined();
+		expect(h.calls.length).toBe(0);
+		// lexical S0 basename signature still denies without any symlink involved
+		const r2 = await toolCall(h, "read", { path: path.join(proj, ".ssh", "id_rsa") });
+		expect(r2?.block).toBe(true);
+		expect(String(r2?.reason)).toContain("S0");
+		// /etc/sudoers read stays gray: classifier adjudicates
+		h.responses = [{ text: "<verdict>deny</verdict> mock" }];
+		const r3 = await toolCall(h, "read", { path: "/etc/sudoers" });
+		expect(h.calls.length).toBe(1);
+		expect(r3?.block).toBe(true);
+	});
+
+	test("isProtectedWritePath: symlink alias onto a nonexistent target inside a protected package dir hits via ancestor-realpath form", () => {
+		const agent = fs.mkdtempSync(path.join(os.homedir(), ".pv-t20-agent-"));
+		try {
+			// npm package-directory install shape: <agentDir>/extensions/pi-verdict/index.ts
+			const pkgDir = path.join(agent, "extensions", "pi-verdict");
+			fs.mkdirSync(pkgDir, { recursive: true });
+			fs.writeFileSync(path.join(pkgDir, "index.ts"), "x");
+			const prot = buildProtectedSet(agent, path.join(pkgDir, "index.ts"));
+			const proj2 = fs.mkdtempSync(path.join(os.homedir(), ".pv-t20-p2-"));
+			try {
+				fs.symlinkSync(pkgDir, path.join(proj2, "ext-link"));
+				// target does not exist yet; only the ancestor-realpath form reveals it
+				expect(isProtectedWritePath(path.join(proj2, "ext-link", "sub", "new.ts"), proj2, prot)).toBe(true);
+			} finally { fs.rmSync(proj2, { recursive: true, force: true }); }
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
 	});
 });
 
