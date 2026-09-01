@@ -545,8 +545,9 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 	return { exact: [...exact], prefixes: [...prefixes], bashPatterns, watchBases };
 }
 
-/** 解析后的写入路径是否命中受保护集合(经 realpath 防 symlink 旁路;目标不存在时
- *  经最近存在祖先重建真实形,#20) */
+/** Does the resolved write path hit the protected set (realpath guards against
+ *  symlink bypass; nonexistent targets rebuild their real form from the
+ *  nearest existing ancestor, #20) */
 export function isProtectedWritePath(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
 	if (!rawPath) return false;
 	for (const c of targetForms(path.resolve(cwd, expandHome(rawPath)))) {

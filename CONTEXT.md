@@ -20,6 +20,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 判定管线的第一段:确定性规则给出硬性 allow 或 deny。由两部分组成:**内置 deny floor**(bash 危险正则 + 文件路径敏感度分级,只做 deny 声明——误报方向安全)与**用户规则**(allow/deny 正则,由用户配置并背书)。内置层不提供白名单(0.2.0 起,安全审计结论:白名单健全性需要 shell AST 分析)。
 
+### 双形匹配
+
+路径类规则判定的归一化纪律:同一目标路径产出**全部规范形**——词法绝对形 + realpath 形;目标尚不存在时,自最近存在祖先的 realpath 逐级重建。规则匹配对每个形逐一测试,任一形命中即生效;词法形位于 cwd 内而真实形出走 cwd 的 symlink 别名不得因此获得「项目内写入」放行(要求全部形位于 cwd 的词法/真实形之内)。自保护层与 denyPaths 自始遵循该纪律;路径敏感度 floor 自 #20 起统一。_Avoid_: 只测词法形的单形匹配(对 symlink 别名整体旁路)。
+
 ### 用户规则 (user rules)
 
 `<agentDir>/config/pi-verdict.json` 中用户配置的 allow/deny 正则:deny 优先于 allow,黑名单命中即拦截;匹配目标为 bash 完整命令串 / 文件类工具的绝对路径。`builtinDenyFloor: false` 可整体关闭内置 deny floor(风险自担)。安全声明(「永远放行」)由用户背书而非作者。

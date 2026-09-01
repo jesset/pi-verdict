@@ -246,7 +246,7 @@ describe("security audit regression (all payloads must NOT be rule-allowed)", ()
 	});
 });
 
-// ── 3.4 路径敏感度双形匹配(#20:symlink 别名绕过回归) ──
+// ── 3.4 path floor dual-form matching (#20: symlink alias bypass regression) ──
 
 describe("path floor dual-form matching (#20)", () => {
 	// Fixtures live under the real home: macOS TMPDIR sits under /var/folders,
