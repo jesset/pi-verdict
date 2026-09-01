@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Fixed
+
+- A malformed `pi-verdict.json` (e.g. a trailing comma) no longer silently loads empty user rules: the parse failure is reported through the session-start skip channel (the built-in floor and self-protection layer were never affected) (#25)
+- Danger-regex matching is capped at 8192 characters: very long separator-free commands could backtrack quadratically and stall adjudication; beyond the cap the call falls to the classifier (fail-closed direction) (#25)
+
 ## [0.5.1] - 2026-09-01
 
 ### Security

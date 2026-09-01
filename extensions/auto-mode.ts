@@ -118,11 +118,17 @@ interface RuleResult {
 	detail?: string;
 }
 
+/** Cap the danger-regex matching input (#25): the prefix-consuming character
+ *  classes plus nested alternations can backtrack quadratically on very long
+ *  separator-free strings. Beyond the cap, rule matching is lost and the call
+ *  falls to the classifier (fail-closed direction). */
+export const BASH_MAX_MATCH_LEN = 8192;
+
 function classifyBash(command: string, floorOn: boolean): RuleResult {
-	// 内置 deny floor:危险正则对完整命令串匹配;可经 builtinDenyFloor 整体关闭
 	if (floorOn) {
+		const capped = command.length > BASH_MAX_MATCH_LEN ? command.slice(0, BASH_MAX_MATCH_LEN) : command;
 		for (const rule of BASH_DANGER_RULES) {
-			if (rule.pattern.test(command)) return { verdict: "deny", reason: `rule ${rule.id}: ${rule.reason}` };
+			if (rule.pattern.test(capped)) return { verdict: "deny", reason: `rule ${rule.id}: ${rule.reason}` };
 		}
 	}
 	if (!command.trim()) return { verdict: "allow", reason: "empty command" };
@@ -231,7 +237,15 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
+		try {
+			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
+		} catch (err) {
+			// Invalid config never silently disables the gate (#25): a parse failure
+			// loads empty user rules (the floor and self-protection layer stay on)
+			// and reports through the session_start skip channel, same as invalid regexes
+			return { rules: EMPTY_RULES, skipped: [`config parse failed: ${err instanceof Error ? err.message : String(err)} — user rules not loaded (${p})`], shortcutWarning: null };
+		}
 		const skipped: string[] = [];
 		const compile = (list: unknown): RegExp[] =>
 			(Array.isArray(list) ? list : []).filter((x): x is string => typeof x === "string").flatMap((src) => {
