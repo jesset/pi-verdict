@@ -207,7 +207,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. denyPaths is a list of protected path prefixes (plain paths, not regexes; the tool owns normalization — ~, $HOME, relative, .. and symlink forms all resolve — and any access attempt, including from bash command strings, asks for your confirmation, degrading to deny in non-interactive sessions; priority: after your deny rules, before your allow rules; never sent to the classifier). builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). toggleShortcut sets the master-switch toggle key (pi key combo, e.g. ctrl+shift+a; null or empty disables the shortcut). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
+	_hint: "pi-verdict user rules. allow/deny are JS regex arrays; deny wins over allow. Match target: bash = full command string, file tools = absolute path. denyPaths is a list of protected path prefixes (plain paths, not regexes; the tool owns normalization — ~, $HOME, relative, .. and symlink forms all resolve, case folds on macOS/Windows — and any access attempt, including from bash command strings, asks for your confirmation, degrading to deny in non-interactive sessions; priority: after your deny rules, before your allow rules; never sent to the classifier). builtinDenyFloor=false disables the built-in danger/path floor (at your own risk; the self-protection layer always stays on and cannot be turned off by any config). classifierModel persistently sets the classifier model (provider/id, e.g. zai/glm-5.3-flash; accepts a pi-native thinking suffix, e.g. zai/glm-5.3-flash:low; empty = self-reflection, inherit session model). toggleShortcut sets the master-switch toggle key (pi key combo, e.g. ctrl+shift+a; null or empty disables the shortcut). This file is part of the permission gate itself: pi-verdict denies any agent-side modification of it — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	denyPaths: [],
@@ -277,16 +277,23 @@ function expandHome(p: string): string {
 	return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
+// All S-rules match case-insensitively (#21): on case-insensitive filesystems
+// (default macOS APFS, Windows) case variants name the same file — realpath
+// normalization covers existing targets, /i covers the lexical forms of
+// nonexistent ones; on linux the uppercase spelling usually does not exist and
+// the occasional false positive fails toward deny (safe direction).
 const S0_SECRET = [
-	/\.ssh(\/|$)/, /\.aws(\/|$)/, /\.gnupg(\/|$)/, /(^|\/)\.env(\.|$)/, /credentials?(\.|\/|$)/i,
-	/(^|\/)id_rsa/, /\.pem$/, /_history$/, /\.config\/gh(\/|$)/, /\.pi\/agent\/auth\.json$/,
+	/\.ssh(\/|$)/i, /\.aws(\/|$)/i, /\.gnupg(\/|$)/i, /(^|\/)\.env(\.|$)/i, /credentials?(\.|\/|$)/i,
+	/(^|\/)id_rsa/i, /\.pem$/i, /_history$/i, /\.config\/gh(\/|$)/i, /\.pi\/agent\/auth\.json$/i,
 	// V8(安全审计):常见明文凭证文件补全
-	/(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.pypirc$/, /(^|\/)\.envrc$/, /(^|\/)\.vault-token$/,
-	/\.kube(\/|$)/, /\.docker\/config\.json$/, /\.gem\/credentials$/,
+	/(^|\/)\.netrc$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.pypirc$/i, /(^|\/)\.envrc$/i, /(^|\/)\.vault-token$/i,
+	/\.kube(\/|$)/i, /\.docker\/config\.json$/i, /\.gem\/credentials$/i,
 ];
-const S1_SYSTEM = [/^\/etc(\/|$)/, /^\/usr(\/|$)/, /^\/var(\/|$)/, /^\/System(\/|$)/, /(^|\/)authorized_keys$/];
-const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/, /crontab/, /Library\/LaunchAgents(\/|$)/, /\.config\/systemd(\/|$)/];
-const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/, /(^|\/)\.gitmodules$/];
+// /private prefixes: macOS firmlinks — /etc, /var are really /private/etc,
+// /private/var, and realpath'd toolchain output uses the real spelling (#21)
+const S1_SYSTEM = [/^\/etc(\/|$)/i, /^\/private\/(etc|var)(\/|$)/i, /^\/usr(\/|$)/i, /^\/var(\/|$)/i, /^\/System(\/|$)/i, /(^|\/)authorized_keys$/i];
+const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/i, /crontab/i, /Library\/LaunchAgents(\/|$)/i, /\.config\/systemd(\/|$)/i];
+const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/i, /(^|\/)\.gitmodules$/i];
 
 /**
  * All canonical forms of a path for rule matching: the lexical absolute plus,
@@ -396,6 +403,14 @@ function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: s
 const BASH_PATH_TOKENS =
 	/(?:~|\$HOME)(?:\/[\w.@*-]+)*|\/(?:[\w.@*-]+\/)*[\w.@*-]*|\.{1,2}(?:\/[\w.@*-]+)+|[\w.-]+(?:\/[\w.-]+)+/g;
 
+/** Case-insensitive filesystems (default macOS APFS, Windows) compare path strings
+ *  case-folded; realpath already normalizes case whenever it resolves, this covers
+ *  the lexical-only forms of nonexistent targets (#21). Linux stays case-sensitive. */
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+const fold = (s: string): string => (CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
+const pathEquals = (a: string, b: string): boolean => fold(a) === fold(b);
+const pathStartsWith = (child: string, base: string): boolean => fold(child).startsWith(fold(base) + path.sep);
+
 /** Normalized forms of one path (lexical + realpath when it exists) for denyPaths comparison */
 function denyPathForms(raw: string, cwd: string): string[] {
 	if (!raw) return [];
@@ -427,7 +442,7 @@ function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: str
 	for (const candidate of denyPathCandidates(toolName, input)) {
 		for (const c of denyPathForms(candidate, cwd)) {
 			for (const b of bases) {
-				if (c === b || c.startsWith(b + path.sep)) return b;
+				if (pathEquals(c, b) || pathStartsWith(c, b)) return b;
 			}
 		}
 	}

@@ -126,7 +126,8 @@ tool_call
   │     │   dual-form matching — lexical + realpath, symlink aliases resolve)
   │     ├─ your rules: user deny beats user allow (regex, see below)
   │     ├─ denyPaths (ADR-0002): user-declared protected paths, tool-owned
-  │     │   normalization (~, $HOME, relative, .., symlink) → terminal ask,
+  │     │   normalization (~, $HOME, relative, .., symlink, case on
+  │     │   macOS/Windows) → terminal ask,
   │     │   before user allow; classifier sees an existence hint only
   │     └─ no built-in allowlist — every "always allow" claim is yours to make
   │

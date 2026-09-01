@@ -125,7 +125,7 @@ tool_call
   │     │   (双形匹配 —— 词法 + realpath,符号链接别名会被解析)
   │     ├─ 用户规则:deny 优先于 allow(正则,见下)
   │     ├─ denyPaths(ADR-0002):用户声明的受保护路径,工具负责归一化
-  │     │   (~、$HOME、相对、..、symlink)→ 终局 ask,先于用户 allow;
+  │     │   (~、$HOME、相对、..、symlink、macOS/Windows 大小写)→ 终局 ask,先于用户 allow;
   │     │   分类器只见存在性话术
   │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
