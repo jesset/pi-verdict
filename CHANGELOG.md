@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-01
+
 ### Security
 
 - S-rules (S0–S3) now match case-insensitively and S1 gains the macOS firmlink prefixes (`/private/etc`, `/private/var`): on case-insensitive filesystems (default macOS APFS, Windows) case variants name the same file but previously missed the case-sensitive regexes when the target did not exist (realpath cannot normalize a nonexistent path), and firmlink real spellings silently allowed where the `/etc` spelling went gray. denyPaths comparison folds case on darwin/win32 (linux stays case-sensitive) (#21)
