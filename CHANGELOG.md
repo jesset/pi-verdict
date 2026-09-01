@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - Path sensitivity floor (S0–S5) and the self-protection write check now match every canonical form of the target path (lexical + realpath, rebuilding from the nearest existing ancestor when the target does not exist yet); the in-cwd write allowance requires all forms to sit inside the session cwd's real path. Fixes a symlink-alias bypass where a single classifier-adjudicated `ln -s` aliasing `~/.ssh` or a `.git/hooks` directory let subsequent reads and cwd-scoped writes through the floor with zero model calls (#20)
 - Classifier transcript lines are now line-break-escaped and the tool-call path branch goes through the same sanitize pipeline as commands (zero-width stripping + length cap). A path, command, or user message containing embedded line breaks could previously split its transcript line and forge structural lines — e.g. a fake `User:` line instructing the classifier to allow — and tool arguments are model-generated (steerable by prompt-injected file contents), so the surface was real. The escape covers `\n`, `\r\n`, lone `\r` and the Unicode separators U+2028/U+2029/U+0085, which models may render as breaks (#22)
 
+### Changed
+
+- Documentation alignment (#23): classifier timeout documented as 25s (en/zh READMEs; code and the measured p90 basis say 25s, docs said 15s); the volatile offline-test count removed from the dev section; the Status & limitations sections now state two floor scope boundaries explicitly — bash command strings are matched by the danger regexes only (`cat ~/.ssh/id_rsa` goes to the classifier, not the deterministic S0 deny), and on Windows the built-in floor covers bash-shaped patterns only, PowerShell-native dangerous commands rely on the classifier
 ## [0.5.0] - 2026-08-31
 
 ### Added
