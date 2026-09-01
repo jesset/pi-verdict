@@ -277,16 +277,23 @@ function expandHome(p: string): string {
 	return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
+// All S-rules match case-insensitively (#21): on case-insensitive filesystems
+// (default macOS APFS, Windows) case variants name the same file — realpath
+// normalization covers existing targets, /i covers the lexical forms of
+// nonexistent ones; on linux the uppercase spelling usually does not exist and
+// the occasional false positive fails toward deny (safe direction).
 const S0_SECRET = [
-	/\.ssh(\/|$)/, /\.aws(\/|$)/, /\.gnupg(\/|$)/, /(^|\/)\.env(\.|$)/, /credentials?(\.|\/|$)/i,
-	/(^|\/)id_rsa/, /\.pem$/, /_history$/, /\.config\/gh(\/|$)/, /\.pi\/agent\/auth\.json$/,
+	/\.ssh(\/|$)/i, /\.aws(\/|$)/i, /\.gnupg(\/|$)/i, /(^|\/)\.env(\.|$)/i, /credentials?(\.|\/|$)/i,
+	/(^|\/)id_rsa/i, /\.pem$/i, /_history$/i, /\.config\/gh(\/|$)/i, /\.pi\/agent\/auth\.json$/i,
 	// V8(安全审计):常见明文凭证文件补全
-	/(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.pypirc$/, /(^|\/)\.envrc$/, /(^|\/)\.vault-token$/,
-	/\.kube(\/|$)/, /\.docker\/config\.json$/, /\.gem\/credentials$/,
+	/(^|\/)\.netrc$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.pypirc$/i, /(^|\/)\.envrc$/i, /(^|\/)\.vault-token$/i,
+	/\.kube(\/|$)/i, /\.docker\/config\.json$/i, /\.gem\/credentials$/i,
 ];
-const S1_SYSTEM = [/^\/etc(\/|$)/, /^\/usr(\/|$)/, /^\/var(\/|$)/, /^\/System(\/|$)/, /(^|\/)authorized_keys$/];
-const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/, /crontab/, /Library\/LaunchAgents(\/|$)/, /\.config\/systemd(\/|$)/];
-const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/, /(^|\/)\.gitmodules$/];
+// /private prefixes: macOS firmlinks — /etc, /var are really /private/etc,
+// /private/var, and realpath'd toolchain output uses the real spelling (#21)
+const S1_SYSTEM = [/^\/etc(\/|$)/i, /^\/private\/(etc|var)(\/|$)/i, /^\/usr(\/|$)/i, /^\/var(\/|$)/i, /^\/System(\/|$)/i, /(^|\/)authorized_keys$/i];
+const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/i, /crontab/i, /Library\/LaunchAgents(\/|$)/i, /\.config\/systemd(\/|$)/i];
+const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/i, /(^|\/)\.gitmodules$/i];
 
 /**
  * All canonical forms of a path for rule matching: the lexical absolute plus,
@@ -396,6 +403,13 @@ function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: s
 const BASH_PATH_TOKENS =
 	/(?:~|\$HOME)(?:\/[\w.@*-]+)*|\/(?:[\w.@*-]+\/)*[\w.@*-]*|\.{1,2}(?:\/[\w.@*-]+)+|[\w.-]+(?:\/[\w.-]+)+/g;
 
+/** Case-insensitive filesystems (default macOS APFS, Windows) compare path strings
+ *  case-folded; realpath already normalizes case whenever it resolves, this covers
+ *  the lexical-only forms of nonexistent targets (#21). Linux stays case-sensitive. */
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+const pathEquals = (a: string, b: string): boolean => (CASE_INSENSITIVE_FS ? a.toLowerCase() === b.toLowerCase() : a === b);
+const pathStartsWith = (c: string, b: string): boolean => (CASE_INSENSITIVE_FS ? c.toLowerCase().startsWith(b.toLowerCase() + path.sep) : c.startsWith(b + path.sep));
+
 /** Normalized forms of one path (lexical + realpath when it exists) for denyPaths comparison */
 function denyPathForms(raw: string, cwd: string): string[] {
 	if (!raw) return [];
@@ -427,7 +441,7 @@ function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: str
 	for (const candidate of denyPathCandidates(toolName, input)) {
 		for (const c of denyPathForms(candidate, cwd)) {
 			for (const b of bases) {
-				if (c === b || c.startsWith(b + path.sep)) return b;
+				if (pathEquals(c, b) || pathStartsWith(c, b)) return b;
 			}
 		}
 	}

@@ -340,6 +340,80 @@ describe("path floor dual-form matching (#20)", () => {
 	});
 });
 
+// ── 3.45 S-rule case folding + macOS firmlink prefixes (#21) ──
+
+describe("S-rule case folding + firmlink prefixes (#21)", () => {
+	test("read /private/etc/sudoers grades gray like /etc/sudoers (firmlink prefix)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		h.responses = [{ text: "<verdict>deny</verdict> mock" }];
+		const r = await toolCall(h, "read", { path: "/private/etc/sudoers" });
+		expect(h.calls.length).toBe(1);
+		expect(r?.block).toBe(true);
+	});
+
+	test("read via project-local symlink to /etc grades gray (real form hits the firmlink prefix)", async () => {
+		const root = fs.mkdtempSync(path.join(os.homedir(), ".pv-t21-"));
+		try {
+			fs.symlinkSync("/etc", path.join(root, "e"));
+			setConfig({});
+			const h = makeHarness(); h.install();
+			h.responses = [{ text: "<verdict>deny</verdict> mock" }];
+			const r = await toolCall(h, "read", { path: path.join(root, "e", "hosts") });
+			expect(h.calls.length).toBe(1);
+			expect(r?.block).toBe(true);
+		} finally { fs.rmSync(root, { recursive: true, force: true }); }
+	});
+
+	test("case-insensitive filesystem: .SSH/ID_RSA read denies (S0 /i)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: "/proj/.SSH/ID_RSA" });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("S0");
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("write AUTH.json under a case-variant .pi/agent path denies (S0 /i; target absent so realpath cannot normalize)", async () => {
+		const tmp = fs.mkdtempSync(path.join(os.homedir(), ".pv-t21-auth-"));
+		try {
+			fs.mkdirSync(path.join(tmp, ".pi", "agent"), { recursive: true });
+			setConfig({});
+			const h = makeHarness(); h.install();
+			const r = await toolCall(h, "write", { path: path.join(tmp, ".pi", "agent", "AUTH.json"), content: "x" });
+			expect(r?.block).toBe(true);
+			expect(String(r?.reason)).toContain("S0");
+			expect(h.calls.length).toBe(0);
+		} finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+	});
+
+	test("write to a case-variant .git hooks path denies (S3 /i)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: "/proj/.GIT/hooks/pre-commit", content: "x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+
+	// S2 (/i) has no externally distinguishable behavior here: a user-rc hit grades
+	// gray exactly like an outside-cwd write, so the /i flag is applied for
+	// consistency only and carries no dedicated test
+
+	test("denyPaths comparison folds case on darwin/win32 (nonexistent lexical target)", async () => {
+		// linux keeps case-sensitive comparison — skip there
+		if (process.platform !== "darwin" && process.platform !== "win32") return;
+		const base = fs.mkdtempSync(path.join(os.homedir(), ".pv-t21-base-"));
+		try {
+			setConfig({ denyPaths: [base] });
+			const h = makeHarness(); h.install();
+			// case-variant spelling of a declared base, target does not exist
+			// (realpath unavailable → pure lexical form is what gets compared)
+			await toolCall(h, "read", { path: path.join(base.toUpperCase(), "F.MD") });
+			expect(h.confirms).toBe(1);
+		} finally { fs.rmSync(base, { recursive: true, force: true }); }
+	});
+});
+
 // ── 3.5 分类器模型解析(flag > env > config > 自省) ─────
 
 describe("classifier model resolution", () => {
