@@ -12,6 +12,7 @@
 - Built-in danger rules and your own allow/deny rules settle the clear cases first, at zero latency
 - Everything else goes to a model classifier that sees the conversation context
 - Any uncertainty or failure fails closed; nothing ever runs silently
+- Self-protection: the gate guards itself against snooping and tampering
 
 ## The problem
 
@@ -23,10 +24,15 @@ pi-verdict adds the missing gate: a model decides whether each call should run, 
 
 **verdict is an adjudication, not a switch.** Most classifiers in this space output a binary allow/block. Three states matter: `ask` routes genuinely ambiguous actions to a human (and degrades to `deny` in non-interactive sessions), so "not sure" never silently becomes "go ahead".
 
+## Screenshots
+
+![Automode Status](docs/images/status.png)
+![Ask Permission](docs/images/asked.png)
+
 ## Quick start
 
 ```bash
-# install from npm (listed in the package catalog: https://pi.dev/packages/pi-verdict)
+# install from npm:
 pi install npm:pi-verdict
 
 # or directly from git — try it once
@@ -62,15 +68,15 @@ pi --extension ./extensions/auto-mode.ts
 ```
 
 - `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
-- matched against the **full command string** for bash, the **absolute path** for file tools (read/write/edit/grep/find/ls); other tools (MCP etc.) always go to the classifier
-- `denyPaths` are plain paths (not regexes) you declare **protected** ([ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)): any tool call touching them — file tools via their path, bash via path tokens extracted from the command string — triggers a **terminal ask** you adjudicate (non-interactive sessions degrade to deny). The tool owns normalization: `~`, `$HOME/`, relative, `..` and symlink spellings all resolve, compared per path segment. Priority: after your `deny` rules, **before your `allow` rules** (not even your own allowlist may touch these), and not affected by `builtinDenyFloor: false` — it is your declaration, not a built-in claim. The classifier only ever learns that protected paths *exist* (a fixed system-prompt hint to judge copy-then-read/archiving/indirection strictly); the paths themselves never leave your machine, and a hit never reaches the classifier at all — the matched path shows **only** in the local confirm dialog; block reasons and notifications carry none (they return into the agent context). Entries are normalized once at session start, anchored to the session cwd — mid-session symlink creation or cwd drift does not change what the declaration covers. When S0 secrets paths deny outright while your `denyPaths` merely ask, that asymmetry is deliberate: the exception to a *user-declared* path belongs to the user; S0 is an author-vetted set (see the ADR)
+- `denyPaths` are plain paths (not regexes) you declare **protected**: any tool call touching them — file tools via their path, bash via path tokens extracted from the command string — triggers a **terminal ask** you adjudicate (non-interactive sessions degrade to deny). Not affected by `builtinDenyFloor: false`.
+  The classifier only ever learns that protected paths *exist*; the paths themselves never leave your machine, and a matched path shows **only** in the local confirm dialog.
 - `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain — the self-protection layer below always stays on)
 - `classifierModel: "provider/model-id"` sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
-- the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off — the [measured](research/thinking-param-blackhole.md) default)
-- `toggleShortcut` rebinds the master-switch toggle key (any pi key combo, e.g. `ctrl+shift+x`; `null` or empty disables the shortcut; an invalid combo warns once at session start and skips registration). The toggle is semantically identical to `/automode on|off` — works mid-run, no confirmation, never persisted (persistence stays with the `--no-auto-mode` flag; the extension never writes its own protected config)
-- first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`); changes apply to new sessions
+- the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off)
+- `toggleShortcut` rebinds the master-switch toggle key (`null` or empty disables it, not persisted)
+- first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`)
 
-**Why no built-in allowlist?** Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist soundness requires shell AST analysis — every built-in "always allow" would be a security claim maintained by the author. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+**Why no built-in allowlist?** Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist robustness is very limited. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
@@ -157,8 +163,6 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) — structural reconstruction of Claude Code's classifier design (via self-hosted Langfuse observations) that this extension's transcript contract descends from
 
 ## Status & limitations
-
-Prototype quality — usable, not hardened:
 
 - no built-in allowlist by design (see the [bypass writeup](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
 - AGENTS.md is not passed to the classifier as downweighted intent evidence (Claude Code does this)

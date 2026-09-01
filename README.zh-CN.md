@@ -6,12 +6,13 @@
 [![npm](https://img.shields.io/npm/v/pi-verdict)](https://www.npmjs.com/package/pi-verdict)
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://pi.dev)
 
-**pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 的 Auto mode 式的极简权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
+**pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 风格的 Auto mode 式的极简权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
 
 - 只有几百行的极简代码
 - 内置危险规则与你的 allow/deny 规则以零延迟先行裁决明确情形
 - 其余交给携带会话上下文的模型分类器
 - 任何不确定或失败一律 fail-closed, 绝不静默放行
+- 自我保护: 防止被窥探和篡改
 
 ## 问题
 
@@ -23,10 +24,15 @@ pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图�
 
 **verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」。
 
+## 截图
+
+![Automode Status](docs/images/status.png)
+![Ask Permission](docs/images/asked.png)
+
 ## 快速开始
 
 ```bash
-# 从 npm 安装(已收录 pi 官方包目录: https://pi.dev/packages/pi-verdict)
+# 从 npm 安装:
 pi install npm:pi-verdict
 
 # 或直接从源码 —— 试用一次
@@ -62,15 +68,15 @@ pi --extension ./extensions/auto-mode.ts
 ```
 
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
-- 匹配目标:bash = **完整命令串**;文件类工具(read/write/edit/grep/find/ls)= **绝对路径**;其余工具(MCP 等)恒走分类器
-- `denyPaths` 是你声明**受保护**的普通路径列表(非正则,[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)):任何触碰它们的工具调用——文件类工具取其路径、bash 从命令串提取路径 token——触发**终局 ask**,由你裁决(非交互会话降级 deny)。归一化由工具负责:`~`、`$HOME/`、相对、`..`、symlink 拼写全部消解,按路径段前缀比对。优先级:在你的 `deny` 规则之后、**`allow` 规则之前**(连你自己的白名单也不得触碰),且不受 `builtinDenyFloor: false` 影响——这是你的声明而非内置声明。分类器只被告知受保护路径**存在**(固定 system prompt 话术,对先拷贝再读取/打包/间接引用从紧裁决);路径明文永不出本机,命中调用根本到不了分类器——命中的路径**只**出现在本地确认弹窗;阻断理由与通知不含明文(它们回流进 agent 上下文)。条目在会话启动时一次性归一化,锚定会话 cwd——会话中途新建 symlink 或 cwd 漂移不改变声明覆盖范围。S0 机密路径直接 deny 而你的 `denyPaths` 仅 ask 的不对称是刻意的:用户声明的例外归用户,S0 是作者审定集(见 ADR)
+- `denyPaths` 是你声明**受保护**的普通路径列表(非正则):任何触碰它们的工具调用——文件类工具取其路径、bash 从命令串提取路径 token——触发**终局 ask**,由你裁决(非交互会话降级 deny)。不受 `builtinDenyFloor: false` 影响
+  分类器只被告知受保护路径**存在**,路径明文永不出本机, 命中的路径**只**出现在本地确认弹窗。
 - `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在——下方自保护层永远开启)
 - `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
-- spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考,[实测](research/thinking-param-blackhole.md)背书的默认)
-- `toggleShortcut` 重绑主开关快捷键(任意 pi 键组合,如 `ctrl+shift+x`;`null` 或空串禁用;非法组合在会话启动时一次性警告并跳过注册)。快捷键与 `/automode on|off` **语义等价**——运行中生效、无确认弹窗、不持久化(持久需求由 `--no-auto-mode` flag 承担;扩展运行时从不写自己的受保护配置)
-- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`);修改后新会话生效
+- spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考)
+- `toggleShortcut` 重绑主开关快捷键(`null` 或空串禁用, 非持久化)
+- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`)
 
-**为什么没有内置白名单?**对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健全性需要 shell AST 分析——每条内置「永远放行」都是作者维护的安全声明。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+**为什么没有内置白名单?**对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健壮性非常有限。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 
@@ -155,8 +161,6 @@ tool_call
 - [`research/claude-code-classifier-prompts.md`](research/claude-code-classifier-prompts.md) —— Claude Code 分类器设计的结构化还原(基于自托管 Langfuse 观测),本扩展 transcript 契约的血统来源
 
 ## 状态与限制
-
-原型质量 —— 可用,未硬化:
 
 - 设计上无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户规则](#用户规则configpi-verdictjson));allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
