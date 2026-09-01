@@ -150,7 +150,7 @@ tool_call
         replays a double-key LRU(128) to measure would-be hit rate
 ```
 
-**fail-closed**: classifier exception / timeout (15s) / contract violation → deny. Never silently allow.
+**fail-closed**: classifier exception / timeout (25s) / contract violation → deny. Never silently allow.
 
 ## Evidence-driven, not vibes-driven
 
@@ -167,6 +167,8 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 ## Status & limitations
 
 - no built-in allowlist by design (see the [bypass writeup](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
+- the path sensitivity floor applies to file tools only: bash command strings are matched by the danger regexes alone, so e.g. `cat ~/.ssh/id_rsa` goes to the classifier rather than the deterministic S0 deny (the file-tool spelling `read ~/.ssh/id_rsa` does deny)
+- on Windows the built-in floor covers bash-shaped patterns only — PowerShell-native dangerous commands (`Remove-Item -Recurse -Force`, `Invoke-Expression`, `Set-ExecutionPolicy`, …) rely on the classifier (fail-closed)
 - AGENTS.md is not passed to the classifier as downweighted intent evidence (Claude Code does this)
 - parallel gray-zone calls are adjudicated serially
 - self-reflection means the session model adjudicates — point `--auto-mode-model` at a lighter model if verdict latency/cost matters (open question tracked in the issue tracker)
@@ -185,7 +187,7 @@ The name: the three-state **verdict** is the core concept. The UX keeps `/automo
 ```bash
 bun install
 bun run typecheck
-bun test          # 91 offline stub tests: self-protection, tamper detection, deny floor, user rules, denyPaths, bypass regression, classifier retry, shadow cache, commands, toggle shortcut
+bun test          # offline stub tests: self-protection, tamper detection, deny floor, user rules, denyPaths, bypass regression, classifier retry, shadow cache, commands, toggle shortcut
 ```
 
 Issue tracker and decision records live in the GitHub issues ("map" issue #1 indexes them).

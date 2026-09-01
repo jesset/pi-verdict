@@ -147,7 +147,7 @@ tool_call
         回放双键 LRU(128)测量 would-be 命中率
 ```
 
-**fail-closed**:分类器异常 / 超时(15s)/ 输出违反契约 → 拦截,绝不静默放行。
+**fail-closed**:分类器异常 / 超时(25s)/ 输出违反契约 → 拦截,绝不静默放行。
 
 ## 证据驱动,不靠直觉
 
@@ -164,6 +164,8 @@ tool_call
 ## 状态与限制
 
 - 设计上无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户规则](#用户规则configpi-verdictjson));allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
+- 路径敏感度 floor 只作用于文件类工具:bash 命令串仅匹配危险正则——`cat ~/.ssh/id_rsa` 走分类器而非确定性 S0 拦截(文件工具拼写 `read ~/.ssh/id_rsa` 会拦截)
+- Windows 下内置 floor 仅覆盖 bash 形态模式——PowerShell 原生危险命令(`Remove-Item -Recurse -Force`、`Invoke-Expression`、`Set-ExecutionPolicy` 等)依赖分类器兜底(fail-closed)
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
@@ -182,7 +184,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 91 个离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
+bun test          # 离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。
