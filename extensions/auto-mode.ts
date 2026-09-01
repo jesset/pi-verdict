@@ -710,13 +710,22 @@ function sanitize(text: string): string {
 	if (cleaned.length <= MAX_ENTRY_CHARS) return cleaned;
 	const head = Math.floor(MAX_ENTRY_CHARS * 0.6);
 	const tail = MAX_ENTRY_CHARS - head;
-	return `${cleaned.slice(0, head)}\n…[truncated]…\n${cleaned.slice(-tail)}`;
+	return `${cleaned.slice(0, head)}…[truncated]…${cleaned.slice(-tail)}`;
+}
+
+/** Transcript line body: sanitized (zero-width stripped, length-capped) with
+ *  newlines escaped in place — the transcript is line-structured ("User: …" /
+ *  "tool: …"), and an embedded newline in a path, command, or message could
+ *  otherwise forge a structural line (#22). Content is preserved, only the
+ *  line structure is defended. */
+function transcriptSafe(text: string): string {
+	return sanitize(text).replace(/\r?\n/g, "\\n");
 }
 
 function toolCallLine(name: string, args: Record<string, unknown>): string {
-	if (typeof args.command === "string") return `${name}: ${sanitize(args.command)}`;
-	if (typeof args.path === "string") return `${name}: ${args.path}`;
-	return `${name}: ${sanitize(JSON.stringify(args))}`;
+	if (typeof args.command === "string") return `${name}: ${transcriptSafe(args.command)}`;
+	if (typeof args.path === "string") return `${name}: ${transcriptSafe(args.path)}`;
+	return `${name}: ${transcriptSafe(JSON.stringify(args))}`;
 }
 
 /**
@@ -732,7 +741,7 @@ function collectTranscriptParts(ctx: ExtensionContext): { userLines: string[]; t
 		const msg = entry.message;
 		if (msg.role === "user") {
 			const text = typeof msg.content === "string" ? msg.content : msg.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-			if (text.trim()) userLines.push(`User: ${sanitize(text)}`);
+			if (text.trim()) userLines.push(`User: ${transcriptSafe(text)}`);
 		} else if (msg.role === "assistant") {
 			for (const block of msg.content) {
 				if (block.type === "toolCall") toolLines.push(toolCallLine(block.name, block.arguments as Record<string, unknown>));
