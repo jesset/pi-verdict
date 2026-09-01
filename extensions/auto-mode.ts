@@ -714,12 +714,13 @@ function sanitize(text: string): string {
 }
 
 /** Transcript line body: sanitized (zero-width stripped, length-capped) with
- *  newlines escaped in place — the transcript is line-structured ("User: …" /
- *  "tool: …"), and an embedded newline in a path, command, or message could
- *  otherwise forge a structural line (#22). Content is preserved, only the
- *  line structure is defended. */
+ *  line breaks escaped in place — the transcript is line-structured ("User: …" /
+ *  "tool: …"), and an embedded line break in a path, command, or message could
+ *  otherwise forge a structural line (#22). Covers \n, \r\n, lone \r and the
+ *  Unicode separators U+2028/U+2029/U+0085, which models may render as breaks.
+ *  Content is preserved, only the line structure is defended. */
 function transcriptSafe(text: string): string {
-	return sanitize(text).replace(/\r?\n/g, "\\n");
+	return sanitize(text).replace(/[\r\n\u2028\u2029\u0085]/g, "\\n");
 }
 
 function toolCallLine(name: string, args: Record<string, unknown>): string {
