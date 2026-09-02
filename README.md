@@ -22,7 +22,20 @@ pi-verdict adds the missing gate: a model decides whether each call should run, 
 
 ## Why three states
 
-**verdict is an adjudication, not a switch.** Most classifiers in this space output a binary allow/block. Three states matter: `ask` routes genuinely ambiguous actions to a human (and degrades to `deny` in non-interactive sessions), so "not sure" never silently becomes "go ahead".
+**verdict is an adjudication, not a switch.** Most classifiers in this space output a binary allow/block. Three states matter: `ask` routes genuinely ambiguous actions to a human (and degrades to `deny` in non-interactive sessions), so "not sure" never silently becomes "go ahead" — the goal is safe automation, not maximum automation: both approval fatigue and silent unsafe execution lose.
+
+## Design principles
+
+A small set of security principles shapes the whole gate — the full statement, with the honest edges, lives in [docs/security-principles.md](docs/security-principles.md):
+
+- **Fail closed** — uncertainty produces friction, never permission.
+- **Deterministic floor before AI** — hard denies are never overridden by the classifier or user allow rules.
+- **Semantics over syntax** — a long read-only pipeline may auto-allow while a short destructive one still denies; the classifier judges what an action *does*, not how long it is.
+- **Judgments, not proofs** — a classifier `allow` is an informed opinion; the floor exists because that is all it is.
+- **Minimal trusted input** — no tool results in the transcript (#22), zero path plaintext to the classifier (ADR-0002).
+- **Canonical identity** — lexical + realpath dual-form matching; a workspace-*looking* path is not trusted as one (#20/#21).
+- **The gate guards itself** — self-protection that no configuration can disable (ADR-0001).
+- **A permission gate, not a sandbox** — stack OS isolation on top; this gate never replaces it.
 
 ## Screenshots
 
@@ -45,7 +58,7 @@ pi --extension ./extensions/auto-mode.ts
 
 ### Hosts
 
-pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — the extension self-anchors to whichever agent tree it is installed in:
+pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — it self-anchors to whichever agent tree it is installed in, and follows the extension copy's own location on dual-install machines. On omp 18 the classifier's completion call falls back to the pi-ai compat API (still fail-closed). Details: [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi).
 
 | | pi | omp |
 |---|---|---|
@@ -53,13 +66,6 @@ pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi]
 | extension copy | `~/.pi/agent/extensions/` | `~/.omp/agent/plugins/node_modules/pi-verdict/` |
 | user rules | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
 | credential file (S0 hard deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
-
-`PI_CODING_AGENT_DIR` still overrides everything on both hosts. On a dual-install machine the gate follows the extension copy's own location — the mere presence of `~/.omp` never redirects a pi run (and vice versa).
-
-Two host differences worth knowing:
-
-- omp 18's `ModelRegistry` has no `complete` method, so the classifier resolves completion through the pi-ai compat module at first gray-zone verdict (`@earendil-works/pi-ai/compat`, which omp's legacy compat layer rewrites to its bundled pi-ai). Resolution or call failures follow the usual fail-closed deny.
-- Thinking control is sent in both hosts' native dialects (`thinkingEnabled`/`effort` for pi, `reasoning`/`disableReasoning` for omp); each host reads its own fields and ignores the other's.
 
 - `/automode` — show current status: on/off + shadow-cache stats for the session
 - `/automode on`
@@ -89,26 +95,18 @@ Two host differences worth knowing:
 ```
 
 - `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
-- `denyPaths` are plain paths (not regexes) you declare **protected**: any tool call touching them — file tools via their path, bash via path tokens extracted from the command string — triggers a **terminal ask** you adjudicate (non-interactive sessions degrade to deny). Not affected by `builtinDenyFloor: false`.
-  The classifier only ever learns that protected paths *exist*; the paths themselves never leave your machine, and a matched path shows **only** in the local confirm dialog.
-- `builtinDenyFloor: false` turns the built-in danger/path floor off entirely (risk accepted by you; the classifier and your rules remain — the self-protection layer below always stays on)
-- `classifierModel: "provider/model-id"` sets the classifier model (e.g. a fast flash-class model); precedence is flag > env > config > session model (self-reflection); an invalid value falls back to the session model with a one-time warning
-- the spec accepts pi's native `--model` thinking suffix: `"zai/glm-5.3-flash:low"` sets classifier thinking to effort low (default without suffix: thinking explicitly off)
-- `toggleShortcut` rebinds the master-switch toggle key (`null` or empty disables it, not persisted)
-- first run generates a template at `~/.pi/agent/config/pi-verdict.json` (honors `PI_CODING_AGENT_DIR`)
+- `denyPaths` are plain paths you declare **protected** — touches trigger a terminal ask you adjudicate (non-interactive → deny); the classifier never learns the paths themselves, only that they exist
+- `builtinDenyFloor: false` turns off the built-in danger/path floor (your risk; the self-protection layer below always stays on)
+- `classifierModel` pins the classifier model, e.g. `"zai/glm-5.3-flash:low"` (thinking suffix supported; default: session model with thinking off)
 
-**Why no built-in allowlist?** Bypass testing of the rule layer ([writeup](research/rule-layer-security-audit.md)) showed that allowlist robustness is very limited. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+No built-in allowlist — every "always allow" claim is yours ([why](docs/configuration.md#why-no-built-in-allowlist)). Full reference: [docs/configuration.md](docs/configuration.md).
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
-The gate's own files — `config/pi-verdict.json` and the installed extension copy under `<agentDir>/extensions/` (anchored at runtime via `import.meta.url`; covers both single-file and npm-dir installs) — are **user-editable only**:
+The gate's own files — the config and the installed extension copy — are **user-editable only**: writes from inside the gate hard-deny (reads pass); your editor never passes through the gate, the sudoers/visudo precedent.
 
-- `write`/`edit` onto them → hard **deny** (realpath-normalized comparison, symlink indirection included); reads pass
-- bash/powershell commands touching them → **deny** (substring regex over literal/`~`/`$HOME`/`$PI_CODING_AGENT_DIR` spellings — honestly obfuscatable, see the backstop below)
-- **not disableable by any config**: `builtinDenyFloor: false` does not turn this off, and no user `allow` rule can override it. Rationale: user sovereignty is about the risk to *your system*, not about the integrity of the gate itself — a gate its own guarded object can switch off cannot honestly promise "risk accepted by you"
-- **tamper detection** (defense in depth): watched files are snapshotted at `session_start` and re-verified before every verdict, with differential disposal — the installed **extension copy** being changed (or any change in a headless session) is **auto-restored** from the snapshot and the session goes **fail-closed** (all tools denied) until restart; only the **config** changing in an interactive session offers a two-way select whose options state the action themselves: *Accept the new version* (re-baseline and continue — your edit survives, applies next session as usual) / *Decline* (restore the session baseline — revert + fail-closed); dismissing the dialog counts as Decline (safe side). Unconditional auto-restore would mean you can never edit the config while pi runs; warn-only would let a missed warning hand the next session to a tampered config — the rare, stern confirm is the middle path
-
-Since everything inside the gate is by definition agent-initiated, denying writes is exactly "only the user can modify" — your editor never passes through the gate. The sudoers/visudo precedent is the closest analogue.
+- **Not disableable by any config** — `builtinDenyFloor: false` and user `allow` rules cannot touch this layer
+- **Tamper detection** as the backstop: watched files are snapshotted at `session_start` and re-verified before every verdict — a changed extension copy is auto-restored and the session goes fail-closed; a changed config gets one explicit keep/restore confirm ([ADR-0001](docs/adr/0001-self-protection-layer.md) for the differential-disposal rationale)
 
 Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
 
@@ -123,9 +121,7 @@ Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) s
 
 Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · convergence analysis with the closest architectural relative: [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md).
 
-Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file (~1.2k lines and growing by features, still one file on purpose), and the measurement habit — every design decision in this repo is backed by shipped research.
-
-The single-file, zero-dependency shape is deliberate — the whole extension is one readable [file](extensions/auto-mode.ts), ~1.2k lines and growing with features.
+Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file ([one readable file](extensions/auto-mode.ts), still one file on purpose), and the measurement habit — every design decision in this repo is backed by shipped research.
 
 ## Pipeline
 
@@ -133,42 +129,28 @@ The single-file, zero-dependency shape is deliberate — the whole extension is 
 tool_call
   │
   ├─ 0. Self-protection layer (ADR-0001; not disableable by any config)
-  │     ├─ write/edit/bash touching the gate's own files
-  │     │   (config/pi-verdict.json + installed extension copy) → deny
-  │     │   reads pass; user edits outside pi never pass through the gate
-  │     └─ tamper detection: re-verify watched files before every verdict;
-  │         extension copy changed / headless → auto-restore from snapshot
-  │         + fail-closed (deny all) for the rest of the session;
-  │         config changed + interactive → one keep/restore confirm
+  │     ├─ write/edit/bash touching the gate's own files → deny; reads pass
+  │     └─ tamper detection: re-verify before every verdict →
+  │         auto-restore + fail-closed, or one keep/restore confirm
   │
   ├─ 1. Rule layer (deterministic, zero latency)
-  │     ├─ built-in deny floor: bash danger regexes (full-string, capped at 8192 chars) +
-  │     │   path sensitivity S0–S5 (secrets/system/.git meta → deny;
-  │     │   dual-form matching — lexical + realpath, symlink aliases resolve)
-  │     ├─ your rules: user deny beats user allow (regex, see below)
-  │     ├─ denyPaths (ADR-0002): user-declared protected paths, tool-owned
-  │     │   normalization (~, $HOME, relative, .., symlink, case on
-  │     │   macOS/Windows) → terminal ask,
+  │     ├─ built-in deny floor: bash danger regexes + path sensitivity S0–S5
+  │     ├─ your rules: user deny beats user allow
+  │     ├─ denyPaths (ADR-0002): protected paths → terminal ask,
   │     │   before user allow; classifier sees an existence hint only
   │     └─ no built-in allowlist — every "always allow" claim is yours to make
   │
   ├─ 2. Gray zone → model classifier (defaults to session model — "self-reflection")
-  │     ├─ input: CC-style <transcript> (last 5 user messages + last 10 tool calls,
-  │     │        action under review always last) — user intent is evidence
-  │     ├─ output contract: <verdict>allow|ask|deny</verdict> prefix-anchored
-  │     ├─ existence hint when denyPaths are configured: the classifier knows
-  │     │   protected paths exist (never what they are) and judges
-  │     │   copy-then-read/archiving/indirection strictly
-  │     ├─ thinking explicitly disabled (thinkingEnabled: false) + retry 512→1024
-  │     └─ configurable via --auto-mode-model
+  │     ├─ input: CC-style <transcript> — recent user intent + tool calls,
+  │     │        action under review always last
+  │     └─ output contract: <verdict>allow|ask|deny</verdict> prefix-anchored
   │
   └─ 3. Three-state adjudication
         ├─ allow → pass
         ├─ deny  → block, reason returned to the agent
-        └─ ask   → human confirm (ctx.ui.confirm); non-interactive modes degrade to deny
+        └─ ask   → human confirm; non-interactive modes degrade to deny
 
-  [shadow cache] (observe-only, runs alongside 2/3, never changes a verdict)
-        replays a double-key LRU(128) to measure would-be hit rate
+  [shadow cache] observe-only telemetry alongside 2/3, never changes a verdict
 ```
 
 **fail-closed**: classifier exception / timeout (25s) / contract violation → deny. Never silently allow.
