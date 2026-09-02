@@ -32,13 +32,34 @@ pi-verdict adds the missing gate: a model decides whether each call should run, 
 ## Quick start
 
 ```bash
-# install from npm:
+# install from npm (pi):
 pi install npm:pi-verdict
+
+# install from npm (oh-my-pi / omp):
+omp plugin install npm:pi-verdict
 
 # or directly from git — try it once
 pi --extension ./extensions/auto-mode.ts
 
 ```
+
+### Hosts
+
+pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — the extension self-anchors to whichever agent tree it is installed in:
+
+| | pi | omp |
+|---|---|---|
+| install | `pi install npm:pi-verdict` | `omp plugin install npm:pi-verdict` |
+| extension copy | `~/.pi/agent/extensions/` | `~/.omp/agent/plugins/node_modules/pi-verdict/` |
+| user rules | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
+| credential file (S0 hard deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
+
+`PI_CODING_AGENT_DIR` still overrides everything on both hosts. On a dual-install machine the gate follows the extension copy's own location — the mere presence of `~/.omp` never redirects a pi run (and vice versa).
+
+Two host differences worth knowing:
+
+- omp 18's `ModelRegistry` has no `complete` method, so the classifier resolves completion through the pi-ai compat module at first gray-zone verdict (`@earendil-works/pi-ai/compat`, which omp's legacy compat layer rewrites to its bundled pi-ai). Resolution or call failures follow the usual fail-closed deny.
+- Thinking control is sent in both hosts' native dialects (`thinkingEnabled`/`effort` for pi, `reasoning`/`disableReasoning` for omp); each host reads its own fields and ignores the other's.
 
 - `/automode` — show current status: on/off + shadow-cache stats for the session
 - `/automode on`

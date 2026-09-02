@@ -32,13 +32,34 @@ pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图�
 ## 快速开始
 
 ```bash
-# 从 npm 安装:
+# 从 npm 安装(pi):
 pi install npm:pi-verdict
+
+# 从 npm 安装(oh-my-pi / omp):
+omp plugin install npm:pi-verdict
 
 # 或直接从源码 —— 试用一次
 pi --extension ./extensions/auto-mode.ts
 
 ```
+
+### 宿主
+
+pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)(omp)——扩展按自身安装位置自锚定到所在宿主的目录树:
+
+| | pi | omp |
+|---|---|---|
+| 安装 | `pi install npm:pi-verdict` | `omp plugin install npm:pi-verdict` |
+| 扩展副本 | `~/.pi/agent/extensions/` | `~/.omp/agent/plugins/node_modules/pi-verdict/` |
+| 用户规则 | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
+| 凭据文件(S0 硬 deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
+
+`PI_CODING_AGENT_DIR` 在两个宿主上仍然覆盖一切。双宿主并存的机器上,门禁跟随扩展副本自身的位置——`~/.omp` 的存在不会让 pi 下的运行改道(反之亦然)。
+
+两个值得了解的宿主差异:
+
+- omp 18 的 `ModelRegistry` 没有 `complete` 方法,分类器会在首次灰区裁决时经 pi-ai compat 模块解析调用能力(`@earendil-works/pi-ai/compat`,omp 的 legacy 兼容层会把它重写到内置 pi-ai)。解析或调用失败走既有的 fail-closed deny。
+- 思考控制以两侧宿主的原生方言同时发送(pi 读 `thinkingEnabled`/`effort`,omp 读 `reasoning`/`disableReasoning`);各宿主只读自己的字段,忽略另一侧的。
 
 - `/automode` —— 显示当前状态:开/关 + 本会话影子缓存统计
 - `/automode on`

@@ -28,6 +28,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 `<agentDir>/config/pi-verdict.json` 中用户配置的 allow/deny 正则:deny 优先于 allow,黑名单命中即拦截;匹配目标为 bash 完整命令串 / 文件类工具的绝对路径。`builtinDenyFloor: false` 可整体关闭内置 deny floor(风险自担)。安全声明(「永远放行」)由用户背书而非作者。
 
+### agentDir 自锚定 (agentDir self-anchoring)
+
+`<agentDir>` 的解析纪律(#35,双宿主):`PI_CODING_AGENT_DIR` 显式覆盖恒优先;否则从扩展自身安装位置反推——位于 `<home>/<dot-dir>/agent/(plugins/node_modules/<pkg>/)?extensions/` 之下时锚定到 `<home>/<dot-dir>/agent`(覆盖 pi 的 `~/.pi/agent` 与 omp 的 `~/.omp/agent` 两种安装形态);无从锚定时回退 `~/.pi/agent`(dev checkout)。**禁止**以宿主目录树存在性探测代替自锚定:双宿主并存的机器上,`~/.omp` 的存在不得让 pi 下的运行改道。自保护层的安装副本判定与 S0 凭据 deny 规则随同一锚点覆盖两种宿主形态。
+
 ### denyPaths (受保护路径)
 
 用户在 config 中声明的敏感路径列表,是**路径语义声明**:归一化(`~` 展开、词法 resolve、realpath 消解符号链接,realpath 失败降级词法层,macOS/Windows 上大小写折叠)与路径段前缀比对由**工具负责**,提取范围覆盖文件类工具的绝对路径与 bash 命令串中可提取的路径 token。命中即 **ask 终局**(非交互降级 deny),优先于用户 allow、劣后于用户 deny 与内置 floor。与用户规则的 deny(正则黑名单,用户自负归一化假设)相对:同一安全声明,声明更强的通道。路径提取与命中判定全部在本地完成,分类器只见**存在性话术**(不知路径明文、不见命中调用的裁决)。_Avoid_: denyPath(单数)。泛指 "protected paths" 单独出现时易与自保护层的 protected files 混淆——本词条语境优先用全称 "user-declared protected path (denyPaths)" 或中文「受保护路径(用户声明)」。
