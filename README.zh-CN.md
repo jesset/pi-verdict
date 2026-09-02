@@ -22,11 +22,9 @@ pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图�
 
 ## 为什么是三态
 
-**verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」——目标是安全的自动化而非最大的自动化:审批疲劳与静默危险执行都是输家。
+**verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」——目标是安全的自动化而非最大的自动化:审批疲劳与静默危险执行都是危险。
 
 ## 设计原则
-
-一小组安全设计原则塑形了整个门禁——完整表述(含诚实的边界说明)见 [docs/security-principles.md](docs/security-principles.md):
 
 - **Fail closed**——不确定产生摩擦,绝不产生许可。
 - **确定性 floor 先于 AI**——硬 deny 永不被分类器或用户 allow 规则覆盖。
@@ -37,7 +35,12 @@ pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图�
 - **门禁守护自身**——任何配置都关不掉的自保护层(ADR-0001)。
 - **是权限门禁,不是沙箱**——请在上面叠加 OS 级隔离;本门禁不替代它。
 
+完整表述见 [docs/security-principles.md](docs/security-principles.md):
+
+
 ## 截图
+
+![演示:受保护路径 ask 被拒绝](docs/demo.gif)
 
 ![Automode Status](docs/images/status.png)
 ![Ask Permission](docs/images/asked.png)

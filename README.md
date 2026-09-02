@@ -26,8 +26,6 @@ pi-verdict adds the missing gate: a model decides whether each call should run, 
 
 ## Design principles
 
-A small set of security principles shapes the whole gate — the full statement, with the honest edges, lives in [docs/security-principles.md](docs/security-principles.md):
-
 - **Fail closed** — uncertainty produces friction, never permission.
 - **Deterministic floor before AI** — hard denies are never overridden by the classifier or user allow rules.
 - **Semantics over syntax** — a long read-only pipeline may auto-allow while a short destructive one still denies; the classifier judges what an action *does*, not how long it is.
@@ -37,7 +35,11 @@ A small set of security principles shapes the whole gate — the full statement,
 - **The gate guards itself** — self-protection that no configuration can disable (ADR-0001).
 - **A permission gate, not a sandbox** — stack OS isolation on top; this gate never replaces it.
 
+Full statement in [docs/security-principles.md](docs/security-principles.md).
+
 ## Screenshots
+
+![Demo: protected-path ask declined](docs/demo.gif)
 
 ![Automode Status](docs/images/status.png)
 ![Ask Permission](docs/images/asked.png)
