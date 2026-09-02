@@ -22,7 +22,20 @@ pi-verdict 补上这道缺失的门禁, 由模型基于上下文和你的意图�
 
 ## 为什么是三态
 
-**verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」。
+**verdict 是裁决,不是开关。** 本品类的分类器大多只输出二值 allow/block。三态有意义的地方在:`ask` 把真正含糊的动作转交人类确认(非交互会话中降级为 `deny`),「不确定」永远不会静默变成「放行」——目标是安全的自动化而非最大的自动化:审批疲劳与静默危险执行都是输家。
+
+## 设计原则
+
+一小组安全设计原则塑形了整个门禁——完整表述(含诚实的边界说明)见 [docs/security-principles.md](docs/security-principles.md):
+
+- **Fail closed**——不确定产生摩擦,绝不产生许可。
+- **确定性 floor 先于 AI**——硬 deny 永不被分类器或用户 allow 规则覆盖。
+- **语义优先于语法**——长而只读的管道可以自动放行,短而具破坏性的照样拦下;分类器判定的是动作**做什么**,而不是命令有多长。
+- **是判断,不是证明**——分类器的 `allow` 是有依据的判断;floor 的存在正因为它仅此而已。
+- **最小化可信输入**——transcript 不含工具结果(#22),分类器零路径明文(ADR-0002)。
+- **规范化身份**——词法 + realpath 双形匹配;「看起来在项目内」的路径不因此被信任(#20/#21)。
+- **门禁守护自身**——任何配置都关不掉的自保护层(ADR-0001)。
+- **是权限门禁,不是沙箱**——请在上面叠加 OS 级隔离;本门禁不替代它。
 
 ## 截图
 
@@ -45,7 +58,7 @@ pi --extension ./extensions/auto-mode.ts
 
 ### 宿主
 
-pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)(omp)——扩展按自身安装位置自锚定到所在宿主的目录树:
+pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)(omp)——扩展按自身安装位置自锚定到所在宿主的目录树,双宿主并存的机器上跟随扩展副本自身的位置。omp 18 下分类器的模型调用经 pi-ai compat API 降级(仍然 fail-closed)。细节见 [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi)。
 
 | | pi | omp |
 |---|---|---|
@@ -53,13 +66,6 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 | 扩展副本 | `~/.pi/agent/extensions/` | `~/.omp/agent/plugins/node_modules/pi-verdict/` |
 | 用户规则 | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
 | 凭据文件(S0 硬 deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
-
-`PI_CODING_AGENT_DIR` 在两个宿主上仍然覆盖一切。双宿主并存的机器上,门禁跟随扩展副本自身的位置——`~/.omp` 的存在不会让 pi 下的运行改道(反之亦然)。
-
-两个值得了解的宿主差异:
-
-- omp 18 的 `ModelRegistry` 没有 `complete` 方法,分类器会在首次灰区裁决时经 pi-ai compat 模块解析调用能力(`@earendil-works/pi-ai/compat`,omp 的 legacy 兼容层会把它重写到内置 pi-ai)。解析或调用失败走既有的 fail-closed deny。
-- 思考控制以两侧宿主的原生方言同时发送(pi 读 `thinkingEnabled`/`effort`,omp 读 `reasoning`/`disableReasoning`);各宿主只读自己的字段,忽略另一侧的。
 
 - `/automode` —— 显示当前状态:开/关 + 本会话影子缓存统计
 - `/automode on`
@@ -89,26 +95,18 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 ```
 
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
-- `denyPaths` 是你声明**受保护**的普通路径列表(非正则):任何触碰它们的工具调用——文件类工具取其路径、bash 从命令串提取路径 token——触发**终局 ask**,由你裁决(非交互会话降级 deny)。不受 `builtinDenyFloor: false` 影响
-  分类器只被告知受保护路径**存在**,路径明文永不出本机, 命中的路径**只**出现在本地确认弹窗。
-- `builtinDenyFloor: false` 可整体关闭内置危险/路径拦截(风险自担;分类器与你的规则仍在——下方自保护层永远开启)
-- `classifierModel: "provider/model-id"` 指定分类器模型(如轻量 flash 类);优先级 flag > env > config > 自省;无效值回退会话模型并一次性警告
-- spec 支持 pi 原生 `--model` 思考级别后缀:`"zai/glm-5.3-flash:low"` 将分类器思考设为 effort low(无后缀缺省 = 显式关思考)
-- `toggleShortcut` 重绑主开关快捷键(`null` 或空串禁用, 非持久化)
-- 首次运行自动生成模板 `~/.pi/agent/config/pi-verdict.json`(尊重 `PI_CODING_AGENT_DIR`)
+- `denyPaths` 是你声明**受保护**的普通路径列表:触碰触发**终局 ask** 由你裁决(非交互降级 deny);分类器只被告知路径**存在**,路径明文永不出本机
+- `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担;下方自保护层永远开启)
+- `classifierModel` 指定分类器模型,如 `"zai/glm-5.3-flash:low"`(支持思考后缀;缺省 = 会话模型且显式关思考)
 
-**为什么没有内置白名单?**对规则层的绕过测试(见 [`research/rule-layer-security-audit.md`](research/rule-layer-security-audit.md))证明白名单的健壮性非常有限。因此内置层只做 **deny** 声明(方向健全),allow 声明归你。
+没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 
-门禁自身的文件——`config/pi-verdict.json` 与 `<agentDir>/extensions/` 下的扩展安装副本(运行时经 `import.meta.url` 自锚定,覆盖单文件与 npm 目录两种安装形态)——**仅用户可改**:
+门禁自身的文件——配置与扩展安装副本——**仅用户可改**:门禁之内的写入一律硬 deny(读放行);你的编辑器修改不经门禁,最近的同构先例是 sudoers 必须经 visudo。
 
-- `write`/`edit` 触碰 → 硬 **deny**(realpath 归一化比对,含符号链接间接路径);读放行
-- bash/powershell 命令串触碰 → **deny**(字面量/`~`/`$HOME`/`$PI_CODING_AGENT_DIR` 拼写的子串正则——诚实声明:可被混淆绕过,见下方兜底)
-- **不可经任何配置关闭**:`builtinDenyFloor: false` 关不掉它,任何用户 `allow` 规则也越不过它。理由:用户主权豁免的对象是「我的系统的风险」,不是门禁自身的完整性——一个能被其守护对象关掉的门禁,无法诚实兑现「风险自担」的承诺
-- **变更检测**(纵深兜底):受保护文件在 `session_start` 快照、每次裁决前复核,处置按文件差分——**扩展副本**被改(或 headless 会话中的任何变更)→ 从快照**自动还原** + 本会话 **fail-closed**(全量拦截)直至重启;交互会话中仅**配置文件**被改 → 弹一次双选,选项文案即动作本身:*接受新版本*(重建基线、会话照常——你的编辑得以保留,照旧下一会话生效)/*拒绝*(还原会话基线:回滚 + fail-closed);关闭对话框等同拒绝(安全侧)。无条件自动还原等于「pi 运行期间你永远改不了配置」;纯警告则可能让被忽略的警告把下一会话交给被篡改的配置——罕见而郑重的一次确认是中间道路
-
-门禁之内的一切写入按定义均由 agent 发发——deny 写入即等价于「仅用户可改」,你的编辑器修改不经门禁。最近的同构先例是 sudoers 必须经 visudo。
+- **不可经任何配置关闭**——`builtinDenyFloor: false` 与用户 `allow` 规则都动不了这一层
+- **变更检测**作纵深兜底:受保护文件在 `session_start` 快照、每次裁决前复核——扩展副本被改 → 自动还原 + 本会话 fail-closed;配置被改 → 一次明确的双选确认(差分处置的完整语义见 [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
 需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
 
@@ -123,9 +121,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 
 完整全景:[`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · 与最近架构亲缘的收敛分析:[`research/pi-automode-convergence.md`](research/pi-automode-convergence.md)。
 
-诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖单文件(~1.2k 行,随功能增长,仍刻意单文件)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
-
-零依赖单文件形态是有意为之——整个扩展就是一个可通读的[单文件](extensions/auto-mode.ts),~1.2k 行,随功能增长。
+诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖的[可通读单文件](extensions/auto-mode.ts)(仍刻意单文件)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
 
 ## 管线
 
@@ -133,39 +129,28 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 tool_call
   │
   ├─ 0. 自保护层(ADR-0001;不可经任何配置关闭)
-  │     ├─ write/edit/bash 触碰门禁自身文件
-  │     │   (config/pi-verdict.json + 扩展安装副本)→ deny
-  │     │   读放行;用户在 pi 之外的编辑不经门禁
-  │     └─ 变更检测:每次裁决前复核受保护文件;
-  │         扩展副本被改 / headless → 从会话快照自动还原
-  │         + 本会话 fail-closed(全量拦截);
-  │         仅配置被改且有 UI → 一次保留/还原确认
+  │     ├─ write/edit/bash 触碰门禁自身文件 → deny;读放行
+  │     └─ 变更检测:每次裁决前复核 →
+  │         自动还原 + fail-closed,或一次保留/还原确认
   │
   ├─ 1. 规则层(确定性,零延迟)
-  │     ├─ 内置 deny floor:bash 危险正则(完整命令串,截断上限 8192 字符)+ 路径敏感度 S0–S5
-  │     │   (双形匹配 —— 词法 + realpath,符号链接别名会被解析)
-  │     ├─ 用户规则:deny 优先于 allow(正则,见下)
-  │     ├─ denyPaths(ADR-0002):用户声明的受保护路径,工具负责归一化
-  │     │   (~、$HOME、相对、..、symlink、macOS/Windows 大小写)→ 终局 ask,先于用户 allow;
+  │     ├─ 内置 deny floor:bash 危险正则 + 路径敏感度 S0–S5
+  │     ├─ 用户规则:deny 优先于 allow
+  │     ├─ denyPaths(ADR-0002):受保护路径 → 终局 ask,先于用户 allow;
   │     │   分类器只见存在性话术
   │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
   ├─ 2. 灰区 → 模型分类器(默认继承会话模型 —— "自省")
-  │     ├─ 输入:CC 风格 <transcript>(最近 5 条用户消息 + 最近 10 次工具调用,
-  │     │        待审动作固定在末尾)—— 用户意图是证据
-  │     ├─ 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
-  │     ├─ 配置了 denyPaths 时注入存在性话术:分类器知道受保护路径存在
-  │     │   (永不知其内容),对先拷贝再读取/打包/间接引用从紧裁决
-  │     ├─ 显式关思考(thinkingEnabled: false)+ 两档重试 512→1024
-  │     └─ 可用 --auto-mode-model 配置
+  │     ├─ 输入:CC 风格 <transcript> —— 近期用户意图 + 工具调用,
+  │     │        待审动作固定在末尾
+  │     └─ 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
   │
   └─ 3. 三态裁决
         ├─ allow → 放行
         ├─ deny  → 拦截,理由回传 agent
-        └─ ask   → 人工确认(ctx.ui.confirm);非交互模式降级为 deny
+        └─ ask   → 人工确认;非交互模式降级为 deny
 
-  [影子缓存](observe-only,与 2/3 并行,永不改变裁决)
-        回放双键 LRU(128)测量 would-be 命中率
+  [影子缓存] observe-only 遥测,与 2/3 并行,永不改变裁决
 ```
 
 **fail-closed**:分类器异常 / 超时(25s)/ 输出违反契约 → 拦截,绝不静默放行。
