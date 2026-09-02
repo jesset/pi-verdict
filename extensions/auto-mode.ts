@@ -204,8 +204,45 @@ interface UserRules {
 
 const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT };
 
+/** This module's own file location (import.meta.url resolved; null = unresolvable). */
+const OWN_FILE_PATH: string | null = (() => {
+	try {
+		return fileURLToPath(import.meta.url);
+	} catch {
+		return null;
+	}
+})();
+
+/**
+ * Resolve the agent directory the gate is anchored to (#35, dual-host):
+ *   1. PI_CODING_AGENT_DIR — explicit user override, always wins.
+ *   2. Self-anchoring from the extension's own installed path: a copy at
+ *      <home>/<dot-dir>/agent/(plugins/node_modules/<pkg>/)?extensions/…
+ *      anchors to <home>/<dot-dir>/agent. Covers the pi forms
+ *      (~/.pi/agent/extensions[/pkg]/…) and the omp npm form
+ *      (~/.omp/agent/plugins/node_modules/<pkg>/extensions/…); XDG-style
+ *      ~/.config/pi trees match too because the anchor accepts any dot-dir.
+ *      Deliberately NO host-tree existence probing: on a dual-install machine
+ *      running under pi, a present ~/.omp must not misroute the gate.
+ *   3. Fallback: today's default (~/.pi/agent) — dev checkouts and any
+ *      unanchored location.
+ * Both the lexical and the realpath form of ownFile are tried (symlinked
+ * agent trees, macOS firmlink homes).
+ */
+export function resolveAgentDir(ownFile: string | null, home: string, envAgentDir: string | undefined): string {
+	if (envAgentDir) return envAgentDir;
+	if (ownFile) {
+		const anchor = new RegExp(`^${escapeRegExp(home)}(/(\\.[^/]+)/agent/(?:plugins/node_modules/(?:@[^/]+/)?[^/]+/)?extensions/)`);
+		for (const f of [ownFile, tryRealpath(ownFile)]) {
+			const m = f.match(anchor);
+			if (m) return path.join(home, m[2], "agent");
+		}
+	}
+	return path.join(home, ".pi", "agent");
+}
+
 function agentDirPath(): string {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+	return resolveAgentDir(OWN_FILE_PATH, os.homedir(), process.env.PI_CODING_AGENT_DIR);
 }
 
 function userConfigPath(): string {
@@ -298,7 +335,7 @@ function expandHome(p: string): string {
 // the occasional false positive fails toward deny (safe direction).
 const S0_SECRET = [
 	/\.ssh(\/|$)/i, /\.aws(\/|$)/i, /\.gnupg(\/|$)/i, /(^|\/)\.env(\.|$)/i, /credentials?(\.|\/|$)/i,
-	/(^|\/)id_rsa/i, /\.pem$/i, /_history$/i, /\.config\/gh(\/|$)/i, /\.pi\/agent\/auth\.json$/i,
+	/(^|\/)id_rsa/i, /\.pem$/i, /_history$/i, /\.config\/gh(\/|$)/i, /\.(?:pi|omp)\/agent\/auth\.json$/i,
 	// V8(安全审计):常见明文凭证文件补全
 	/(^|\/)\.netrc$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.pypirc$/i, /(^|\/)\.envrc$/i, /(^|\/)\.vault-token$/i,
 	/\.kube(\/|$)/i, /\.docker\/config\.json$/i, /\.gem\/credentials$/i,
@@ -469,8 +506,10 @@ function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: str
 // 门禁自身的完整性不受任何配置豁免:builtinDenyFloor:false 只关危险正则与路径
 // 敏感度,关不掉本层;用户 allow 规则亦不可越过。保护对象:
 //   - <agentDir>/config/pi-verdict.json(用户规则 = 门禁的判定输入)
-//   - 本扩展的安装副本(<agentDir>/extensions/ 下;自锚定 import.meta.url,
-//     覆盖单文件与 npm 包目录两种安装形态;dev checkout 不在此列)
+//   - 本扩展的安装副本(pi installs under <agentDir>/extensions/, omp under
+//     <agentDir>/plugins/node_modules/<pkg>/; self-anchored via import.meta.url,
+//     covering the single-file and npm package-dir install forms; dev
+//     checkouts are not in scope)
 // 语义:门禁内一切写入按定义均由 agent 发起 → 恒 deny(reason 指引手工编辑);
 // 读放行(读门禁文件无害);用户经编辑器的修改不经门禁,不受影响。
 // bash 侧:命令串正则覆盖字面量/~/\$HOME/\$PI_CODING_AGENT_DIR 变体,可被混淆
@@ -517,8 +556,10 @@ function escapeRegExp(s: string): string {
 /**
  * 构建受保护集合。
  * ownFile:本模块文件路径(import.meta.url 解析;null = 不可解析,仅保护配置)。
- * 仅当 ownFile 位于 <agentDir>/extensions/ 之下才视为安装副本加以保护:
- * dev checkout(cwd 内源码)不保护——项目内开发写入是合法日常(ADR-0001)。
+ * The installed copy is protected only when ownFile sits under
+ * <agentDir>/extensions/ (pi) or <agentDir>/plugins/node_modules/<pkg>/
+ * (omp npm form, #35). Dev checkouts (source inside the cwd) are NOT
+ * protected — in-project development writes are legitimate daily work (ADR-0001).
  */
 export function buildProtectedSet(agentDir: string, ownFile: string | null): ProtectedSet {
 	const exact = new Set<string>();
@@ -572,7 +613,20 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		watchBases.push({ file: ownFile, kind: "extension" });
 		const seenWatch = new Set<string>([ownFile]);
 		let pkgRoot: string | null = null;
-		const extRoots = new Set([path.join(agentDir, "extensions"), tryRealpath(path.join(agentDir, "extensions"))]);
+		// Install roots, lexical + realpath forms (#35): pi installs under
+		// <agentDir>/extensions/, omp installs npm plugins under
+		// <agentDir>/plugins/node_modules/. First path segment under the matched
+		// root is the install target (single file → exact, package dir → prefix),
+		// so the omp form gets whole-package-dir protection exactly like the pi
+		// npm-dir form (#26).
+		const extRoots = new Set<string>();
+		for (const seg of [["extensions"], ["plugins", "node_modules"]]) {
+			for (const base of new Set([agentDir, tryRealpath(agentDir)])) {
+				const root = path.join(base, ...seg);
+				extRoots.add(root);
+				extRoots.add(tryRealpath(root));
+			}
+		}
 		const ownForms = new Set([ownFile, tryRealpath(ownFile)]);
 		for (const extRoot of extRoots) {
 			for (const own of ownForms) {
@@ -840,9 +894,60 @@ const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(
 const CLASSIFIER_MAX_TOKENS = 512;
 const CLASSIFIER_RETRY_MAX_TOKENS = 1024; // 防御重试档:覆盖无视 reasoning:off 或轻思考仍超预算的模型
 
+/**
+ * Minimal structural shape of a completion call (#35). pi exposes it as
+ * ModelRegistry.complete; omp 18 does not, but the pi-ai compat module exports
+ * a functionally identical `complete`. Options pass through verbatim on both
+ * hosts (thinkingEnabled/effort/cacheRetention included — see
+ * research/thinking-param-blackhole.md for why API-native fields matter).
+ */
+export type CompletionFn = (
+	model: NonNullable<ExtensionContext["model"]>,
+	context: { systemPrompt?: string; messages: unknown[] },
+	options?: Record<string, unknown>,
+) => Promise<{ content: Array<{ type: string; text: string }>; stopReason?: string }>;
+
+type CompatLoader = () => Promise<{ complete: CompletionFn }>;
+
+/**
+ * Bind the host runtime's completion capability (#35): registry.complete when
+ * present (pi), else the pi-ai compat module (omp 18). The literal dynamic
+ * import specifier must stay inline — omp's legacy compat rewrites exactly
+ * this literal to its bundled pi-ai; the ./compat subpath also exists on pi,
+ * so resolution is safe on both hosts. The loader promise is cached; any
+ * rejection propagates to the caller (the classifier's fail-closed path owns it).
+ */
+export function bindCompletion(
+	registry: { complete?: unknown },
+	compatLoader: CompatLoader = () => import("@earendil-works/pi-ai/compat") as Promise<{ complete: CompletionFn }>,
+): CompletionFn {
+	if (typeof registry.complete === "function") {
+		const complete = registry.complete as CompletionFn;
+		return (m, c, o) => complete.call(registry, m, c, o);
+	}
+	let compat: Promise<{ complete: CompletionFn }> | undefined;
+	return async (m, c, o) => {
+		compat ??= compatLoader();
+		const { complete } = await compat;
+		return complete(m, c, o);
+	};
+}
+
+// Session-lifetime cache keyed by registry instance: resolve once per registry.
+const completionCache = new WeakMap<object, CompletionFn>();
+function completionFor(registry: { complete?: unknown }, compatLoader?: CompatLoader): CompletionFn {
+	let fn = completionCache.get(registry);
+	if (!fn) {
+		fn = bindCompletion(registry, compatLoader);
+		completionCache.set(registry, fn);
+	}
+	return fn;
+}
+
 /** 单次分类器调用:显式 reasoning:"off"(见下方注释),失败返回错误串而非抛出 */
 async function callClassifierOnce(
 	ctx: ExtensionContext,
+	complete: CompletionFn,
 	model: NonNullable<ExtensionContext["model"]>,
 	userMessage: string,
 	maxTokens: number,
@@ -852,7 +957,7 @@ async function callClassifierOnce(
 	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
 	if (ctx.signal) signals.push(ctx.signal);
 	try {
-		const response = await ctx.modelRegistry.complete(
+		const response = await complete(
 			model,
 			{
 				systemPrompt,
@@ -862,14 +967,25 @@ async function callClassifierOnce(
 				signal: AbortSignal.any(signals),
 				maxTokens,
 				temperature: 0,
-				// 思考参数必须用 API 原生字段(thinkingEnabled/effort),而非 reasoning
-				// (API 层 complete() 无此字段,宽类型索引签名静默放行后运行时丢弃——见
-				// research/thinking-param-blackhole.md)。
-				// 缺省 off = 显式关思考(实证送达 thinking:{"type":"disabled"},GLM 降为
-				// effort low 轻思考);后缀级别经 adaptive effort 送达(minimal→low 映射)。
+				// Thinking params go out in both hosts' native dialects (#35):
+				// pi's registry.complete consumes thinkingEnabled/effort (the
+				// API-native fields, per the blackhole findings in
+				// research/thinking-param-blackhole.md); omp's compat complete
+				// consumes reasoning/disableReasoning. Both sides ignore unknown
+				// option fields, so dual-send lets each host pick its own.
+				// pi off = explicitly disabled (verified to send
+				// thinking:{"type":"disabled"}; GLM downgrades to effort-low light
+				// thinking); suffix levels arrive via adaptive effort (minimal→low).
+				// omp off = disableReasoning (without it, an absent `reasoning`
+				// leaves the model default undefined); level vocabularies share the
+				// ThinkingLevel word list, reasoning passes through as-is.
 				...(thinking === "off"
-					? { thinkingEnabled: false }
-					: { thinkingEnabled: true, effort: thinking === "minimal" ? ("low" as const) : thinking }),
+					? { thinkingEnabled: false, disableReasoning: true }
+					: {
+							thinkingEnabled: true,
+							effort: thinking === "minimal" ? ("low" as const) : thinking,
+							reasoning: thinking === "minimal" ? ("low" as const) : thinking,
+						}),
 				cacheRetention: "short",
 				sessionId: ctx.sessionManager.getSessionId(),
 			},
@@ -878,7 +994,7 @@ async function callClassifierOnce(
 			.filter((b) => b.type === "text")
 			.map((b) => b.text)
 			.join("");
-		return { ok: true, text, stopReason: response.stopReason };
+		return { ok: true, text, stopReason: response.stopReason ?? "unknown" };
 	} catch (err) {
 		return { ok: false, error: err instanceof Error ? err.message : String(err) };
 	}
@@ -892,6 +1008,7 @@ async function callClassifierOnce(
  */
 async function classifyWithModel(
 	ctx: ExtensionContext,
+	complete: CompletionFn,
 	model: NonNullable<ExtensionContext["model"]>,
 	actionLine: string,
 	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off",
@@ -904,7 +1021,7 @@ async function classifyWithModel(
 	const failures: string[] = [];
 	for (const [n, maxTokens] of attempts) {
 		if (ctx.signal?.aborted) break; // 用户已取消,不再重试
-		const r = await callClassifierOnce(ctx, model, userMessage, maxTokens, thinking, systemPrompt);
+		const r = await callClassifierOnce(ctx, complete, model, userMessage, maxTokens, thinking, systemPrompt);
 		if (r.ok) {
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
@@ -1044,7 +1161,12 @@ function shadowTag(probe: ShadowProbe): string {
 // 扩展主体
 // ============================================================================
 
-export default function autoMode(pi: ExtensionAPI) {
+/** Optional dependency injection for tests (#35): fake the compat fallback loader. */
+export interface AutoModeDeps {
+	compatLoader?: CompatLoader;
+}
+
+export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	pi.registerFlag("auto-mode", { description: "Enable Auto Mode (rules + model classifier gating for tool calls)", type: "boolean", default: true });
 	pi.registerFlag("auto-mode-model", { description: "Classifier model as provider/id[:thinking] (pi --model syntax; default: inherit session model)", type: "string" });
 	pi.registerFlag("auto-mode-debug", { description: "Notify every verdict incl. allows, with shadow-cache annotation", type: "boolean", default: false });
@@ -1063,15 +1185,9 @@ export default function autoMode(pi: ExtensionAPI) {
 		return denyPathBases;
 	};
 
-	// 自保护层(ADR-0001):受保护集合自锚定 + 变更检测基线(会话内存态)
-	const ownFilePath = (() => {
-		try {
-			return fileURLToPath(import.meta.url);
-		} catch {
-			return null;
-		}
-	})();
-	const prot = buildProtectedSet(agentDirPath(), ownFilePath);
+	// Self-protection layer (ADR-0001): self-anchored protected set + tamper
+	// baseline (in-memory, per session)
+	const prot = buildProtectedSet(agentDirPath(), OWN_FILE_PATH);
 	let snapshots = takeSnapshots(prot.watchBases);
 	let tampered = false;
 
@@ -1303,7 +1419,7 @@ export default function autoMode(pi: ExtensionAPI) {
 		const ctxKey = shadowContextKey(ctx);
 		const probe = shadow.probe(cmdKey, ctxKey);
 
-		const outcome = await classifyWithModel(ctx, model, action, classifierThinking, userRules.denyPaths.length > 0);
+		const outcome = await classifyWithModel(ctx, completionFor(ctx.modelRegistry, deps.compatLoader), model, action, classifierThinking, userRules.denyPaths.length > 0);
 
 		// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
 		// 命中且本次为可缓存裁决时,对比反事实一致性

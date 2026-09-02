@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { BASH_MAX_MATCH_LEN, buildProtectedSet, isProtectedWritePath } from "../extensions/auto-mode.ts";
+import autoMode, { BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir } from "../extensions/auto-mode.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -30,10 +30,10 @@ interface Harness {
 	confirmMsgs: string[];
 	confirmAnswer: boolean;
 	findMap: Record<string, any> | undefined;
-	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => void;
+	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string; compatLoader?: () => Promise<{ complete: any }> }) => void;
 }
 
-function makeHarness(cwd: string = "/proj"): Harness {
+function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): Harness {
 	const handlers: Record<string, any> = {};
 	const commands: Record<string, any> = {};
 	const shortcuts: Record<string, any> = {};
@@ -48,12 +48,16 @@ function makeHarness(cwd: string = "/proj"): Harness {
 		cwd, hasUI: true, signal: undefined, model: { id: "mock/glm" },
 		sessionManager: { getBranch: () => branch, getSessionId: () => "s1" },
 		modelRegistry: {
-			complete: async (_m: any, _req: any, opts: any) => {
-				h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort, systemPrompt: _req?.systemPrompt ?? null, messages: _req?.messages ?? [] });
-				const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
-				if (r instanceof Error) throw r;
-				return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
-			},
+			// omp 18 shape (#35): no `complete` on the registry — the extension must
+			// resolve completion through the compat fallback instead
+			...(opts?.ompRegistry ? {} : {
+				complete: async (_m: any, _req: any, opts: any) => {
+					h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort, systemPrompt: _req?.systemPrompt ?? null, messages: _req?.messages ?? [] });
+					const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
+					if (r instanceof Error) throw r;
+					return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
+				},
+			}),
 			find: (p: string, id: string) => h.findMap?.[`${p}/${id}`] ?? null,
 			hasConfiguredAuth: () => true,
 		},
@@ -66,7 +70,7 @@ function makeHarness(cwd: string = "/proj"): Harness {
 	};
 	h.ctx = ctx;
 
-	h.install = (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string }) => {
+	h.install = (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string; compatLoader?: () => Promise<{ complete: any }> }) => {
 		flags = { "auto-mode": opts?.flag ?? true, "auto-mode-debug": opts?.debug ?? false, ...(opts?.modelFlag ? { "auto-mode-model": opts.modelFlag } : {}) };
 		const prev = process.env.PI_AUTO_MODE_DEBUG;
 		if (opts?.debug) process.env.PI_AUTO_MODE_DEBUG = "1"; else delete process.env.PI_AUTO_MODE_DEBUG;
@@ -76,7 +80,7 @@ function makeHarness(cwd: string = "/proj"): Harness {
 			on: (e: string, fn: any) => { handlers[e] = fn; },
 			registerCommand: (n: string, c: any) => { commands[n] = c; },
 			registerShortcut: (k: string, o: any) => { shortcuts[k] = o; },
-		} as any);
+		} as any, opts?.compatLoader ? { compatLoader: opts.compatLoader } : {});
 		if (prev !== undefined) process.env.PI_AUTO_MODE_DEBUG = prev; else delete process.env.PI_AUTO_MODE_DEBUG;
 	};
 	return h as Harness;
@@ -1324,5 +1328,247 @@ describe("denyPaths (ADR-0002)", () => {
 		const r = await toolCall(h, "read", { path: "sensitive-rel/x.md" }); // resolves to /proj/sub/sensitive-rel/… — NOT the anchored base
 		expect(h.confirms).toBe(0);
 		expect(r).toBeUndefined(); // rule-layer allow (non-S0/S1 read): the declaration did not follow the cwd
+	});
+});
+
+// ── 11. omp 宿主支持(#35:completion 降级 / agentDir 自锚定 / omp 形态保护)──
+
+describe("completion fallback (omp runtime shape, #35)", () => {
+	test("bindCompletion: registry with complete binds it directly, loader untouched", async () => {
+		let loads = 0;
+		const registry = {
+			complete: async () => { loads += 1000; return { content: [{ type: "text", text: "x" }] }; },
+		};
+		const fn = bindCompletion(registry, () => { loads += 1; return Promise.resolve({ complete: async () => ({ content: [] }) }); });
+		await fn({ id: "m" } as any, { systemPrompt: "s", messages: [] }, { maxTokens: 5 });
+		expect(loads).toBe(1000); // registry path taken, loader never invoked
+	});
+
+	test("bindCompletion: registry without complete falls back to the compat loader, options passed through", async () => {
+		const seen: any[] = [];
+		const compat = {
+			complete: async (m: any, c: any, o: any) => {
+				seen.push({ m, c, o });
+				return { content: [{ type: "text", text: "<verdict>deny</verdict> t" }], stopReason: "stop" };
+			},
+		};
+		let loads = 0;
+		const fn = bindCompletion({}, async () => { loads += 1; return compat; });
+		const r1 = await fn({ id: "mock/glm" } as any, { systemPrompt: "sys", messages: [{ role: "user", content: "q" }] }, { signal: "s", maxTokens: 512, temperature: 0, thinkingEnabled: false, cacheRetention: "short", sessionId: "s1" });
+		const r2 = await fn({ id: "mock/glm" } as any, { systemPrompt: "sys", messages: [] }, { maxTokens: 1024 });
+		expect(loads).toBe(1); // loader resolved once, then cached
+		expect(seen.length).toBe(2);
+		expect(seen[0].o.maxTokens).toBe(512);
+		expect(seen[0].o.thinkingEnabled).toBe(false);
+		expect(seen[0].o.cacheRetention).toBe("short");
+		expect(seen[1].o.maxTokens).toBe(1024);
+		expect(r1.stopReason).toBe("stop");
+	});
+
+	test("bindCompletion: loader rejection bubbles to the caller (fail-closed path owns it)", async () => {
+		const fn = bindCompletion({}, () => Promise.reject(new Error("compat module unavailable")));
+		await expect(fn({ id: "m" } as any, { systemPrompt: "s", messages: [] })).rejects.toThrow("compat module unavailable");
+	});
+
+	test("gray zone on an omp-shaped registry adjudicates via the compat loader", async () => {
+		setConfig({});
+		const compatCalls: any[] = [];
+		const compatLoader = async () => ({
+			complete: async (m: any, _c: any, o: any) => {
+				compatCalls.push({ model: m?.id, maxTokens: o.maxTokens, temperature: o.temperature, thinkingEnabled: o.thinkingEnabled, disableReasoning: o.disableReasoning, sessionId: o.sessionId });
+				return { content: [{ type: "text", text: "<verdict>deny</verdict> classifier says no" }], stopReason: "stop" };
+			},
+		});
+		const h = makeHarness("/proj", { ompRegistry: true });
+		h.install({ compatLoader });
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" }); // ordinary command → gray zone
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("classifier says no");
+		expect(compatCalls.length).toBe(1);
+		expect(compatCalls[0].model).toBe("mock/glm");
+		expect(compatCalls[0].maxTokens).toBe(512);
+		expect(compatCalls[0].temperature).toBe(0);
+		expect(compatCalls[0].thinkingEnabled).toBe(false);
+		expect(compatCalls[0].disableReasoning).toBe(true); // omp-native off dialect
+		expect(typeof compatCalls[0].sessionId).toBe("string");
+	});
+
+	test("omp fallback forwards the omp-native reasoning dialect for a thinking-suffixed classifier model", async () => {
+		setConfig({ classifierModel: "mock/glm:medium" });
+		const seen: any[] = [];
+		const h = makeHarness("/proj", { ompRegistry: true });
+		h.install({ compatLoader: async () => ({
+			complete: async (_m: any, _c: any, o: any) => {
+				seen.push(o);
+				return { content: [{ type: "text", text: "<verdict>allow</verdict> ok" }], stopReason: "stop" };
+			},
+		}) });
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(seen.length).toBe(1);
+		expect(seen[0].thinkingEnabled).toBe(true); // pi dialect still present
+		expect(seen[0].effort).toBe("medium");
+		expect(seen[0].reasoning).toBe("medium"); // omp dialect
+	});
+
+	test("compat loader failure → fail-closed deny with notify (both retry attempts share the cached rejection)", async () => {
+		setConfig({});
+		let loads = 0;
+		const h = makeHarness("/proj", { ompRegistry: true });
+		h.install({ compatLoader: async () => { loads += 1; throw new Error("boom"); } });
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("fail-closed");
+		expect(r.reason).toContain("boom");
+		expect(h.notifies.some(([m]) => m.includes("Auto Mode blocked"))).toBe(true);
+		expect(loads).toBe(1); // loader promise cached across the two retry attempts
+	});
+
+	test("pi-shaped registry never touches the compat loader (regression)", async () => {
+		setConfig({});
+		let loads = 0;
+		const h = makeHarness("/proj"); // registry has complete
+		h.install({ compatLoader: async () => { loads += 1; throw new Error("loader must not run"); } });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+		expect(loads).toBe(0);
+	});
+});
+
+describe("agentDir self-anchoring (#35)", () => {
+	const HOME = os.homedir();
+
+	test("omp npm install form anchors to the omp agent dir", () => {
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
+	});
+
+	test("omp scoped-package form (@scope/pkg) anchors the same way", () => {
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
+	});
+
+	test("pi single-file install form anchors to the pi agent dir", () => {
+		const own = path.join(HOME, ".pi", "agent", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+	});
+
+	test("pi npm dir install form anchors to the pi agent dir", () => {
+		const own = path.join(HOME, ".pi", "agent", "extensions", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+	});
+
+	test("PI_CODING_AGENT_DIR wins over anchoring", () => {
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, "/custom/agent")).toBe("/custom/agent");
+	});
+
+	test("dual install: a ~/.omp tree existing must not redirect a pi-anchored run", () => {
+		// The resolver never probes for host trees; presence of ~/.omp is irrelevant
+		// when the extension copy itself lives under ~/.pi (the misrouting trap #35 closes).
+		const piOwn = path.join(HOME, ".pi", "agent", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(piOwn, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+	});
+
+	test("dev checkout (no agent anchor in the path) falls back to ~/.pi/agent", () => {
+		expect(resolveAgentDir("/repo/extensions/auto-mode.ts", HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+		expect(resolveAgentDir(null, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+	});
+
+	test("anchoring also works on the realpath form (symlinked agent tree)", () => {
+		// lexical form carries no anchor; realpath resolves through a symlinked home-relative dir
+		const base = fs.mkdtempSync(path.join(HOME, ".pv-anchor-"));
+		try {
+			const agent = path.join(base, "agent");
+			const linked = path.join(base, "linked");
+			fs.mkdirSync(path.join(agent, "extensions"), { recursive: true });
+			fs.symlinkSync(agent, linked);
+			const own = path.join(linked, "extensions", "auto-mode.ts");
+			fs.writeFileSync(own, "// stub");
+			const resolved = resolveAgentDir(own, HOME, undefined);
+			expect(resolved === path.join(base, "agent") || resolved === path.join(HOME, ".pi", "agent")).toBe(true);
+			// the realpath form must match even though the lexical form does not start with <home>/<dot-dir>
+			expect(resolveAgentDir(fs.realpathSync(own), HOME, undefined)).toBe(fs.realpathSync(base) + "/agent".replace("/", path.sep));
+		} finally { fs.rmSync(base, { recursive: true, force: true }); }
+	});
+});
+
+describe("omp host forms: S0 floor + self-protection (#35)", () => {
+	const HOME = os.homedir();
+	const OMP_AUTH = path.join(HOME, ".omp", "agent", "auth.json");
+	const PI_AUTH = path.join(HOME, ".pi", "agent", "auth.json");
+
+	test("read ~/.omp/agent/auth.json → S0 deny, zero model calls", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: OMP_AUTH });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("write ~/.omp/agent/auth.json → S0 deny", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "write", { path: OMP_AUTH, content: "{}" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("read ~/.pi/agent/auth.json still denies (regression, pi host)", async () => {
+		setConfig({});
+		const h = makeHarness(); h.install();
+		const r = await toolCall(h, "read", { path: PI_AUTH });
+		expect(r?.block).toBe(true);
+	});
+
+	test("buildProtectedSet omp npm form: whole package dir as write-protected prefix + tamper watch", () => {
+		const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pv-omp-"));
+		try {
+			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
+			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
+			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
+			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			fs.writeFileSync(own, "// stub");
+			const s = buildProtectedSet(agent, own);
+			const pkgReal = fs.realpathSync(pkgDir);
+			expect(s.prefixes).toContain(pkgReal);
+			expect(isProtectedWritePath(path.join(pkgDir, "package.json"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(pkgDir, "extensions", "auto-mode.ts"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(agent, "plugins", "node_modules", "other-pkg", "x.ts"), "/proj", s)).toBe(false); // outside the package
+			const watched = s.watchBases.filter((w) => w.kind === "extension").map((w) => w.file);
+			expect(watched).toContain(path.join(pkgDir, "package.json"));
+			expect(watched).toContain(own);
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
+	});
+
+	test("omp single-file form under plugins/node_modules is NOT misclassified as single-file exact (dir form wins)", () => {
+		// ownFile deeper than <pkgRoot>/extensions must still protect the whole package dir,
+		// mirroring the pi npm-dir semantics (first segment under the install root)
+		const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pv-omp2-"));
+		try {
+			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
+			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
+			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			fs.writeFileSync(own, "// stub");
+			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
+			const s = buildProtectedSet(agent, own);
+			expect(s.prefixes).toContain(fs.realpathSync(pkgDir));
+			expect(s.exact).not.toContain(fs.realpathSync(own)); // package-dir prefix, not per-file exact
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
+	});
+
+	test("bash variant: $PI_CODING_AGENT_DIR spelling covers the omp install copy", () => {
+		const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pv-omp3-"));
+		try {
+			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
+			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
+			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			fs.writeFileSync(own, "// stub");
+			const s = buildProtectedSet(agent, own);
+			const rel = path.join("plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+			expect(s.bashPatterns.some((re) => re.test(`cat $PI_CODING_AGENT_DIR/${rel}`))).toBe(true);
+		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
 	});
 });

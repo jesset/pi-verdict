@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+
+- oh-my-pi (omp) host support (#35): the extension self-anchors to whichever agent tree it is installed in — user rules, self-protection, and the S0 credential deny now cover `~/.omp/agent/` (config, `plugins/node_modules/` install copies, `auth.json`) exactly like `~/.pi/agent/`. On omp 18 (no `ModelRegistry.complete`) the classifier falls back to the pi-ai compat completion API at first gray-zone verdict; resolution failures follow the existing fail-closed deny. Thinking control is sent in both hosts' native dialects (`thinkingEnabled`/`effort` for pi, `reasoning`/`disableReasoning` for omp). Behavior on pi is unchanged; on dual-install machines the gate follows the extension copy's own location, never host-tree probing.
+
 ## [0.5.2] - 2026-09-01
 
 ### Fixed
