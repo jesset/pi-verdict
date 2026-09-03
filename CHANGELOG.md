@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-03
+
 ### Fixed
 
 - omp 18.1+ anchoring: omp 18.1 installs npm plugins under `~/.omp/plugins/node_modules/<pkg>/` — a sibling of `agent/` in the config root, not under it — which the 0.6.0 self-anchor did not match. On omp 18.1+ the gate silently fell back to `~/.pi/agent`: no config template appeared under `~/.omp/`, hand-edited rules/denyPaths there were never read, omp sessions shared the pi host's config file, and the omp install copy sat outside the self-protection set. The anchor now accepts both omp layouts (`agent/plugins/node_modules/…` and `plugins/node_modules/…`), and the self-protection ext-roots cover the package dir under the config root. Scoped npm packages (`@scope/pkg`) now get package-level self-protection instead of shielding the whole `@scope/` dir (a latent #26-era over-protection, now corrected to package granularity). Verified against omp 18.1.3. Upgrading from 0.6.0 on omp: close running omp sessions before `omp plugin install` (a live session's tamper detection would treat the updated install copy as tampering), then re-create your config at `~/.omp/agent/config/pi-verdict.json` — configs under `~/.pi/agent/` keep applying to pi sessions only.
