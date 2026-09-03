@@ -743,6 +743,68 @@ function takeSnapshots(bases: Array<{ file: string; kind: WatchKind }>): Array<{
 }
 
 /**
+ * 变更检测(ADR-0001 一期)的会话实例:基线快照 + 篡改旗标。处置差分(config-only
+ * 且有 UI → select 双选)由扩展 handler 编排——本类零 UI;restoreAndFailClose 只做
+ * 还原与置位,通知由调用方按返回的文件清单/原因拼装。
+ */
+class IntegrityWatch {
+	private snapshots: Array<{ file: string; kind: WatchKind; content: Buffer | null }>;
+	private _tampered = false;
+
+	constructor(private watchBases: Array<{ file: string; kind: WatchKind }>) {
+		this.snapshots = takeSnapshots(watchBases);
+	}
+
+	get tampered(): boolean {
+		return this._tampered;
+	}
+
+	/** 复核受保护文件,返回变化清单(不处置——处置按 kind 差分,ADR-0001 定稿 D) */
+	detect(): Array<{ file: string; kind: WatchKind }> {
+		const hit: Array<{ file: string; kind: WatchKind }> = [];
+		for (const s of this.snapshots) {
+			let current: Buffer | null = null;
+			try {
+				current = fs.readFileSync(s.file);
+			} catch {
+				/* 不存在 */
+			}
+			const same = (a: Buffer | null, b: Buffer | null): boolean => (a === null || b === null ? a === b : a.equals(b));
+			if (!same(current, s.content)) hit.push({ file: s.file, kind: s.kind });
+		}
+		return hit;
+	}
+
+	/** 重建基线(Accept 路径与 session_start 共用;不动篡改旗标) */
+	rebaseline(): void {
+		this.snapshots = takeSnapshots(this.watchBases);
+	}
+
+	/** 会话重置:重建基线 + 清篡改旗标 */
+	startSession(): void {
+		this.rebaseline();
+		this._tampered = false;
+	}
+
+	/** 从快照回写变化文件(扩展进程自身执行,不经门禁)+ fail-closed 置位 */
+	restoreAndFailClose(changed: Array<{ file: string }>, cause: string): { reason: string; files: string } {
+		for (const c of changed) {
+			const s = this.snapshots.find((x) => x.file === c.file);
+			if (s && s.content !== null) {
+				try {
+					fs.writeFileSync(s.file, s.content);
+				} catch {
+					/* 还原失败:仍 fail-closed */
+				}
+			}
+		}
+		this._tampered = true;
+		const files = [...new Set(changed.map((c) => c.file))].join(", ");
+		return { reason: `[auto-mode] self-protection: tamper detected${cause ? ` (${cause})` : ""} and restored (${files}); fail-closed until restart`, files };
+	}
+}
+
+/**
  * Tool call → rule-layer verdict. Order (#12; ADR-0001 adds layer 0; ADR-0002 inserts denyPaths):
  *   0. self-protection — deny is terminal (no config exempts it, not even builtinDenyFloor:false)
  *   1. built-in base (bash danger regex floor / path sensitivity grading) — deny is terminal
@@ -1163,6 +1225,44 @@ function shadowTag(probe: ShadowProbe): string {
 }
 
 // ============================================================================
+// 会话态:判定管线的会话期状态(复位清单集中一处)
+// ============================================================================
+
+/**
+ * 判定管线的会话期状态。session_start 的复位清单归 reset() 拥有——新增会话态只改
+ * 这里,install 与 session_start 不再各持一份初始化点。prot 源自安装路径而非配置,
+ * 构造期定,不参与 reset。
+ */
+class SessionState {
+	readonly prot: ProtectedSet;
+	readonly shadow = new ShadowCache();
+	userRules: UserRules;
+	private denyPathBases: string[] | null = null;
+
+	constructor(prot: ProtectedSet, userRules: UserRules = loadUserRules().rules) {
+		this.prot = prot;
+		this.userRules = userRules;
+	}
+
+	/** 会话重置:重载用户规则(配置改动新会话生效)+ 按会话 cwd 重锚 denyPaths
+	 *  (ADR-0002: 每会话锚定一次)+ 清影子缓存;返回加载报告供表现层通知 */
+	reset(cwd: string): { skipped: string[]; shortcutWarning: string | null } {
+		const loaded = loadUserRules();
+		this.userRules = loaded.rules;
+		this.denyPathBases = anchorDenyPaths(loaded.rules.denyPaths, cwd); // anchored to the session cwd, once (ADR-0002)
+		this.shadow.reset();
+		return { skipped: loaded.skipped, shortcutWarning: loaded.shortcutWarning };
+	}
+
+	/** denyPaths 基址:session_start 已锚定;此惰性回退仅守护乱序的首次 tool_call
+	 *  (pi 正常次序 session_start 先行),一旦锚定不再重derive。 */
+	anchoredDenyPathBases(cwd: string): string[] {
+		if (this.denyPathBases === null) this.denyPathBases = anchorDenyPaths(this.userRules.denyPaths, cwd);
+		return this.denyPathBases;
+	}
+}
+
+// ============================================================================
 // 扩展主体
 // ============================================================================
 
@@ -1178,56 +1278,15 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 
 	let enabled = pi.getFlag("auto-mode") !== false;
 	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
-	const shadow = new ShadowCache();
-	let userRules: UserRules = loadUserRules().rules;
-	// denyPath bases, normalized ONCE per session anchored to the session cwd (ADR-0002):
-	// mid-session symlink creation or cwd drift must not change what the declaration covers.
-	// session_start anchors it; the lazy null-fallback only guards an out-of-order first
-	// tool_call (pi's normal order is session_start first) and, once set, it is never re-derived.
-	let denyPathBases: string[] | null = null;
-	const anchoredDenyPathBases = (cwd: string): string[] => {
-		if (denyPathBases === null) denyPathBases = anchorDenyPaths(userRules.denyPaths, cwd);
-		return denyPathBases;
-	};
+	// 会话态与门禁完整性监视:复位清单各归 SessionState.reset / IntegrityWatch.startSession
+	const state = new SessionState(buildProtectedSet(agentDirPath(), OWN_FILE_PATH));
+	const integrity = new IntegrityWatch(state.prot.watchBases);
 
-	// Self-protection layer (ADR-0001): self-anchored protected set + tamper
-	// baseline (in-memory, per session)
-	const prot = buildProtectedSet(agentDirPath(), OWN_FILE_PATH);
-	let snapshots = takeSnapshots(prot.watchBases);
-	let tampered = false;
-
-	/** 复核受保护文件,返回变化清单(不还原——处置按 kind 差分,ADR-0001 定稿 D) */
-	function detectTamper(): Array<{ file: string; kind: WatchKind }> {
-		const hit: Array<{ file: string; kind: WatchKind }> = [];
-		for (const s of snapshots) {
-			let current: Buffer | null = null;
-			try {
-				current = fs.readFileSync(s.file);
-			} catch {
-				/* 不存在 */
-			}
-			const same = (a: Buffer | null, b: Buffer | null): boolean => (a === null || b === null ? a === b : a.equals(b));
-			if (!same(current, s.content)) hit.push({ file: s.file, kind: s.kind });
-		}
-		return hit;
-	}
-
-	/** 从快照回写变化文件(扩展进程自身执行,不经门禁)+ fail-closed,返回 block 载荷 */
-	function restoreAndFailClose(changed: Array<{ file: string }>, ctx: ExtensionContext, cause: string): { block: true; reason: string } {
-		for (const c of changed) {
-			const s = snapshots.find((x) => x.file === c.file);
-			if (s && s.content !== null) {
-				try {
-					fs.writeFileSync(s.file, s.content);
-				} catch {
-					/* 还原失败:仍 fail-closed */
-				}
-			}
-		}
-		tampered = true;
-		const files = [...new Set(changed.map((c) => c.file))].join(", ");
-		ctx.ui.notify(`🛡️ pi-verdict TAMPER DETECTED${cause ? ` (${cause})` : ""}: ${files} modified bypassing the gate; restored from session snapshot where possible. Fail-closed for the rest of this session — review the file(s) and restart the session.`, "warning");
-		return { block: true, reason: `[auto-mode] self-protection: tamper detected${cause ? ` (${cause})` : ""} and restored (${files}); fail-closed until restart` };
+	/** 篡改处置呈现:还原 + fail-closed 的本地通知(含文件清单与原因) */
+	function presentTamper(changed: Array<{ file: string; kind: WatchKind }>, ctx: ExtensionContext, cause: string): { block: true; reason: string } {
+		const r = integrity.restoreAndFailClose(changed, cause);
+		ctx.ui.notify(`🛡️ pi-verdict TAMPER DETECTED${cause ? ` (${cause})` : ""}: ${r.files} modified bypassing the gate; restored from session snapshot where possible. Fail-closed for the rest of this session — review the file(s) and restart the session.`, "warning");
+		return { block: true, reason: r.reason };
 	}
 
 	function refreshStatus(ctx: ExtensionContext) {
@@ -1245,23 +1304,19 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	// session_start:重置影子缓存(会话内存态,#5 定案)+ 重载用户规则(配置改动新会话生效)
 	// + 重建自保护基线(ADR-0001:受保护文件的会话启动快照)
 	pi.on("session_start", async (_event, ctx) => {
-		shadow.reset();
-		tampered = false;
-		const loaded = loadUserRules();
-		userRules = loaded.rules;
-		denyPathBases = anchorDenyPaths(userRules.denyPaths, ctx.cwd); // anchored to the session cwd, once (ADR-0002)
-		snapshots = takeSnapshots(prot.watchBases);
-		if (loaded.skipped.length > 0) {
-			ctx.ui.notify(`pi-verdict: skipped ${loaded.skipped.length} invalid config value(s) in config (${userConfigPath()}): ${loaded.skipped.join(", ")}`, "warning");
+		const report = state.reset(ctx.cwd);
+		integrity.startSession();
+		if (report.skipped.length > 0) {
+			ctx.ui.notify(`pi-verdict: skipped ${report.skipped.length} invalid config value(s) in config (${userConfigPath()}): ${report.skipped.join(", ")}`, "warning");
 		}
-		if (loaded.shortcutWarning) ctx.ui.notify(`pi-verdict: ${loaded.shortcutWarning}`, "warning");
+		if (report.shortcutWarning) ctx.ui.notify(`pi-verdict: ${report.shortcutWarning}`, "warning");
 		refreshStatus(ctx);
 	});
 
 	// 主开关 toggle 快捷键(#15):键位取首次加载的用户规则(会话内固定——改配置后
 	// /reload 重载扩展或新会话生效);handler 与 /automode 语义等价,静默切换,
 	// footer 始终显示是唯一反馈
-	const registeredToggleKey = userRules.toggleShortcut;
+	const registeredToggleKey = state.userRules.toggleShortcut;
 	if (registeredToggleKey) {
 		// KeyId 是 pi 的编译期联合类型(运行时即 string);用户配置键位经 KEY_COMBO_RE
 		// 运行时校验后断言转入,零依赖约束下不引入 pi 内部类型路径
@@ -1274,7 +1329,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	/** Usage 行的 toggle 提示(#15):无注册键位时不显示;显示注册时固定的键 */
 	const toggleHint = () => (registeredToggleKey ? ` · toggle: ${registeredToggleKey}` : "");
 	/** Status line denyPaths count (ADR-0002): shown only when configured */
-	const denyPathsHint = () => (userRules.denyPaths.length > 0 ? `\ndenyPaths: ${userRules.denyPaths.length} active` : "");
+	const denyPathsHint = () => (state.userRules.denyPaths.length > 0 ? `\ndenyPaths: ${state.userRules.denyPaths.length} active` : "");
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
@@ -1282,7 +1337,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${shadow.summary()}${denyPathsHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -1293,7 +1348,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				const head = next
 					? `🛡️ Auto Mode enabled${changed ? "" : " (unchanged)"}: tool calls adjudicated by rules + classifier`
 					: `Auto Mode disabled${changed ? "" : " (unchanged)"}: tool calls execute directly`;
-				ctx.ui.notify(`${head}\n${shadow.summary()}`, "info");
+				ctx.ui.notify(`${head}\n${state.shadow.summary()}`, "info");
 				return;
 			}
 			// 未知参数:严格拒绝并列出用法(大小写已归一化)
@@ -1325,7 +1380,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	function resolveClassifierModel(ctx: ExtensionContext): NonNullable<ExtensionContext["model"]> | null {
 		// 优先级:CLI flag > 环境变量 > 配置文件(classifierModel) > 自省(会话模型)
 		const raw =
-			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? userRules.classifierModel;
+			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? state.userRules.classifierModel;
 		classifierThinking = "off";
 		if (raw) {
 			const { specPart, level } = parseModelSpec(raw, ctx);
@@ -1354,11 +1409,11 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		const action = describeAction(event.toolName, input);
 
 		// 第 0 层前置:变更检测(ADR-0001)——篡改后本会话恒 deny(fail-closed)
-		if (tampered) {
+		if (integrity.tampered) {
 			ctx.ui.notify(`🛡️ Auto Mode blocked: self-protection fail-closed (tamper detected this session; restart to reset)\n  ${action}`, "warning");
 			return { block: true, reason: "[auto-mode] self-protection: fail-closed until session restart (protected file was tampered with)" };
 		}
-		const changed = detectTamper();
+		const changed = integrity.detect();
 		if (changed.length > 0) {
 			// 差分处置(ADR-0001 定稿 D):仅 config 变化且有 UI → select 双选(选项即动作);
 			// 扩展副本被改 / 无 UI → 一律还原 + fail-closed。
@@ -1373,18 +1428,18 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 					[CONFIG_ACCEPT_CHOICE, CONFIG_DECLINE_CHOICE],
 				);
 				if (choice === CONFIG_ACCEPT_CHOICE) {
-					snapshots = takeSnapshots(prot.watchBases); // 重建基线
+					integrity.rebaseline(); // 重建基线
 					ctx.ui.notify("pi-verdict: config change accepted — new baseline taken; applies to new sessions as usual", "info");
 				} else {
-					return restoreAndFailClose(changed, ctx, choice === undefined ? "config dialog dismissed" : "config change declined by user");
+					return presentTamper(changed, ctx, choice === undefined ? "config dialog dismissed" : "config change declined by user");
 				}
 			} else {
-				return restoreAndFailClose(changed, ctx, "");
+				return presentTamper(changed, ctx, "");
 			}
 		}
 
 		// 第 1 层:规则
-		const rule = classifyByRules(event.toolName, input, ctx.cwd, userRules, prot, anchoredDenyPathBases(ctx.cwd));
+		const rule = classifyByRules(event.toolName, input, ctx.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(ctx.cwd));
 		if (rule.verdict === "allow") {
 			if (debug) ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 			return undefined;
@@ -1422,15 +1477,15 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
 		const cmdKey = shadowCommandKey(event.toolName, input, ctx.cwd);
 		const ctxKey = shadowContextKey(ctx);
-		const probe = shadow.probe(cmdKey, ctxKey);
+		const probe = state.shadow.probe(cmdKey, ctxKey);
 
-		const outcome = await classifyWithModel(ctx, completionFor(ctx.modelRegistry, deps.compatLoader), model, action, classifierThinking, userRules.denyPaths.length > 0);
+		const outcome = await classifyWithModel(ctx, completionFor(ctx.modelRegistry, deps.compatLoader), model, action, classifierThinking, state.userRules.denyPaths.length > 0);
 
 		// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
 		// 命中且本次为可缓存裁决时,对比反事实一致性
 		if (outcome.source === "model" && outcome.verdict !== "ask") {
-			if (probe.result === "hit") shadow.countDivergence(probe.entry.verdict, outcome.verdict);
-			shadow.record(cmdKey, ctxKey, outcome.verdict);
+			if (probe.result === "hit") state.shadow.countDivergence(probe.entry.verdict, outcome.verdict);
+			state.shadow.record(cmdKey, ctxKey, outcome.verdict);
 		}
 
 		if (outcome.verdict === "allow") {
