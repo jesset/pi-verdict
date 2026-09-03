@@ -217,11 +217,12 @@ const OWN_FILE_PATH: string | null = (() => {
  * Resolve the agent directory the gate is anchored to (#35, dual-host):
  *   1. PI_CODING_AGENT_DIR — explicit user override, always wins.
  *   2. Self-anchoring from the extension's own installed path: a copy at
- *      <home>/<dot-dir>/agent/(plugins/node_modules/<pkg>/)?extensions/…
+ *      <home>/<dot-dir>/(agent/)?(plugins/node_modules/<pkg>/)?extensions/…
  *      anchors to <home>/<dot-dir>/agent. Covers the pi forms
- *      (~/.pi/agent/extensions[/pkg]/…) and the omp npm form
- *      (~/.omp/agent/plugins/node_modules/<pkg>/extensions/…); XDG-style
- *      ~/.config/pi trees match too because the anchor accepts any dot-dir.
+ *      (~/.pi/agent/extensions[/pkg]/…) and the two omp npm layouts:
+ *      under the agent dir (~/.omp/agent/plugins/node_modules/<pkg>/…) and,
+ *      since omp 18.1, next to it (~/.omp/plugins/node_modules/<pkg>/…) —
+ *      omp keeps its config tree under <dot-dir>/agent in both layouts.
  *      Deliberately NO host-tree existence probing: on a dual-install machine
  *      running under pi, a present ~/.omp must not misroute the gate.
  *   3. Fallback: today's default (~/.pi/agent) — dev checkouts and any
@@ -232,7 +233,7 @@ const OWN_FILE_PATH: string | null = (() => {
 export function resolveAgentDir(ownFile: string | null, home: string, envAgentDir: string | undefined): string {
 	if (envAgentDir) return envAgentDir;
 	if (ownFile) {
-		const anchor = new RegExp(`^${escapeRegExp(home)}(/(\\.[^/]+)/agent/(?:plugins/node_modules/(?:@[^/]+/)?[^/]+/)?extensions/)`);
+		const anchor = new RegExp(`^${escapeRegExp(home)}(/(\\.[^/]+)/(?:agent/)?(?:plugins/node_modules/(?:@[^/]+/)?[^/]+/)?extensions/)`);
 		for (const f of [ownFile, tryRealpath(ownFile)]) {
 			const m = f.match(anchor);
 			if (m) return path.join(home, m[2], "agent");
@@ -506,10 +507,9 @@ function hitDenyPaths(toolName: string, input: Record<string, unknown>, cwd: str
 // 门禁自身的完整性不受任何配置豁免:builtinDenyFloor:false 只关危险正则与路径
 // 敏感度,关不掉本层;用户 allow 规则亦不可越过。保护对象:
 //   - <agentDir>/config/pi-verdict.json(用户规则 = 门禁的判定输入)
-//   - 本扩展的安装副本(pi installs under <agentDir>/extensions/, omp under
-//     <agentDir>/plugins/node_modules/<pkg>/; self-anchored via import.meta.url,
-//     covering the single-file and npm package-dir install forms; dev
-//     checkouts are not in scope)
+//   - 本扩展的安装副本(pi under <agentDir>/extensions/, omp under
+//     plugins/node_modules/<pkg>/ in its config root — install forms listed
+//     with resolveAgentDir; dev checkouts are not in scope)
 // 语义:门禁内一切写入按定义均由 agent 发起 → 恒 deny(reason 指引手工编辑);
 // 读放行(读门禁文件无害);用户经编辑器的修改不经门禁,不受影响。
 // bash 侧:命令串正则覆盖字面量/~/\$HOME/\$PI_CODING_AGENT_DIR 变体,可被混淆
@@ -556,10 +556,10 @@ function escapeRegExp(s: string): string {
 /**
  * 构建受保护集合。
  * ownFile:本模块文件路径(import.meta.url 解析;null = 不可解析,仅保护配置)。
- * The installed copy is protected only when ownFile sits under
- * <agentDir>/extensions/ (pi) or <agentDir>/plugins/node_modules/<pkg>/
- * (omp npm form, #35). Dev checkouts (source inside the cwd) are NOT
- * protected — in-project development writes are legitimate daily work (ADR-0001).
+ * The installed copy is protected only when ownFile sits under one of the
+ * install roots (forms listed with resolveAgentDir; #35). Dev checkouts
+ * (source inside the cwd) are NOT protected — in-project development writes
+ * are legitimate daily work (ADR-0001).
  */
 export function buildProtectedSet(agentDir: string, ownFile: string | null): ProtectedSet {
 	const exact = new Set<string>();
@@ -613,15 +613,18 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		watchBases.push({ file: ownFile, kind: "extension" });
 		const seenWatch = new Set<string>([ownFile]);
 		let pkgRoot: string | null = null;
-		// Install roots, lexical + realpath forms (#35): pi installs under
-		// <agentDir>/extensions/, omp installs npm plugins under
-		// <agentDir>/plugins/node_modules/. First path segment under the matched
-		// root is the install target (single file → exact, package dir → prefix),
-		// so the omp form gets whole-package-dir protection exactly like the pi
-		// npm-dir form (#26).
+		// Install roots, lexical + realpath forms (#35): <agentDir>/extensions
+		// (pi) and plugins/node_modules under agentDir or its parent dir (the
+		// two omp layouts — see resolveAgentDir for the layout history). The
+		// path segments under the matched root name the install target: a file
+		// → exact, a package dir (`@scope/pkg` or `pkg`) → prefix, so every
+		// npm form gets whole-package-dir protection (#26).
 		const extRoots = new Set<string>();
+		const agentBases = new Set([agentDir, tryRealpath(agentDir)]);
+		const configRootBases = new Set([...agentBases].map((b) => path.dirname(b)));
 		for (const seg of [["extensions"], ["plugins", "node_modules"]]) {
-			for (const base of new Set([agentDir, tryRealpath(agentDir)])) {
+			const bases = seg.length === 2 ? new Set([...agentBases, ...configRootBases]) : agentBases;
+			for (const base of bases) {
 				const root = path.join(base, ...seg);
 				extRoots.add(root);
 				extRoots.add(tryRealpath(root));
@@ -631,9 +634,11 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		for (const extRoot of extRoots) {
 			for (const own of ownForms) {
 				if (!own.startsWith(extRoot + path.sep)) continue;
-				const rel = path.relative(extRoot, own);
-				const singleFile = !rel.includes(path.sep);
-				const target = singleFile ? own : path.join(extRoot, rel.split(path.sep)[0]);
+				const segs = path.relative(extRoot, own).split(path.sep);
+				const singleFile = segs.length === 1;
+				// npm scopes are two-segment dirs (@scope/pkg): the install
+				// target is the package, not the whole scope dir
+				const target = singleFile ? own : path.join(extRoot, ...segs.slice(0, segs[0].startsWith("@") ? 2 : 1));
 				for (const f of pathForms(target)) {
 					(singleFile ? exact : prefixes).add(f);
 					extTargets.add(f);
