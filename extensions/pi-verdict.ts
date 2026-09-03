@@ -36,6 +36,12 @@
  *   3. Three-state verdict: allow passes / deny blocks / ask goes to a human
  *      (ctx.ui.confirm)
  *
+ * Structure: the pipeline is adjudicate() — a zero-UI module returning a Verdict
+ * value object (source: rule|protected-path|classifier|fail-closed, plus a
+ * `degraded` flag for ask→deny in non-interactive sessions); the tool_call
+ * handler maps verdicts to UI (notify/confirm/select) by source × degraded and
+ * runs IntegrityWatch (ADR-0001) as a pre-pipeline gate-integrity check.
+ *
  * Shadow cache (observe-only, #7): gray-zone verdicts are replayed against a
  * double-key LRU(128) to measure would-be hit rate; recorded, never applied
  * (verdicts always come from the model), accumulating pi field data for the
@@ -697,7 +703,7 @@ export function isProtectedWritePath(rawPath: string, cwd: string, prot: Protect
 }
 
 /** 自保护层裁决(第 0 层,先于一切):触碰门禁自身文件 → 不可豁免的 deny;其余 null 交后续层 */
-export function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd: string, prot: ProtectedSet): RuleResult | null {
+function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd: string, prot: ProtectedSet): RuleResult | null {
 	switch (toolName) {
 		case "write":
 		case "edit":
@@ -913,15 +919,19 @@ function toolCallLine(name: string, args: Record<string, unknown>): string {
 	return `${name}: ${transcriptSafe(JSON.stringify(args))}`;
 }
 
+/** 判定管线对宿主会话的最小结构需求(转录源 + 会话 id)——adjudicate 不接完整
+ *  ExtensionContext,测试只喂这两个成员即可 */
+export type PipelineHost = Pick<ExtensionContext["sessionManager"], "getBranch" | "getSessionId">;
+
 /**
  * 从会话分支收集精简转录原料:user 消息行与 assistant 工具调用行。
  * 丢弃 assistant 叙述/thinking 与 toolResult(注入面与 token 大头)。
  * 影子缓存的 contextKey 与 buildTranscript 同源(同一批 user 行),保证键与模型输入一致。
  */
-function collectTranscriptParts(ctx: ExtensionContext): { userLines: string[]; toolLines: string[] } {
+function collectTranscriptParts(host: PipelineHost): { userLines: string[]; toolLines: string[] } {
 	const userLines: string[] = [];
 	const toolLines: string[] = [];
-	for (const entry of ctx.sessionManager.getBranch()) {
+	for (const entry of host.getBranch()) {
 		if (entry.type !== "message") continue;
 		const msg = entry.message;
 		if (msg.role === "user") {
@@ -937,8 +947,8 @@ function collectTranscriptParts(ctx: ExtensionContext): { userLines: string[]; t
 }
 
 /** 精简转录:最近 user 消息 + 最近工具调用,待审查动作固定为最后一行(位置约定,借鉴 CC) */
-function buildTranscript(ctx: ExtensionContext, actionLine: string): string {
-	const { userLines, toolLines } = collectTranscriptParts(ctx);
+function buildTranscript(host: PipelineHost, actionLine: string): string {
+	const { userLines, toolLines } = collectTranscriptParts(host);
 	const lines = [...userLines.slice(-MAX_USER_MESSAGES), ...toolLines.slice(-MAX_TOOL_CALLS)];
 	lines.push(actionLine);
 	return lines.join("\n");
@@ -1011,18 +1021,22 @@ function completionFor(registry: { complete?: unknown }, compatLoader?: CompatLo
 	return fn;
 }
 
+/** 分类器思考级别(pi 原生词表;后缀语法对齐 pi --model provider/id:thinking) */
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** 单次分类器调用:显式 reasoning:"off"(见下方注释),失败返回错误串而非抛出 */
 async function callClassifierOnce(
-	ctx: ExtensionContext,
+	host: PipelineHost,
+	signal: AbortSignal | undefined,
 	complete: CompletionFn,
 	model: NonNullable<ExtensionContext["model"]>,
 	userMessage: string,
 	maxTokens: number,
-	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off",
+	thinking: ThinkingLevel = "off",
 	systemPrompt: string = CLASSIFIER_SYSTEM,
 ): Promise<{ ok: true; text: string; stopReason: string } | { ok: false; error: string }> {
 	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
-	if (ctx.signal) signals.push(ctx.signal);
+	if (signal) signals.push(signal);
 	try {
 		const response = await complete(
 			model,
@@ -1054,7 +1068,7 @@ async function callClassifierOnce(
 							reasoning: thinking === "minimal" ? ("low" as const) : thinking,
 						}),
 				cacheRetention: "short",
-				sessionId: ctx.sessionManager.getSessionId(),
+				sessionId: host.getSessionId(),
 			},
 		);
 		const text = response.content
@@ -1074,21 +1088,22 @@ async function callClassifierOnce(
  * 两档皆失败 → fail-closed deny(理由含两次诊断)。
  */
 async function classifyWithModel(
-	ctx: ExtensionContext,
+	host: PipelineHost,
+	signal: AbortSignal | undefined,
 	complete: CompletionFn,
 	model: NonNullable<ExtensionContext["model"]>,
 	actionLine: string,
-	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off",
+	thinking: ThinkingLevel = "off",
 	denyPathsActive = false,
 ): Promise<ClassifierOutcome> {
-	const transcript = buildTranscript(ctx, actionLine);
+	const transcript = buildTranscript(host, actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
 	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
 	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
 	const failures: string[] = [];
 	for (const [n, maxTokens] of attempts) {
-		if (ctx.signal?.aborted) break; // 用户已取消,不再重试
-		const r = await callClassifierOnce(ctx, complete, model, userMessage, maxTokens, thinking, systemPrompt);
+		if (signal?.aborted) break; // 用户已取消,不再重试
+		const r = await callClassifierOnce(host, signal, complete, model, userMessage, maxTokens, thinking, systemPrompt);
 		if (r.ok) {
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
@@ -1213,8 +1228,8 @@ function shadowCommandKey(toolName: string, input: Record<string, unknown>, cwd:
 	return fnv1a(`${toolName}\u0000${JSON.stringify(input)}\u0000${cwd}`);
 }
 
-function shadowContextKey(ctx: ExtensionContext): string {
-	const { userLines } = collectTranscriptParts(ctx);
+function shadowContextKey(host: PipelineHost): string {
+	const { userLines } = collectTranscriptParts(host);
 	return fnv1a(userLines.slice(-MAX_USER_MESSAGES).join("\u0000"));
 }
 
@@ -1231,9 +1246,9 @@ function shadowTag(probe: ShadowProbe): string {
 /**
  * 判定管线的会话期状态。session_start 的复位清单归 reset() 拥有——新增会话态只改
  * 这里,install 与 session_start 不再各持一份初始化点。prot 源自安装路径而非配置,
- * 构造期定,不参与 reset。
+ * 构造期定,不参与 reset。导出仅为测试(内部 seam 的测试面,与 adjudicate 同组)。
  */
-class SessionState {
+export class SessionState {
 	readonly prot: ProtectedSet;
 	readonly shadow = new ShadowCache();
 	userRules: UserRules;
@@ -1263,6 +1278,83 @@ class SessionState {
 }
 
 // ============================================================================
+// 判定管线(adjudicate):tool_call → Verdict 的唯一裁决入口,零 UI 依赖
+// ============================================================================
+
+/** 裁决来源:呈现模板的键之一(与 degraded 正交分解)。rule = 规则层(含自保护层
+ *  ——同走规则呈现模板);protected-path = denyPaths 命中;classifier = 灰区分类器
+ *  结果(含其 fail-closed——呈现模板相同);fail-closed = 无可用分类器模型 */
+export type VerdictSource = "rule" | "protected-path" | "classifier" | "fail-closed";
+
+/** 判定管线的输出值对象:一次 tool_call 的完整裁决。detail 为 UI-only 明文(受保护
+ *  路径仅入本地确认框,ADR-0002 零泄漏承诺——reason 与通知永不携带);degraded 标记
+ *  ask 在无 UI 会话的降级产物;shadow 为影子缓存标注(仅 debug 呈现拼接用)。 */
+export interface Verdict {
+	verdict: "allow" | "ask" | "deny";
+	reason: string;
+	detail?: string;
+	source: VerdictSource;
+	degraded: boolean;
+	shadow?: string;
+}
+
+/** 逐调用环境:呈现无关的宿主能力。model 经 getModel 惰性求值——保持「仅灰区才
+ *  解析」的原行为(回退警告不会出现在规则已裁决的调用上);null → fail-closed。 */
+export interface AdjudicateEnv {
+	cwd: string;
+	hasUI: boolean;
+	getModel: () => { model: NonNullable<ExtensionContext["model"]>; thinking: ThinkingLevel } | null;
+	complete: CompletionFn;
+	host: PipelineHost;
+	signal?: AbortSignal;
+}
+
+/**
+ * 判定管线(CONTEXT.md「判定管线」词条的实现):自保护 → 内置 floor → 用户 deny →
+ * denyPaths ask → 用户 allow → 灰区分类器;ask 降级(无 UI → deny)与 fail-closed
+ * 内建于此,两处重复的降级实现自此唯一。零 UI:表现(notify/confirm/select)由扩展
+ * handler 按 source × degraded 模板呈现;变更检测(IntegrityWatch)是管线前置的
+ * 独立关注点,不在 adjudicate 内。导出仅为测试(内部 seam 的测试面,#35 既有模式)。
+ */
+export async function adjudicate(
+	state: SessionState,
+	call: { toolName: string; input: Record<string, unknown> },
+	env: AdjudicateEnv,
+): Promise<Verdict> {
+	const rule = classifyByRules(call.toolName, call.input, env.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(env.cwd));
+	if (rule.verdict === "allow") return { verdict: "allow", reason: rule.reason ?? "", source: "rule", degraded: false };
+	if (rule.verdict === "deny") return { verdict: "deny", reason: rule.reason ?? "", source: "rule", degraded: false };
+	if (rule.verdict === "ask") {
+		// denyPaths 命中 → ask 终局(ADR-0002):声明者本人裁决例外;无 UI 降级为 deny
+		return { verdict: env.hasUI ? "ask" : "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: !env.hasUI };
+	}
+
+	// 灰区 → 分类器;无可用模型 → fail-closed
+	const resolved = env.getModel();
+	if (!resolved) return { verdict: "deny", reason: "no classifier model available (fail-closed)", source: "fail-closed", degraded: false };
+
+	// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
+	const cmdKey = shadowCommandKey(call.toolName, call.input, env.cwd);
+	const ctxKey = shadowContextKey(env.host);
+	const probe = state.shadow.probe(cmdKey, ctxKey);
+
+	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, toolCallLine(call.toolName, call.input), resolved.thinking, state.userRules.denyPaths.length > 0);
+
+	// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
+	// 命中且本次为可缓存裁决时,对比反事实一致性
+	if (outcome.source === "model" && outcome.verdict !== "ask") {
+		if (probe.result === "hit") state.shadow.countDivergence(probe.entry.verdict, outcome.verdict);
+		state.shadow.record(cmdKey, ctxKey, outcome.verdict);
+	}
+
+	const shadow = shadowTag(probe);
+	if (outcome.verdict === "allow") return { verdict: "allow", reason: outcome.reason, source: "classifier", degraded: false, shadow };
+	if (outcome.verdict === "deny") return { verdict: "deny", reason: outcome.reason, source: "classifier", degraded: false, shadow };
+	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
+	return { verdict: env.hasUI ? "ask" : "deny", reason: outcome.reason, source: "classifier", degraded: !env.hasUI, shadow };
+}
+
+// ============================================================================
 // 扩展主体
 // ============================================================================
 
@@ -1287,6 +1379,49 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		const r = integrity.restoreAndFailClose(changed, cause);
 		ctx.ui.notify(`🛡️ pi-verdict TAMPER DETECTED${cause ? ` (${cause})` : ""}: ${r.files} modified bypassing the gate; restored from session snapshot where possible. Fail-closed for the rest of this session — review the file(s) and restart the session.`, "warning");
 		return { block: true, reason: r.reason };
+	}
+
+	/** Verdict → UI(本扩展唯一的裁决呈现点):按 source × degraded 查模板,文案与
+	 *  重构前逐字节一致。受保护路径分支的通知永不携带路径明文与 action 行
+	 *  (ADR-0002 story 11:通知与 block reason 回流 agent context)。 */
+	async function presentVerdict(v: Verdict, action: string, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
+		if (v.verdict === "allow") {
+			if (debug) {
+				if (v.source === "rule") ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
+				else if (v.source === "protected-path") ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
+				else ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}${v.shadow ? " " + v.shadow : ""}`, "info");
+			}
+			return undefined;
+		}
+		if (v.verdict === "deny") {
+			if (v.source === "protected-path") {
+				// 无 action 行:action 串可内嵌被触路径,通知不得携带受保护路径明文
+				ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, protected-path ask→deny): ${v.reason}`, "warning");
+				return { block: true, reason: `[auto-mode] protected-path ask degraded to block in non-interactive mode: ${v.reason}` };
+			}
+			if (v.source === "fail-closed") {
+				ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
+				return { block: true, reason: `[auto-mode] ${v.reason}` };
+			}
+			if (v.source === "rule") {
+				ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
+				return { block: true, reason: `[auto-mode rule block] ${v.reason}` };
+			}
+			ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}${debug && v.shadow ? " " + v.shadow : ""}`, "warning");
+			return { block: true, reason: `[auto-mode classifier block] ${v.reason}` };
+		}
+		// ask → 人工确认;非交互已在管线内降级,能走到这里的必有 UI
+		if (v.source === "protected-path") {
+			const ok = await ctx.ui.confirm("🛡️ Auto Mode: protected path", `${action}\n\n${v.reason}\n\nProtected path: ${v.detail ?? "(see pi-verdict.json)"}\n\nAllow this access?`);
+			if (ok) {
+				// debug notify 不带 action 行:同上,通知不得携带受保护路径明文
+				if (debug) ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
+				return undefined;
+			}
+			return { block: true, reason: "[auto-mode] user declined protected-path access" };
+		}
+		const ok = await ctx.ui.confirm("🛡️ Auto Mode confirmation", `${action}\n\nClassifier opinion: ${v.reason}\n\nAllow execution?`);
+		return ok ? undefined : { block: true, reason: "[auto-mode] user declined" };
 	}
 
 	function refreshStatus(ctx: ExtensionContext) {
@@ -1374,28 +1509,29 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		return { specPart: raw, level: null };
 	}
 
-	/** 分类器思考级别:spec 后缀指定;缺省 off(显式关思考,blackhole 研究背书) */
-	let classifierThinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" = "off";
-
-	function resolveClassifierModel(ctx: ExtensionContext): NonNullable<ExtensionContext["model"]> | null {
-		// 优先级:CLI flag > 环境变量 > 配置文件(classifierModel) > 自省(会话模型)
+	/** 解析分类器模型与思考级别:CLI flag > 环境变量 > 配置文件(classifierModel) >
+	 *  自省(会话模型)。不可用回退会话模型并警告一次;null = 连会话模型都没有 →
+	 *  fail-closed。经 AdjudicateEnv.getModel 惰性调用(仅灰区),回退警告不会出现在
+	 *  规则已裁决的调用上。 */
+	function resolveClassifier(ctx: ExtensionContext): { model: NonNullable<ExtensionContext["model"]>; thinking: ThinkingLevel } | null {
 		const raw =
 			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? state.userRules.classifierModel;
-		classifierThinking = "off";
+		let thinking: ThinkingLevel = "off";
 		if (raw) {
 			const { specPart, level } = parseModelSpec(raw, ctx);
-			if (level) classifierThinking = level as typeof classifierThinking;
+			thinking = (level ?? "off") as ThinkingLevel;
 			const slash = specPart.indexOf("/");
 			if (slash > 0) {
 				const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
-				if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
+				if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return { model, thinking };
 			}
 			if (!warnedClassifierModel) {
 				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
 				ctx.ui.notify(`pi-verdict: classifier model "${raw}" unavailable (not found or no configured auth), falling back to session model (self-reflection)`, "warning");
 			}
 		}
-		return ctx.model ?? null; // 自省:继承当前会话模型
+		// 自省:继承当前会话模型;显式指定的思考级别在回退时仍生效(原语义)
+		return ctx.model ? { model: ctx.model, thinking } : null;
 	}
 
 	function describeAction(toolName: string, input: Record<string, unknown>): string {
@@ -1438,72 +1574,15 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			}
 		}
 
-		// 第 1 层:规则
-		const rule = classifyByRules(event.toolName, input, ctx.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(ctx.cwd));
-		if (rule.verdict === "allow") {
-			if (debug) ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
-			return undefined;
-		}
-		if (rule.verdict === "deny") {
-			ctx.ui.notify(`🛡️ Auto Mode blocked: ${rule.reason}\n  ${action}`, "warning");
-			return { block: true, reason: `[auto-mode rule block] ${rule.reason}` };
-		}
-		// denyPaths hit → deterministic ask (ADR-0002): the declaring user adjudicates
-		// the exception; non-interactive sessions degrade to deny (existing ask rule)
-		if (rule.verdict === "ask") {
-			if (!ctx.hasUI) {
-				// no action line here: the action string can embed the touched path, and
-				// notifications must not carry protected-path plaintext (ADR-0002 story 11)
-				ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, protected-path ask→deny): ${rule.reason}`, "warning");
-				return { block: true, reason: `[auto-mode] protected-path ask degraded to block in non-interactive mode: ${rule.reason}` };
-			}
-			const ok = await ctx.ui.confirm("🛡️ Auto Mode: protected path", `${action}\n\n${rule.reason}\n\nProtected path: ${rule.detail ?? "(see pi-verdict.json)"}\n\nAllow this access?`);
-			if (ok) {
-				// debug notify stays plaintext-free too: the action line can embed the
-				// touched path, and notifications must not carry protected-path plaintext
-				if (debug) ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
-				return undefined;
-			}
-			return { block: true, reason: "[auto-mode] user declined protected-path access" };
-		}
-
-		// 第 2 层:灰区 → 模型分类器
-		const model = resolveClassifierModel(ctx);
-		if (!model) {
-			ctx.ui.notify(`🛡️ Auto Mode blocked: no classifier model available (fail-closed)\n  ${action}`, "warning");
-			return { block: true, reason: "[auto-mode] no classifier model available (fail-closed)" };
-		}
-
-		// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
-		const cmdKey = shadowCommandKey(event.toolName, input, ctx.cwd);
-		const ctxKey = shadowContextKey(ctx);
-		const probe = state.shadow.probe(cmdKey, ctxKey);
-
-		const outcome = await classifyWithModel(ctx, completionFor(ctx.modelRegistry, deps.compatLoader), model, action, classifierThinking, state.userRules.denyPaths.length > 0);
-
-		// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
-		// 命中且本次为可缓存裁决时,对比反事实一致性
-		if (outcome.source === "model" && outcome.verdict !== "ask") {
-			if (probe.result === "hit") state.shadow.countDivergence(probe.entry.verdict, outcome.verdict);
-			state.shadow.record(cmdKey, ctxKey, outcome.verdict);
-		}
-
-		if (outcome.verdict === "allow") {
-			if (debug) ctx.ui.notify(`🛡️ allow (classifier): ${outcome.reason}\n  ${action} ${shadowTag(probe)}`, "info");
-			return undefined;
-		}
-		if (outcome.verdict === "deny") {
-			ctx.ui.notify(`🛡️ Auto Mode blocked: ${outcome.reason}\n  ${action}${debug ? " " + shadowTag(probe) : ""}`, "warning");
-			return { block: true, reason: `[auto-mode classifier block] ${outcome.reason}` };
-		}
-
-		// ask:转人工;非交互模式 fail-closed 降级为拦截
-		if (!ctx.hasUI) {
-			ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, ask→deny): ${outcome.reason}\n  ${action}`, "warning");
-			return { block: true, reason: `[auto-mode] ask degraded to block in non-interactive mode: ${outcome.reason}` };
-		}
-		const ok = await ctx.ui.confirm("🛡️ Auto Mode confirmation", `${action}\n\nClassifier opinion: ${outcome.reason}\n\nAllow execution?`);
-		if (ok) return undefined;
-		return { block: true, reason: "[auto-mode] user declined" };
+		// 判定管线(零 UI)→ 呈现(source × degraded 模板)
+		const verdict = await adjudicate(state, { toolName: event.toolName, input }, {
+			cwd: ctx.cwd,
+			hasUI: !!ctx.hasUI,
+			getModel: () => resolveClassifier(ctx),
+			complete: completionFor(ctx.modelRegistry, deps.compatLoader),
+			host: ctx.sessionManager,
+			signal: ctx.signal,
+		});
+		return presentVerdict(verdict, action, ctx);
 	});
 }
