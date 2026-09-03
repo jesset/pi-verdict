@@ -35,4 +35,4 @@ Implementation details worth knowing if you hack on the extension:
 
 - omp 18's `ModelRegistry` has no `complete` method, so the classifier resolves completion through the pi-ai compat module at first gray-zone verdict (`@earendil-works/pi-ai/compat`, which omp's legacy compat layer rewrites to its bundled pi-ai). Resolution or call failures follow the usual fail-closed deny.
 - Thinking control is sent in both hosts' native dialects (`thinkingEnabled`/`effort` for pi, `reasoning`/`disableReasoning` for omp); each host reads its own fields and ignores the other's.
-- omp installs npm plugins under `<agentDir>/plugins/node_modules/<pkg>/`; that install form gets the same whole-package-dir self-protection as the pi forms (ADR-0001).
+- omp installs npm plugins under `plugins/node_modules/<pkg>/` in its config root — under `<agentDir>/` up to omp 18.0, a sibling of `agent/` since omp 18.1; both layouts get the same whole-package-dir self-protection as the pi forms (ADR-0001). The user-rules config always lives under `<agentDir>/config/` on both layouts.

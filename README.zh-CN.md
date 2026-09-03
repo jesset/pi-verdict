@@ -66,7 +66,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 | | pi | omp |
 |---|---|---|
 | 安装 | `pi install npm:pi-verdict` | `omp plugin install npm:pi-verdict` |
-| 扩展副本 | `~/.pi/agent/extensions/` | `~/.omp/agent/plugins/node_modules/pi-verdict/` |
+| 扩展副本 | `~/.pi/agent/extensions/` | `~/.omp/plugins/node_modules/pi-verdict/`(omp 18.1+;≤18.0 在 `agent/` 下) |
 | 用户规则 | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
 | 凭据文件(S0 硬 deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
 

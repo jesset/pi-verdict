@@ -969,6 +969,45 @@ describe("buildProtectedSet (pure)", () => {
 		expect(isProtectedWritePath(path.join(pkg, "sub/dir/x.ts"), "/proj", s)).toBe(true);
 		expect(isProtectedWritePath(path.join(TMP_AGENT, "extensions", "other.ts"), "/proj", s)).toBe(false); // 包外不拦
 	});
+	test("omp 18.1+ layout: package dir under <configRoot>/plugins/node_modules is protected", () => {
+		// omp 18.1+: plugins/ is a sibling of agent/ in the config root —
+		// agentDir (<root>/agent) must still shield <root>/plugins/node_modules/<pkg>
+		const root = fs.mkdtempSync(path.join(os.homedir(), ".pv-omp181-"));
+		try {
+			const agent = path.join(root, "agent");
+			const pkg = path.join(root, "plugins", "node_modules", "pi-verdict");
+			fs.mkdirSync(path.join(pkg, "extensions"), { recursive: true });
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}");
+			fs.writeFileSync(path.join(pkg, "extensions", "auto-mode.ts"), "// stub");
+			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "auto-mode.ts"));
+			expect(s.prefixes).toContain(fs.realpathSync(pkg));
+			expect(isProtectedWritePath(path.join(pkg, "package.json"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(pkg, "extensions", "auto-mode.ts"), "/proj", s)).toBe(true);
+			expect(s.watchBases).toContainEqual({ file: path.join(pkg, "package.json"), kind: "extension" });
+			// neighbor packages under the same node_modules stay unprotected
+			expect(isProtectedWritePath(path.join(root, "plugins", "node_modules", "other-pkg", "x.ts"), "/proj", s)).toBe(false);
+		} finally { fs.rmSync(root, { recursive: true, force: true }); }
+	});
+	test("scoped npm package: protection covers @scope/pkg, not the whole scope dir", () => {
+		// npm scopes are two-segment dirs — the install target is the package;
+		// over-protecting @scope/* neighbors would deny unrelated user packages
+		const root = fs.mkdtempSync(path.join(os.homedir(), ".pv-omp181s-"));
+		try {
+			const agent = path.join(root, "agent");
+			const scope = path.join(root, "plugins", "node_modules", "@jesset");
+			const pkg = path.join(scope, "pi-verdict");
+			fs.mkdirSync(path.join(pkg, "extensions"), { recursive: true });
+			fs.mkdirSync(path.join(scope, "other-pkg"), { recursive: true });
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}");
+			fs.writeFileSync(path.join(pkg, "extensions", "auto-mode.ts"), "// stub");
+			fs.writeFileSync(path.join(scope, "other-pkg", "x.ts"), "x");
+			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "auto-mode.ts"));
+			expect(s.prefixes).toContain(fs.realpathSync(pkg));
+			expect(isProtectedWritePath(path.join(pkg, "package.json"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(scope, "other-pkg", "x.ts"), "/proj", s)).toBe(false);
+			expect(s.watchBases.some((w) => w.file.includes("other-pkg"))).toBe(false);
+		} finally { fs.rmSync(root, { recursive: true, force: true }); }
+	});
 	test("dev checkout (outside agentDir/extensions) → 不保护扩展文件,仅配置", () => {
 		const s = buildProtectedSet(TMP_AGENT, "/repo/extensions/auto-mode.ts");
 		expect(s.exact).not.toContain("/repo/extensions/auto-mode.ts");
@@ -1447,6 +1486,18 @@ describe("agentDir self-anchoring (#35)", () => {
 
 	test("omp scoped-package form (@scope/pkg) anchors the same way", () => {
 		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
+	});
+
+	test("omp 18.1+ layout (plugins/ is a sibling of agent/) anchors to the omp agent dir", () => {
+		// omp 18.1+ installs npm plugins under <configRoot>/plugins/node_modules/,
+		// NOT under agent/ — verified against omp 18.1.3 (getPluginsDir)
+		const own = path.join(HOME, ".omp", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
+	});
+
+	test("omp 18.1+ scoped-package form anchors the same way", () => {
+		const own = path.join(HOME, ".omp", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "auto-mode.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
 	});
 

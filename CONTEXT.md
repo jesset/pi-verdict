@@ -30,7 +30,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### agentDir 自锚定 (agentDir self-anchoring)
 
-`<agentDir>` 的解析纪律(#35,双宿主):`PI_CODING_AGENT_DIR` 显式覆盖恒优先;否则从扩展自身安装位置反推——位于 `<home>/<dot-dir>/agent/(plugins/node_modules/<pkg>/)?extensions/` 之下时锚定到 `<home>/<dot-dir>/agent`(覆盖 pi 的 `~/.pi/agent` 与 omp 的 `~/.omp/agent` 两种安装形态);无从锚定时回退 `~/.pi/agent`(dev checkout)。**禁止**以宿主目录树存在性探测代替自锚定:双宿主并存的机器上,`~/.omp` 的存在不得让 pi 下的运行改道。自保护层的安装副本判定与 S0 凭据 deny 规则随同一锚点覆盖两种宿主形态。
+`<agentDir>` 的解析纪律(#35,双宿主):`PI_CODING_AGENT_DIR` 显式覆盖恒优先;否则从扩展自身安装位置反推——位于 `<home>/<dot-dir>/(agent/)?(plugins/node_modules/<pkg>/)?extensions/` 之下时锚定到 `<home>/<dot-dir>/agent`(覆盖 pi 的 `~/.pi/agent` 与 omp 的 `~/.omp/agent`;omp 插件目录在 18.1+ 与 agent/ 平级(`<dot-dir>/plugins/...`),≤18.0 在其下,两种布局均匹配,配置树恒在 `<dot-dir>/agent/config/`);无从锚定时回退 `~/.pi/agent`(dev checkout)。**禁止**以宿主目录树存在性探测代替自锚定:双宿主并存的机器上,`~/.omp` 的存在不得让 pi 下的运行改道。自保护层的安装副本判定与 S0 凭据 deny 规则随同一锚点覆盖两种宿主形态。
 
 ### denyPaths (受保护路径)
 
