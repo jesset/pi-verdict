@@ -12,9 +12,13 @@
 
 Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作面——CLI flag(跨会话)、`/automode` 命令(会话内)、toggle 快捷键(会话内,用户可配可禁用)——三者**语义等价**:同一状态的不同入口,不因入口不同而引入额外规则(无运行中限制、无确认弹窗、无持久化写回)。差异仅在反馈:命令显式提示,快捷键静默切换,状态可见性由 footer 始终显示承载。
 
+### 判定管线 (adjudication pipeline)
+
+从 tool_call 到三态裁决的完整判定流程,按序:自保护层 → 内置 floor → 用户 deny → denyPaths ask → 用户 allow → 灰区交分类器;ask 降级(无 UI → deny)与 fail-closed 内建于管线语义。实现形态:`adjudicate(session, call, env) → Verdict` 纯函数——零 UI 依赖的 deep module,表现(notify/confirm/select)由扩展 handler 承担。变更检测(门禁完整性)是管线前置的独立关注点,不属于判定管线。_Avoid_: 裁决管线(全仓统一用「判定管线」)。
+
 ### 裁决 (verdict)
 
-对单次工具调用的判定结果。由 `tool_call` 钩子产出,放行则不做干预,拦截则返回 `{ block: true, reason }`。
+对单次工具调用的判定结果。由 `tool_call` 钩子产出,放行则不做干预,拦截则返回 `{ block: true, reason }`。运行时载体为 `Verdict` 值对象(verdict / reason / detail / source / degraded / shadow):`detail` 为 UI-only 明文(受保护路径仅入本地确认框,ADR-0002 零泄漏承诺),`source` 区分 rule / protected-path / classifier / fail-closed,`degraded` 标记 ask 降级产物。
 
 ### 规则层 (rule layer)
 
