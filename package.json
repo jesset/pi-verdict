@@ -4,9 +4,9 @@
 	"description": "A minimal permission gate for Pi in the style of Claude Code's auto mode",
 	"author": "Jesset (https://github.com/jesset)",
 	"type": "module",
-	"main": "extensions/auto-mode.ts",
+	"main": "extensions/pi-verdict.ts",
 	"files": [
-		"extensions/auto-mode.ts",
+		"extensions/pi-verdict.ts",
 		"README.md",
 		"README.zh-CN.md",
 		"LICENSE"

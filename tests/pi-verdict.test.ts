@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir } from "../extensions/auto-mode.ts";
+import autoMode, { BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir } from "../extensions/pi-verdict.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -947,19 +947,19 @@ describe("buildProtectedSet (pure)", () => {
 	});
 
 	test("single-file install form: exact own file + bash variants", () => {
-		const own = path.join(TMP_AGENT, "extensions", "auto-mode.ts");
+		const own = path.join(TMP_AGENT, "extensions", "pi-verdict.ts");
 		fs.mkdirSync(path.dirname(own), { recursive: true });
 		fs.writeFileSync(own, "// stub");
 		const s = buildProtectedSet(TMP_AGENT, own);
 		const ownReal = fs.realpathSync(own); // macOS TMP 在 /var → realpath 为 /private/var
 		expect(s.exact).toContain(ownReal);
 		expect(s.bashPatterns.some((re) => re.test(`echo x > ${ownReal}`))).toBe(true);
-		expect(s.bashPatterns.some((re) => re.test("cat $PI_CODING_AGENT_DIR/extensions/auto-mode.ts"))).toBe(true);
+		expect(s.bashPatterns.some((re) => re.test("cat $PI_CODING_AGENT_DIR/extensions/pi-verdict.ts"))).toBe(true);
 		expect(s.watchBases).toContainEqual({ file: own, kind: "extension" });
 		expect(s.watchBases).toContainEqual({ file: path.join(TMP_AGENT, "config", "pi-verdict.json"), kind: "config" });
 	});
 	test("npm dir install form: whole package dir as prefix", () => {
-		const own = path.join(TMP_AGENT, "extensions", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(TMP_AGENT, "extensions", "pi-verdict", "extensions", "pi-verdict.ts");
 		fs.mkdirSync(path.dirname(own), { recursive: true });
 		fs.writeFileSync(own, "// stub");
 		const s = buildProtectedSet(TMP_AGENT, own);
@@ -978,11 +978,11 @@ describe("buildProtectedSet (pure)", () => {
 			const pkg = path.join(root, "plugins", "node_modules", "pi-verdict");
 			fs.mkdirSync(path.join(pkg, "extensions"), { recursive: true });
 			fs.writeFileSync(path.join(pkg, "package.json"), "{}");
-			fs.writeFileSync(path.join(pkg, "extensions", "auto-mode.ts"), "// stub");
-			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "auto-mode.ts"));
+			fs.writeFileSync(path.join(pkg, "extensions", "pi-verdict.ts"), "// stub");
+			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "pi-verdict.ts"));
 			expect(s.prefixes).toContain(fs.realpathSync(pkg));
 			expect(isProtectedWritePath(path.join(pkg, "package.json"), "/proj", s)).toBe(true);
-			expect(isProtectedWritePath(path.join(pkg, "extensions", "auto-mode.ts"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(pkg, "extensions", "pi-verdict.ts"), "/proj", s)).toBe(true);
 			expect(s.watchBases).toContainEqual({ file: path.join(pkg, "package.json"), kind: "extension" });
 			// neighbor packages under the same node_modules stay unprotected
 			expect(isProtectedWritePath(path.join(root, "plugins", "node_modules", "other-pkg", "x.ts"), "/proj", s)).toBe(false);
@@ -999,9 +999,9 @@ describe("buildProtectedSet (pure)", () => {
 			fs.mkdirSync(path.join(pkg, "extensions"), { recursive: true });
 			fs.mkdirSync(path.join(scope, "other-pkg"), { recursive: true });
 			fs.writeFileSync(path.join(pkg, "package.json"), "{}");
-			fs.writeFileSync(path.join(pkg, "extensions", "auto-mode.ts"), "// stub");
+			fs.writeFileSync(path.join(pkg, "extensions", "pi-verdict.ts"), "// stub");
 			fs.writeFileSync(path.join(scope, "other-pkg", "x.ts"), "x");
-			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "auto-mode.ts"));
+			const s = buildProtectedSet(agent, path.join(pkg, "extensions", "pi-verdict.ts"));
 			expect(s.prefixes).toContain(fs.realpathSync(pkg));
 			expect(isProtectedWritePath(path.join(pkg, "package.json"), "/proj", s)).toBe(true);
 			expect(isProtectedWritePath(path.join(scope, "other-pkg", "x.ts"), "/proj", s)).toBe(false);
@@ -1009,8 +1009,8 @@ describe("buildProtectedSet (pure)", () => {
 		} finally { fs.rmSync(root, { recursive: true, force: true }); }
 	});
 	test("dev checkout (outside agentDir/extensions) → 不保护扩展文件,仅配置", () => {
-		const s = buildProtectedSet(TMP_AGENT, "/repo/extensions/auto-mode.ts");
-		expect(s.exact).not.toContain("/repo/extensions/auto-mode.ts");
+		const s = buildProtectedSet(TMP_AGENT, "/repo/extensions/pi-verdict.ts");
+		expect(s.exact).not.toContain("/repo/extensions/pi-verdict.ts");
 		expect(s.prefixes.length).toBe(0);
 		expect(isProtectedWritePath(path.join(TMP_AGENT, "config", "pi-verdict.json"), "/proj", s)).toBe(true);
 	});
@@ -1480,51 +1480,51 @@ describe("agentDir self-anchoring (#35)", () => {
 	const HOME = os.homedir();
 
 	test("omp npm install form anchors to the omp agent dir", () => {
-		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
 	});
 
 	test("omp scoped-package form (@scope/pkg) anchors the same way", () => {
-		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
 	});
 
 	test("omp 18.1+ layout (plugins/ is a sibling of agent/) anchors to the omp agent dir", () => {
 		// omp 18.1+ installs npm plugins under <configRoot>/plugins/node_modules/,
 		// NOT under agent/ — verified against omp 18.1.3 (getPluginsDir)
-		const own = path.join(HOME, ".omp", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".omp", "plugins", "node_modules", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
 	});
 
 	test("omp 18.1+ scoped-package form anchors the same way", () => {
-		const own = path.join(HOME, ".omp", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".omp", "plugins", "node_modules", "@jesset", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".omp", "agent"));
 	});
 
 	test("pi single-file install form anchors to the pi agent dir", () => {
-		const own = path.join(HOME, ".pi", "agent", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".pi", "agent", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
 	});
 
 	test("pi npm dir install form anchors to the pi agent dir", () => {
-		const own = path.join(HOME, ".pi", "agent", "extensions", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".pi", "agent", "extensions", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
 	});
 
 	test("PI_CODING_AGENT_DIR wins over anchoring", () => {
-		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+		const own = path.join(HOME, ".omp", "agent", "plugins", "node_modules", "pi-verdict", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(own, HOME, "/custom/agent")).toBe("/custom/agent");
 	});
 
 	test("dual install: a ~/.omp tree existing must not redirect a pi-anchored run", () => {
 		// The resolver never probes for host trees; presence of ~/.omp is irrelevant
 		// when the extension copy itself lives under ~/.pi (the misrouting trap #35 closes).
-		const piOwn = path.join(HOME, ".pi", "agent", "extensions", "auto-mode.ts");
+		const piOwn = path.join(HOME, ".pi", "agent", "extensions", "pi-verdict.ts");
 		expect(resolveAgentDir(piOwn, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
 	});
 
 	test("dev checkout (no agent anchor in the path) falls back to ~/.pi/agent", () => {
-		expect(resolveAgentDir("/repo/extensions/auto-mode.ts", HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
+		expect(resolveAgentDir("/repo/extensions/pi-verdict.ts", HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
 		expect(resolveAgentDir(null, HOME, undefined)).toBe(path.join(HOME, ".pi", "agent"));
 	});
 
@@ -1536,7 +1536,7 @@ describe("agentDir self-anchoring (#35)", () => {
 			const linked = path.join(base, "linked");
 			fs.mkdirSync(path.join(agent, "extensions"), { recursive: true });
 			fs.symlinkSync(agent, linked);
-			const own = path.join(linked, "extensions", "auto-mode.ts");
+			const own = path.join(linked, "extensions", "pi-verdict.ts");
 			fs.writeFileSync(own, "// stub");
 			const resolved = resolveAgentDir(own, HOME, undefined);
 			expect(resolved === path.join(base, "agent") || resolved === path.join(HOME, ".pi", "agent")).toBe(true);
@@ -1580,13 +1580,13 @@ describe("omp host forms: S0 floor + self-protection (#35)", () => {
 			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
 			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
 			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
-			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			const own = path.join(pkgDir, "extensions", "pi-verdict.ts");
 			fs.writeFileSync(own, "// stub");
 			const s = buildProtectedSet(agent, own);
 			const pkgReal = fs.realpathSync(pkgDir);
 			expect(s.prefixes).toContain(pkgReal);
 			expect(isProtectedWritePath(path.join(pkgDir, "package.json"), "/proj", s)).toBe(true);
-			expect(isProtectedWritePath(path.join(pkgDir, "extensions", "auto-mode.ts"), "/proj", s)).toBe(true);
+			expect(isProtectedWritePath(path.join(pkgDir, "extensions", "pi-verdict.ts"), "/proj", s)).toBe(true);
 			expect(isProtectedWritePath(path.join(agent, "plugins", "node_modules", "other-pkg", "x.ts"), "/proj", s)).toBe(false); // outside the package
 			const watched = s.watchBases.filter((w) => w.kind === "extension").map((w) => w.file);
 			expect(watched).toContain(path.join(pkgDir, "package.json"));
@@ -1601,7 +1601,7 @@ describe("omp host forms: S0 floor + self-protection (#35)", () => {
 		try {
 			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
 			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
-			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			const own = path.join(pkgDir, "extensions", "pi-verdict.ts");
 			fs.writeFileSync(own, "// stub");
 			fs.writeFileSync(path.join(pkgDir, "package.json"), "{}");
 			const s = buildProtectedSet(agent, own);
@@ -1615,10 +1615,10 @@ describe("omp host forms: S0 floor + self-protection (#35)", () => {
 		try {
 			const pkgDir = path.join(agent, "plugins", "node_modules", "pi-verdict");
 			fs.mkdirSync(path.join(pkgDir, "extensions"), { recursive: true });
-			const own = path.join(pkgDir, "extensions", "auto-mode.ts");
+			const own = path.join(pkgDir, "extensions", "pi-verdict.ts");
 			fs.writeFileSync(own, "// stub");
 			const s = buildProtectedSet(agent, own);
-			const rel = path.join("plugins", "node_modules", "pi-verdict", "extensions", "auto-mode.ts");
+			const rel = path.join("plugins", "node_modules", "pi-verdict", "extensions", "pi-verdict.ts");
 			expect(s.bashPatterns.some((re) => re.test(`cat $PI_CODING_AGENT_DIR/${rel}`))).toBe(true);
 		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
 	});

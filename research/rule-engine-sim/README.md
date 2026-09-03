@@ -5,7 +5,7 @@
 ## 方法
 
 - 数据源:`~/.pi/agent/sessions` 近 3 天全部项目会话,assistant 消息中的 bash toolCall(纯函数回放,无需扩展实际在线)
-- 本仓库规则层:从 `extensions/auto-mode.ts` 源码原文提取(Bun.Transpiler 剥类型后 eval),行为与线上一致
+- 本仓库规则层:从 `extensions/pi-verdict.ts` 源码原文提取(Bun.Transpiler 剥类型后 eval),行为与线上一致
 - AST 检查:web-tree-sitter@0.26.11 + tree-sitter-bash@0.25.1,复刻 pi-permission `src/ast/analyzer.ts` 的 ALLOWED_KINDS(11 节点)+ ALLOWED_PUNCT(6 标点),fail-closed 语义
 - 其白名单:从其 `src/rules/builtins.ts` 源码提取(无条件 50 + 条件 9——**比本仓库的 78+9 更窄**)
 - 复现:`cd ~/tmp/ast-lab && npm i web-tree-sitter@0.26.11 tree-sitter-bash@0.25.1 && bun measure.ts`(路径见脚本头)

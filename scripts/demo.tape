@@ -12,7 +12,7 @@
 #   #    (use a short-lived litellm/proxy key — never the real provider config,
 #     #    so nothing internal ever appears on screen)
 #   mkdir -p /Volumes/RamDisk/pi-verdict-demo-agent/{config,extensions}
-#   cp extensions/auto-mode.ts /Volumes/RamDisk/pi-verdict-demo-agent/extensions/
+#   cp extensions/pi-verdict.ts /Volumes/RamDisk/pi-verdict-demo-agent/extensions/
 #   cat > /Volumes/RamDisk/pi-verdict-demo-agent/models.json <<'JSON'
 #   {
 #     "providers": {
