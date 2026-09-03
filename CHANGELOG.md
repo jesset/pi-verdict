@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Changed
 
 - Renamed the extension entry file to `extensions/pi-verdict.ts` — the entry file now matches the package name and the config file (`pi-verdict.json`). Runtime interfaces are unchanged (`--auto-mode*` flags, `/automode` command, `PI_AUTO_MODE_*` env). Both install paths load the extensions directory, so `pi install` / `omp plugin install` users are unaffected.
+- Internal refactor (behavior-identical): the tool_call adjudication pipeline is now `adjudicate()` — a zero-UI module returning a `Verdict` value object (`source: rule | protected-path | classifier | fail-closed` × `degraded` for ask→deny in non-interactive sessions). The two previously duplicated ask-degradation branches collapse into one place; the handler only maps verdicts to UI. Tamper detection moved into an `IntegrityWatch` class and session state into a `SessionState` class (one reset list per module). New interface-level tests cover ask-degradation unification, the full `source × degraded` matrix, and a denyPaths zero-plaintext regression on reasons and notifications (ADR-0002 story 11). The dead `selfProtectCheck` export was removed; block reasons and notification texts are byte-identical.
 
 ## [0.6.1] - 2026-09-03
 

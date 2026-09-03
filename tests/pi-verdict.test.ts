@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir } from "../extensions/pi-verdict.ts";
+import autoMode, { adjudicate, BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -1621,5 +1621,93 @@ describe("omp host forms: S0 floor + self-protection (#35)", () => {
 			const rel = path.join("plugins", "node_modules", "pi-verdict", "extensions", "pi-verdict.ts");
 			expect(s.bashPatterns.some((re) => re.test(`cat $PI_CODING_AGENT_DIR/${rel}`))).toBe(true);
 		} finally { fs.rmSync(agent, { recursive: true, force: true }); }
+	});
+});
+
+// ── 20. 判定管线 interface 级(adjudicate):ask 降级统一 / source × degraded / 明文零泄漏 ──
+
+/** 构造直接驱动 adjudicate 的最小环境:fake complete + 空 branch 的 host */
+function adjudicateEnv(overrides: { text?: string; hasUI?: boolean; model?: any; failModel?: boolean } = {}) {
+	return {
+		cwd: "/proj",
+		hasUI: overrides.hasUI ?? true,
+		getModel: () => (overrides.failModel ? null : { model: overrides.model ?? { id: "mock/glm" }, thinking: "off" as const }),
+		complete: (async () => ({
+			content: [{ type: "text", text: overrides.text ?? "<verdict>allow</verdict> ok" }],
+			stopReason: "stop",
+		})) as any,
+		host: { getBranch: () => [], getSessionId: () => "s1" },
+		signal: undefined,
+	};
+}
+
+describe("adjudicate pipeline (interface level)", () => {
+	const secret = "/proj/secret-project"; // 虚构路径:避开 /var 等 S1 系统目录 floor,且落在会话 cwd 内
+
+	test("ask degradation is unified: protected-path ask degrades to deny without UI", async () => {
+		setConfig({ denyPaths: [secret] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const v = await adjudicate(state, { toolName: "write", input: { path: path.join(secret, "notes.md"), content: "x" } }, adjudicateEnv({ hasUI: false }));
+		expect(v.verdict).toBe("deny");
+		expect(v.source).toBe("protected-path");
+		expect(v.degraded).toBe(true);
+		expect(v.detail).toBeTruthy(); // UI-only channel still carries the matched base
+	});
+
+	test("ask degradation is unified: classifier ask degrades to deny without UI", async () => {
+		setConfig({});
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const v = await adjudicate(state, { toolName: "bash", input: { command: "echo hello" } }, adjudicateEnv({ hasUI: false, text: "<verdict>ask</verdict> maybe" }));
+		expect(v.verdict).toBe("deny");
+		expect(v.source).toBe("classifier");
+		expect(v.degraded).toBe(true);
+	});
+
+	test("with UI the same calls stay terminal asks (degradation is UI-conditional, not verdict-conditional)", async () => {
+		setConfig({ denyPaths: [secret] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const v = await adjudicate(state, { toolName: "write", input: { path: path.join(secret, "notes.md"), content: "x" } }, adjudicateEnv({ hasUI: true }));
+		expect(v.verdict).toBe("ask");
+		expect(v.degraded).toBe(false);
+		const v2 = await adjudicate(state, { toolName: "bash", input: { command: "echo hello" } }, adjudicateEnv({ hasUI: true, text: "<verdict>ask</verdict> maybe" }));
+		expect(v2.verdict).toBe("ask");
+		expect(v2.degraded).toBe(false);
+	});
+
+	test("source × degraded covers every template key the presenter can encounter", async () => {
+		const run = async (cfg: Parameters<typeof setConfig>[0], tool: string, input: any, env: any) => {
+			setConfig(cfg);
+			return adjudicate(new SessionState(buildProtectedSet(TMP_AGENT, null)), { toolName: tool, input }, env);
+		};
+		expect(await run({ allow: ["^ls\\b"] }, "bash", { command: "ls -la" }, adjudicateEnv())).toMatchObject({ verdict: "allow", source: "rule", degraded: false });
+		expect(await run({}, "bash", { command: "rm " + "-rf /tmp/x" }, adjudicateEnv())).toMatchObject({ verdict: "deny", source: "rule", degraded: false });
+		expect(await run({ denyPaths: [secret] }, "write", { path: path.join(secret, "n.md"), content: "x" }, adjudicateEnv())).toMatchObject({ verdict: "ask", source: "protected-path", degraded: false });
+		expect(await run({ denyPaths: [secret] }, "write", { path: path.join(secret, "n.md"), content: "x" }, adjudicateEnv({ hasUI: false }))).toMatchObject({ verdict: "deny", source: "protected-path", degraded: true });
+		expect(await run({}, "bash", { command: "echo hello" }, adjudicateEnv({ text: "<verdict>allow</verdict> ok" }))).toMatchObject({ verdict: "allow", source: "classifier", degraded: false });
+		expect(await run({}, "bash", { command: "echo hello" }, adjudicateEnv({ text: "<verdict>deny</verdict> no" }))).toMatchObject({ verdict: "deny", source: "classifier", degraded: false });
+		expect(await run({}, "bash", { command: "echo hello" }, adjudicateEnv({ text: "<verdict>ask</verdict> hmm" }))).toMatchObject({ verdict: "ask", source: "classifier", degraded: false });
+		expect(await run({}, "bash", { command: "echo hello" }, adjudicateEnv({ hasUI: false, text: "<verdict>ask</verdict> hmm" }))).toMatchObject({ verdict: "deny", source: "classifier", degraded: true });
+		expect(await run({}, "bash", { command: "echo hello" }, adjudicateEnv({ failModel: true }))).toMatchObject({ verdict: "deny", source: "fail-closed", degraded: false });
+	});
+
+	test("denyPaths zero-leak regression: no protected-path plaintext in any reason or notification (ADR-0002 story 11)", async () => {
+		const protectedPath = path.join(secret, "notes.md");
+		// Verdict 面:ask 与降级 deny 的 reason 都不得含路径明文
+		setConfig({ denyPaths: [secret] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const vAsk = await adjudicate(state, { toolName: "write", input: { path: protectedPath, content: "x" } }, adjudicateEnv());
+		expect(vAsk.verdict).toBe("ask");
+		expect(vAsk.reason).not.toContain("secret-project");
+		expect(vAsk.detail).toContain(path.basename(secret)); // plaintext lives only in the UI-only channel
+		const vDegraded = await adjudicate(state, { toolName: "write", input: { path: protectedPath, content: "x" } }, adjudicateEnv({ hasUI: false }));
+		expect(vDegraded.reason).not.toContain("secret-project");
+		// Handler 面:非交互降级的 block reason 与全部 notify 文案都不得含路径明文
+		const h = makeHarness();
+		h.install();
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "write", { path: protectedPath, content: "x" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).not.toContain("secret-project");
+		for (const [msg] of h.notifies) expect(msg).not.toContain("secret-project");
 	});
 });
