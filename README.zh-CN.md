@@ -55,7 +55,7 @@ pi install npm:pi-verdict
 omp plugin install npm:pi-verdict
 
 # 或直接从源码 —— 试用一次
-pi --extension ./extensions/auto-mode.ts
+pi --extension ./extensions/pi-verdict.ts
 
 ```
 
@@ -124,7 +124,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 
 完整全景:[`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · 与最近架构亲缘的收敛分析:[`research/pi-automode-convergence.md`](research/pi-automode-convergence.md)。
 
-诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖的[可通读单文件](extensions/auto-mode.ts)(仍刻意单文件)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
+诚实地说:pi-automode 与 pi-verdict 在**架构上已收敛**(deny floor → 用户规则 → 分类器,fail-closed——见收敛分析)。这里仍然不同的是:分类器能说 `ask`(运行时人工介入,而非仅由规则预声明)、内置 floor 可以关(`builtinDenyFloor`——用户主权)、任何配置都关不掉的自保护层([ADR-0001](docs/adr/0001-self-protection-layer.md)——门禁完整性)、零依赖的[可通读单文件](extensions/pi-verdict.ts)(仍刻意单文件)、以及测量的习惯——本仓库每个设计决策都有随库研究背书。
 
 ## 管线
 

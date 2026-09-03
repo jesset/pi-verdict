@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the extension entry file to `extensions/pi-verdict.ts` — the entry file now matches the package name and the config file (`pi-verdict.json`). Runtime interfaces are unchanged (`--auto-mode*` flags, `/automode` command, `PI_AUTO_MODE_*` env). Both install paths load the extensions directory, so `pi install` / `omp plugin install` users are unaffected.
+
 ## [0.6.1] - 2026-09-03
 
 ### Fixed

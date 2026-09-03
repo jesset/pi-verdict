@@ -6,7 +6,7 @@
 
 ### Auto Mode
 
-本项目要构建的 Pi 扩展及其核心模式:工具调用的权限不由人工逐次批准,也不全然放行(Pi 默认的 YOLO 行为),而是由**规则层 + 模型分类器**自动判定。语义对齐 Claude Code 的 Auto Mode,但方向相反:Claude Code 是"默认提示 → 分类器自动批准",Pi 是"默认放行 → 分类器自动拦截"。
+本产品(pi-verdict)的核心裁决模式:工具调用的权限不由人工逐次批准,也不全然放行(Pi 默认的 YOLO 行为),而是由**规则层 + 模型分类器**自动判定。语义对齐 Claude Code 的 Auto Mode,但方向相反:Claude Code 是"默认提示 → 分类器自动批准",Pi 是"默认放行 → 分类器自动拦截"。命名分层:扩展实体与持久物(包、入口文件、配置文件)用产品名 pi-verdict;运行时接口(CLI flag、`/automode` 命令、env 变量)用功能名 auto-mode 前缀。
 
 ### 主开关 (master switch)
 

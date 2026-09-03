@@ -14,7 +14,7 @@
 本扩展的安全边界由它自己守护,开发工作流随之受限:
 
 - agent 不可写 `<agentDir>/config/pi-verdict.json` 与 `<agentDir>/extensions/` 下的安装副本——自保护层恒 deny,不可经任何配置豁免
-- 实测新版本 = 用户在终端 `cp extensions/auto-mode.ts ~/.pi/agent/extensions/` 后重启 pi(agent 代劳会被拦);改用户规则同理,仅用户手工编辑
+- 实测新版本 = 用户在终端 `cp extensions/pi-verdict.ts ~/.pi/agent/extensions/` 后重启 pi(agent 代劳会被拦);改用户规则同理,仅用户手工编辑
 
 ### 发布
 

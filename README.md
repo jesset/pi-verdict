@@ -54,7 +54,7 @@ pi install npm:pi-verdict
 omp plugin install npm:pi-verdict
 
 # or directly from git — try it once
-pi --extension ./extensions/auto-mode.ts
+pi --extension ./extensions/pi-verdict.ts
 
 ```
 
@@ -123,7 +123,7 @@ Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) s
 
 Full landscape: [`research/pi-permission-landscape.md`](research/pi-permission-landscape.md) · convergence analysis with the closest architectural relative: [`research/pi-automode-convergence.md`](research/pi-automode-convergence.md).
 
-Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file ([one readable file](extensions/auto-mode.ts), still one file on purpose), and the measurement habit — every design decision in this repo is backed by shipped research.
+Honest framing: pi-automode and pi-verdict have **converged on the same architecture** (deny floor → user rules → classifier, fail-closed — see the convergence analysis). What remains distinct here: a classifier that can say `ask` (runtime human-in-the-loop, not just rule-declared), a built-in floor you can turn off (`builtinDenyFloor` — user sovereignty), a self-protection layer that no config can turn off ([ADR-0001](docs/adr/0001-self-protection-layer.md) — gate integrity), a zero-dependency single file ([one readable file](extensions/pi-verdict.ts), still one file on purpose), and the measurement habit — every design decision in this repo is backed by shipped research.
 
 ## Pipeline
 
