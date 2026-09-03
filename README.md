@@ -8,7 +8,7 @@
 
 **pi-verdict is a minimal permission gate for [pi](https://pi.dev) in the style of Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
 
-- Minimal — just a few hundred lines of code
+- Minimal — just 1k+ lines of code
 - Built-in danger rules and your own allow/deny rules settle the clear cases first, at zero latency
 - Everything else goes to a model classifier that sees the conversation context
 - Any uncertainty or failure fails closed; nothing ever runs silently
@@ -28,7 +28,7 @@ pi-verdict adds the missing gate: a model decides whether each call should run, 
 
 - **Fail closed** — uncertainty produces friction, never permission.
 - **Deterministic floor before AI** — hard denies are never overridden by the classifier or user allow rules.
-- **Semantics over syntax** — a long read-only pipeline may auto-allow while a short destructive one still denies; the classifier judges what an action *does*, not how long it is.
+- **Semantics over syntax** — the classifier judges what an action *does*, not how long it is.
 - **Judgments, not proofs** — a classifier `allow` is an informed opinion; the floor exists because that is all it is.
 - **Minimal trusted input** — no tool results in the transcript (#22), zero path plaintext to the classifier (ADR-0002).
 - **Canonical identity** — lexical + realpath dual-form matching; a workspace-*looking* path is not trusted as one (#20/#21).
