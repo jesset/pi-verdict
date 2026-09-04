@@ -143,6 +143,59 @@ function classifyBash(command: string, floorOn: boolean): RuleResult {
 }
 
 // ============================================================================
+// 规范形:双形匹配两档的唯一实现(纪律见 CONTEXT.md「双形匹配」词条)
+// ============================================================================
+
+/**
+ * 基础档(ADR-0002):词法绝对形 + 整路径 realpath 形(realpath 解析 symlink
+ * 间接;失败——目标不存在、glob token——降级为仅词法形)。denyPaths 与一切
+ * 「基址侧」双形集合(cwd 基址、agentDir、安装根、受保护集合、基线快照)走这一档。
+ */
+function baseForms(p: string): string[] {
+	const out = [p];
+	try {
+		const r = fs.realpathSync(p);
+		if (r !== p) out.push(r);
+	} catch {
+		/* 不存在:仅词法形 */
+	}
+	return out;
+}
+
+/**
+ * 祖先重建档(#20):基础形之外,目标尚不存在时自最近存在祖先的 realpath 逐级
+ * 重建真实形——symlink 别名即使最终段不存在也暴露其真实位置。误放行代价高的
+ * 判定(自保护层、路径敏感度 floor)走这一档;denyPaths 不升档(ADR-0002)。
+ */
+function rebuiltForms(abs: string): string[] {
+	const out = new Set<string>([abs]);
+	let dir = abs;
+	const tail: string[] = [];
+	for (;;) {
+		try {
+			const real = fs.realpathSync(dir);
+			out.add(path.join(real, ...tail));
+			return [...out];
+		} catch {
+			const parent = path.dirname(dir);
+			if (parent === dir) return [...out];
+			tail.unshift(path.basename(dir));
+			dir = parent;
+		}
+	}
+}
+
+/** Case-insensitive filesystems (default macOS APFS, Windows) compare path strings
+ *  case-folded; realpath already normalizes case whenever it resolves, this covers
+ *  the lexical-only forms of nonexistent targets (#21). Linux stays case-sensitive.
+ *  折叠比较仅 denyPaths 消费(S-rules 的比较纪律在正则 /i、自保护层在精确匹配
+ *  ——各自持有,不因本模块统一,见双形匹配词条)。 */
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+const fold = (s: string): string => (CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
+const pathEquals = (a: string, b: string): boolean => fold(a) === fold(b);
+const pathStartsWith = (child: string, base: string): boolean => fold(child).startsWith(fold(base) + path.sep);
+
+// ============================================================================
 // 用户规则:白名单/黑名单(可配置;#12 审计响应)
 //
 // 配置:<agentDir>/config/pi-verdict.json(尊重 PI_CODING_AGENT_DIR 覆盖):
@@ -240,7 +293,7 @@ export function resolveAgentDir(ownFile: string | null, home: string, envAgentDi
 	if (envAgentDir) return envAgentDir;
 	if (ownFile) {
 		const anchor = new RegExp(`^${escapeRegExp(home)}(/(\\.[^/]+)/(?:agent/)?(?:plugins/node_modules/(?:@[^/]+/)?[^/]+/)?extensions/)`);
-		for (const f of [ownFile, tryRealpath(ownFile)]) {
+		for (const f of baseForms(ownFile)) {
 			const m = f.match(anchor);
 			if (m) return path.join(home, m[2], "agent");
 		}
@@ -353,38 +406,13 @@ const S1_SYSTEM = [/^\/etc(\/|$)/i, /^\/private\/(etc|var)(\/|$)/i, /^\/usr(\/|$
 const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/i, /crontab/i, /Library\/LaunchAgents(\/|$)/i, /\.config\/systemd(\/|$)/i];
 const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/i, /(^|\/)\.gitmodules$/i];
 
-/**
- * All canonical forms of a path for rule matching: the lexical absolute plus,
- * whenever an existing ancestor can be resolved, the form rebuilt from that
- * ancestor's realpath. Read and write targets may both not exist yet — walking
- * up to the nearest existing ancestor means a symlink alias exposes its real
- * form even when the final segments do not exist (#20).
- */
-function targetForms(abs: string): string[] {
-	const out = new Set<string>([abs]);
-	let dir = abs;
-	const tail: string[] = [];
-	for (;;) {
-		try {
-			const real = fs.realpathSync(dir);
-			out.add(path.join(real, ...tail));
-			return [...out];
-		} catch {
-			const parent = path.dirname(dir);
-			if (parent === dir) return [...out];
-			tail.unshift(path.basename(dir));
-			dir = parent;
-		}
-	}
-}
-
 /** read 类工具:S0 读取即高危(deny),其余读取放行。isWrite: write/edit 走完整分级 */
 function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: boolean, floorOn: boolean): RuleResult {
 	const abs = path.resolve(cwd, expandHome(rawPath));
 	// Dual-form matching (#20): rules test every canonical form of the target —
 	// a project-local symlink aliasing ~/.ssh or a .git/hooks dir must not pass
 	// the floor on its lexical spelling alone.
-	const forms = targetForms(abs);
+	const forms = rebuiltForms(abs);
 	const hit = (rules: RegExp[]) => forms.some((f) => rules.some((r) => r.test(f)));
 	// floor 关闭时:内置 deny 一律降级 gray(永不升格 allow);非 deny 分支(allow/gray)保持
 	const D = floorOn
@@ -402,7 +430,7 @@ function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: b
 	// In-cwd write allowance (#20): every canonical form must sit inside the cwd
 	// (in either its lexical or real form) — a lexical prefix hit whose real
 	// form escapes the project (symlink alias) grades as an outside-cwd write.
-	const cwdBases = new Set([cwd, tryRealpath(cwd)]);
+	const cwdBases = new Set(baseForms(cwd));
 	const inCwd = (f: string) => [...cwdBases].some((b) => f === b || f.startsWith(b + path.sep));
 	if (forms.every(inCwd)) return { verdict: "allow" };
 	return { verdict: "gray", reason: `write outside project directory (CWD): ${rawPath}` };
@@ -461,20 +489,14 @@ function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: s
 const BASH_PATH_TOKENS =
 	/(?:~|\$HOME)(?:\/[\w.@*-]+)*|\/(?:[\w.@*-]+\/)*[\w.@*-]*|\.{1,2}(?:\/[\w.@*-]+)+|[\w.-]+(?:\/[\w.-]+)+/g;
 
-/** Case-insensitive filesystems (default macOS APFS, Windows) compare path strings
- *  case-folded; realpath already normalizes case whenever it resolves, this covers
- *  the lexical-only forms of nonexistent targets (#21). Linux stays case-sensitive. */
-const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
-const fold = (s: string): string => (CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
-const pathEquals = (a: string, b: string): boolean => fold(a) === fold(b);
-const pathStartsWith = (child: string, base: string): boolean => fold(child).startsWith(fold(base) + path.sep);
-
-/** Normalized forms of one path (lexical + realpath when it exists) for denyPaths comparison */
+/** Normalized forms of one path for denyPaths comparison: base tier only (ADR-0002) —
+ *  no ancestor rebuild; a nonexistent target under a symlinked dir falls to the
+ *  classifier + existence hint instead (pinned by a regression test). */
 function denyPathForms(raw: string, cwd: string): string[] {
 	if (!raw) return [];
 	// denyPaths spellings accept $HOME/ as an alias for ~/ (user-rule targets stay raw strings — no $ expansion there)
 	const expanded = expandHome(raw.replace(/^\$HOME(?=\/|$)/, os.homedir()));
-	return pathForms(path.resolve(cwd, expanded));
+	return baseForms(path.resolve(cwd, expanded));
 }
 
 /** Normalize the configured denyPaths against one cwd (ADR-0002: anchored once per session, never re-derived) */
@@ -535,26 +557,6 @@ interface ProtectedSet {
 
 type WatchKind = "config" | "extension";
 
-function tryRealpath(p: string): string {
-	try {
-		return fs.realpathSync(p);
-	} catch {
-		return p;
-	}
-}
-
-/** 路径的全部规范形:词法绝对 + realpath(存在且不同时追加) */
-function pathForms(p: string): string[] {
-	const out = [p];
-	try {
-		const r = fs.realpathSync(p);
-		if (r !== p) out.push(r);
-	} catch {
-		/* 不存在:仅词法形 */
-	}
-	return out;
-}
-
 function escapeRegExp(s: string): string {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -572,7 +574,7 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 	const prefixes = new Set<string>();
 	const configPath = path.join(agentDir, "config", "pi-verdict.json");
 	const watchBases: Array<{ file: string; kind: WatchKind }> = [{ file: configPath, kind: "config" }];
-	for (const f of pathForms(configPath)) exact.add(f);
+	for (const f of baseForms(configPath)) exact.add(f);
 
 	// 安装副本目标:单文件形态 → 文件本体(exact);npm 目录形态 → 包根目录(prefix)。
 	// extRoot 与 ownFile 各取词法/realpath 双形交叉判定,集合同样双形收录——
@@ -626,17 +628,15 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		// → exact, a package dir (`@scope/pkg` or `pkg`) → prefix, so every
 		// npm form gets whole-package-dir protection (#26).
 		const extRoots = new Set<string>();
-		const agentBases = new Set([agentDir, tryRealpath(agentDir)]);
+		const agentBases = new Set(baseForms(agentDir));
 		const configRootBases = new Set([...agentBases].map((b) => path.dirname(b)));
 		for (const seg of [["extensions"], ["plugins", "node_modules"]]) {
 			const bases = seg.length === 2 ? new Set([...agentBases, ...configRootBases]) : agentBases;
 			for (const base of bases) {
-				const root = path.join(base, ...seg);
-				extRoots.add(root);
-				extRoots.add(tryRealpath(root));
+				for (const root of baseForms(path.join(base, ...seg))) extRoots.add(root);
 			}
 		}
-		const ownForms = new Set([ownFile, tryRealpath(ownFile)]);
+		const ownForms = new Set(baseForms(ownFile));
 		for (const extRoot of extRoots) {
 			for (const own of ownForms) {
 				if (!own.startsWith(extRoot + path.sep)) continue;
@@ -645,14 +645,14 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 				// npm scopes are two-segment dirs (@scope/pkg): the install
 				// target is the package, not the whole scope dir
 				const target = singleFile ? own : path.join(extRoot, ...segs.slice(0, segs[0].startsWith("@") ? 2 : 1));
-				for (const f of pathForms(target)) {
+				for (const f of baseForms(target)) {
 					(singleFile ? exact : prefixes).add(f);
 					extTargets.add(f);
 				}
 				if (!singleFile && pkgRoot === null) pkgRoot = target;
 			}
 		}
-		// one walk of the package root (lexical form; takeSnapshots' pathForms
+		// one walk of the package root (lexical form; takeSnapshots' baseForms
 		// expansion picks up real forms per file) — no duplicate entries
 		if (pkgRoot !== null) {
 			for (const f of listPackageFiles(pkgRoot)) {
@@ -676,7 +676,7 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 				alts.add("\\$HOME/" + escapeRegExp(rel));
 			}
 			// $PI_CODING_AGENT_DIR 变体:词法与 realpath 两种基名列举(符号链接目录容忍)
-			for (const base of new Set([agentDir, tryRealpath(agentDir)])) {
+			for (const base of new Set(baseForms(agentDir))) {
 				if (f.startsWith(base + path.sep)) {
 					alts.add("\\$PI_CODING_AGENT_DIR/" + escapeRegExp(f.slice(base.length + 1)));
 				}
@@ -693,7 +693,7 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
  *  nearest existing ancestor, #20) */
 export function isProtectedWritePath(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
 	if (!rawPath) return false;
-	for (const c of targetForms(path.resolve(cwd, expandHome(rawPath)))) {
+	for (const c of rebuiltForms(path.resolve(cwd, expandHome(rawPath)))) {
 		if (prot.exact.includes(c)) return true;
 		for (const p of prot.prefixes) {
 			if (c === p || c.startsWith(p + path.sep)) return true;
@@ -733,7 +733,7 @@ function takeSnapshots(bases: Array<{ file: string; kind: WatchKind }>): Array<{
 	const out: Array<{ file: string; kind: WatchKind; content: Buffer | null }> = [];
 	const seen = new Set<string>();
 	for (const b of bases) {
-		for (const f of pathForms(b.file)) {
+		for (const f of baseForms(b.file)) {
 			if (seen.has(f)) continue;
 			seen.add(f);
 			let content: Buffer | null = null;

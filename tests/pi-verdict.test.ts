@@ -1368,6 +1368,38 @@ describe("denyPaths (ADR-0002)", () => {
 		expect(h.confirms).toBe(0);
 		expect(r).toBeUndefined(); // rule-layer allow (non-S0/S1 read): the declaration did not follow the cwd
 	});
+
+	test("tier discipline pinned: nonexistent target through a symlinked alias does NOT hit denyPaths (base tier, #41 ruling)", async () => {
+		// denyPaths is base-tier only (ADR-0002): whole-path realpath, no ancestor
+		// rebuild — a nonexistent target under a symlinked dir produces only the
+		// lexical form and misses, falling to the classifier + existence hint.
+		// Contrast: an EXISTING target in the same alias resolves through the
+		// symlink and hits. read is used because tmpdir paths under /var/... are
+		// S1 writes-denied by the floor before denyPaths ever runs.
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "pv-tier-real-"));
+		const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), "pv-tier-alias-"));
+		const alias = path.join(aliasParent, "loot");
+		fs.symlinkSync(real, alias);
+		try {
+			fs.writeFileSync(path.join(real, "exists.md"), "x");
+			setConfig({ denyPaths: [real] });
+			// nonexistent target: no rebuilt real form → miss → classifier decides
+			let h = makeHarness(); h.install();
+			h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+			const r = await toolCall(h, "read", { path: path.join(alias, "new.md") });
+			expect(r).toBeUndefined();
+			expect(h.confirms).toBe(0);
+			expect(h.calls.length).toBe(1);
+			// existing target in the same alias: realpath resolves through the symlink → hit
+			h = makeHarness(); h.install();
+			await toolCall(h, "read", { path: path.join(alias, "exists.md") });
+			expect(h.confirms).toBe(1);
+			expect(h.calls.length).toBe(0);
+		} finally {
+			fs.rmSync(aliasParent, { recursive: true, force: true });
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
 });
 
 // ── 11. omp 宿主支持(#35:completion 降级 / agentDir 自锚定 / omp 形态保护)──
