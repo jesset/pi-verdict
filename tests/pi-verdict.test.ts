@@ -1283,27 +1283,29 @@ describe("denyPaths (ADR-0002)", () => {
 		// rebuild — a nonexistent target under a symlinked dir produces only the
 		// lexical form and misses, falling to the classifier + existence hint.
 		// Contrast: an EXISTING target in the same alias resolves through the
-		// symlink and hits. read is used because tmpdir paths under /var/... are
-		// S1 writes-denied by the floor before denyPaths ever runs.
-		await withTempDir("pv-tier-real-", async (real) => {
-			await withTempDir("pv-tier-alias-", async (aliasParent) => {
+		// symlink and hits. Fixtures live under the real home and use write: a
+		// home-based write outside the cwd grades gray on every platform (macOS
+		// tmpdir sits under /var/... where S1 would floor-deny reads/writes
+		// before denyPaths runs; Linux /tmp reads would rule-allow instead).
+		await withTempDir(".pv-tier-real-", async (real) => {
+			await withTempDir(".pv-tier-alias-", async (aliasParent) => {
 				const alias = path.join(aliasParent, "loot");
 				fs.symlinkSync(real, alias);
 				fs.writeFileSync(path.join(real, "exists.md"), "x");
 				// nonexistent target: no rebuilt real form → miss → classifier decides
 				const h = session({ denyPaths: [real] });
 				h.responses = [{ text: "<verdict>allow</verdict> ok" }];
-				const r = await toolCall(h, "read", { path: path.join(alias, "new.md") });
+				const r = await toolCall(h, "write", { path: path.join(alias, "new.md"), content: "x" });
 				expect(r).toBeUndefined();
 				expect(h.confirms).toBe(0);
 				expect(h.calls.length).toBe(1);
 				// existing target in the same alias: realpath resolves through the symlink → hit
 				const h2 = session({ denyPaths: [real] });
-				await toolCall(h2, "read", { path: path.join(alias, "exists.md") });
+				await toolCall(h2, "write", { path: path.join(alias, "exists.md"), content: "x" });
 				expect(h2.confirms).toBe(1);
 				expect(h2.calls.length).toBe(0);
-			});
-		});
+			}, os.homedir());
+		}, os.homedir());
 	});
 });
 
