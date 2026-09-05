@@ -259,9 +259,17 @@ interface UserRules {
 	classifierModel: string | null;
 	/** 主开关 toggle 快捷键键位(#15);null = 禁用;缺省 DEFAULT_TOGGLE_SHORTCUT */
 	toggleShortcut: string | null;
+	/** User-declared tool passthrough: names of tools OUTSIDE the command/file
+	 *  families (todo, web_search, MCP/custom tools, …) that skip adjudication —
+	 *  session-metadata/read-only tools the owner exempts, same stance as user allow
+	 *  rules: no built-in passthrough, every exemption is the user's own claim.
+	 *  Entries naming covered tools (bash/read/write/edit/grep/find/ls/powershell)
+	 *  are inert: those are governed by the deny floor and user allow/deny rules,
+	 *  which this list can never weaken. */
+	ignoreTools: string[];
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, ignoreTools: [] };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -334,7 +342,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -362,12 +370,22 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			}
 			return [x.trim()];
 		});
+		// ignoreTools entries are plain tool names: only type-valid non-empty strings
+		// survive; anything else joins the same one-shot warning channel
+		const ignoreTools = (Array.isArray(raw.ignoreTools) ? raw.ignoreTools : []).flatMap((x) => {
+			if (typeof x !== "string" || !x.trim()) {
+				if (x !== undefined && x !== null) skipped.push(`ignoreTools: ${JSON.stringify(x)}`);
+				return [];
+			}
+			return [x.trim()];
+		});
 		const shortcut = resolveToggleShortcut(raw.toggleShortcut);
 		return {
 			rules: {
 				allow: compile(raw.allow),
 				deny: compile(raw.deny),
 				denyPaths,
+				ignoreTools,
 				builtinDenyFloor: raw.builtinDenyFloor !== false,
 				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
 				toggleShortcut: shortcut.key,
@@ -840,7 +858,12 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 		const p = typeof input.path === "string" ? input.path : undefined;
 		base = p ? classifyPath(toolName, p, cwd, false, user.builtinDenyFloor) : { verdict: "allow" };
 	} else {
-		base = { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
+		// ignoreTools passthrough: user-declared exempt tools skip adjudication;
+		// reached only after self-protection and the deny floor, so neither can be
+		// weakened by it. Everything else uncovered stays gray for the classifier.
+		base = user.ignoreTools.includes(toolName)
+			? { verdict: "allow", reason: `user ignoreTools passthrough: ${toolName}` }
+			: { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
 	}
 	if (base.verdict === "deny") return base; // 内置 floor:deny 优先于一切用户规则
 
