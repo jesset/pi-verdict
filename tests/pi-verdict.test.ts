@@ -91,7 +91,7 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -103,6 +103,8 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
+	// ignoreTools: unknown[] lets negative tests mix in non-string entries
+	if (cfg.ignoreTools !== undefined) raw.ignoreTools = cfg.ignoreTools;
 	fs.writeFileSync(p, JSON.stringify(raw));
 }
 
@@ -192,6 +194,25 @@ describe("user rules (deny > allow > gray)", () => {
 		const r = await toolCall(h, "mcp__x__y", { a: 1 });
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(1);
+	});
+	test("ignoreTools passes listed uncovered tools through with zero model calls", async () => {
+		const h = session({ ignoreTools: ["todo", "ask"] });
+		const r = await toolCall(h, "todo", { op: "init", list: [] });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0);
+	});
+	test("ignoreTools leaves unlisted uncovered tools on the classifier path", async () => {
+		const h = session({ ignoreTools: ["todo"] });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "mcp__x__y", { a: 1 });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+	test("ignoreTools entries naming covered tools are inert: floor still denies bash", async () => {
+		const h = session({ ignoreTools: ["bash"] });
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
 	});
 	test("invalid regexes are skipped, valid ones still apply", async () => {
 		const h = session({ allow: ["^ls\\b"] }, ["[unclosed"]);
