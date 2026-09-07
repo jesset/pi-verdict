@@ -970,6 +970,9 @@ interface ClassifierOutcome {
 const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(15s 会误杀 ~15%),research/cache-sim 数据
 const CLASSIFIER_MAX_TOKENS = 512;
 const CLASSIFIER_RETRY_MAX_TOKENS = 1024; // 防御重试档:覆盖无视 reasoning:off 或轻思考仍超预算的模型
+const APIS_WITHOUT_TEMPERATURE = new Set<string>([
+	"openai-codex-responses",
+]);
 
 /**
  * Minimal structural shape of a completion call (#35). pi exposes it as
@@ -1047,7 +1050,7 @@ async function callClassifierOnce(
 			{
 				signal: AbortSignal.any(signals),
 				maxTokens,
-				temperature: 0,
+				...(APIS_WITHOUT_TEMPERATURE.has(model.api) ? {} : { temperature: 0 }),
 				// Thinking params go out in both hosts' native dialects (#35):
 				// pi's registry.complete consumes thinkingEnabled/effort (the
 				// API-native fields, per the blackhole findings in
