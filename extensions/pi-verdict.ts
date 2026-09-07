@@ -982,7 +982,7 @@ export type CompletionFn = (
 	model: NonNullable<ExtensionContext["model"]>,
 	context: { systemPrompt?: string; messages: unknown[] },
 	options?: Record<string, unknown>,
-) => Promise<{ content: Array<{ type: string; text: string }>; stopReason?: string }>;
+) => Promise<{ content: Array<{ type: string; text: string }>; stopReason?: string; errorMessage?: string }>;
 
 type CompatLoader = () => Promise<{ complete: CompletionFn }>;
 
@@ -1034,7 +1034,7 @@ async function callClassifierOnce(
 	maxTokens: number,
 	thinking: ThinkingLevel = "off",
 	systemPrompt: string = CLASSIFIER_SYSTEM,
-): Promise<{ ok: true; text: string; stopReason: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; text: string; stopReason: string; errorMessage?: string } | { ok: false; error: string }> {
 	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
 	if (signal) signals.push(signal);
 	try {
@@ -1075,7 +1075,7 @@ async function callClassifierOnce(
 			.filter((b) => b.type === "text")
 			.map((b) => b.text)
 			.join("");
-		return { ok: true, text, stopReason: response.stopReason ?? "unknown" };
+		return { ok: true, text, stopReason: response.stopReason ?? "unknown", errorMessage: response.errorMessage };
 	} catch (err) {
 		return { ok: false, error: err instanceof Error ? err.message : String(err) };
 	}
@@ -1105,7 +1105,7 @@ async function classifyWithModel(
 		if (signal?.aborted) break; // 用户已取消,不再重试
 		const r = await callClassifierOnce(host, signal, complete, model, userMessage, maxTokens, thinking, systemPrompt);
 		if (r.ok) {
-			const diag = `stopReason=${r.stopReason}, model=${model.id}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
+			const diag = `stopReason=${r.stopReason}, model=${model.id}, errorMessage=${JSON.stringify(r.errorMessage ?? null)}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
 				const parsed = parseVerdict(r.text);
 				if (parsed) return { ...parsed, source: "model" };
