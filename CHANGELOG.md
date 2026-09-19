@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Fixed
+
+- Gray-zone adjudication no longer fail-closes on models whose provider rejects the `temperature` parameter (#47): current-gen Anthropic models (`claude-sonnet-5`, `claude-opus-5`, `claude-opus-4-8`) answer the classifier's `temperature: 0` with a 400, denying every call whether set as `classifierModel` or reached via the session-model fallback. A rejection that mentions the parameter is now retried once without it at the same tier and the model is remembered until the extension reloads; models that accept the parameter keep the `temperature: 0` determinism pin.
+
 ## [0.8.0] - 2026-09-19
 
 ### Changed

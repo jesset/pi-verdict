@@ -54,7 +54,7 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 			// resolve completion through the compat fallback instead
 			...(opts?.ompRegistry ? {} : {
 				complete: async (_m: any, _req: any, opts: any) => {
-					h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort, systemPrompt: _req?.systemPrompt ?? null, messages: _req?.messages ?? [] });
+					h.calls.push({ model: _m?.id, maxTokens: opts.maxTokens, temperature: opts.temperature, thinkingEnabled: opts.thinkingEnabled, effort: opts.effort, systemPrompt: _req?.systemPrompt ?? null, messages: _req?.messages ?? [] });
 					const r = h.responses[Math.min(h.calls.length - 1, h.responses.length - 1)];
 					if (r instanceof Error) throw r;
 					return { content: [{ type: "text", text: r.text }], stopReason: r.stopReason ?? "stop" };
@@ -595,6 +595,13 @@ describe("classifier", () => {
 		expect(r?.block).toBe(true);
 		expect(r.reason).toContain("attempt 1 (512t)");
 		expect(r.reason).toContain("attempt 2 (1024t)");
+	});
+	test("non-temperature provider error keeps temperature on both tiers (#47)", async () => {
+		const h = session({});
+		h.responses = [new Error("gateway boom"), new Error("gateway boom 2")];
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.map((c: any) => c.temperature)).toEqual([0, 0]); // no adaptive strip
 	});
 	test("ask + interactive confirm → allow; headless → deny", async () => {
 		const h = session({});
@@ -1455,6 +1462,47 @@ describe("completion fallback (omp runtime shape, #35)", () => {
 		expect(compatCalls[0].thinkingEnabled).toBe(false);
 		expect(compatCalls[0].disableReasoning).toBe(true); // omp-native off dialect
 		expect(typeof compatCalls[0].sessionId).toBe("string");
+	});
+
+	test("temperature-rejecting classifier model: parameter stripped and retried, then cached (#47)", async () => {
+		const compatCalls: any[] = [];
+		const compatLoader = async () => ({
+			complete: async (_m: any, _c: any, o: any) => {
+				compatCalls.push({ temperature: o.temperature, maxTokens: o.maxTokens });
+				if (o.temperature !== undefined) {
+					return { content: [], stopReason: "error", errorMessage: "invalid_request_error: `temperature` is deprecated for this model." };
+				}
+				return { content: [{ type: "text", text: "<verdict>deny</verdict> hot model says no" }], stopReason: "stop" };
+			},
+		});
+		const h = session({ classifierModel: "anthropic/claude-sonnet-5" }, { ompRegistry: true, compatLoader });
+		h.findMap = { "anthropic/claude-sonnet-5": { id: "claude-sonnet-5", api: "anthropic-messages" } };
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("hot model says no");
+		expect(compatCalls.map((c: any) => c.temperature)).toEqual([0, undefined]);
+		expect(compatCalls.map((c: any) => c.maxTokens)).toEqual([512, 512]); // same tier, not the 1024 escalation
+		await toolCall(h, "bash", { command: "cat /etc/hosts" }); // later adjudications omit the parameter upfront
+		expect(compatCalls.length).toBe(3);
+		expect(compatCalls[2].temperature).toBeUndefined();
+	});
+
+	test("temperature rejection via a thrown error also strips and retries (#47)", async () => {
+		let calls = 0;
+		const h = session({ classifierModel: "anthropic/claude-opus-5" }, {
+			ompRegistry: true,
+			compatLoader: async () => ({
+				complete: async (_m: any, _c: any, o: any) => {
+					calls++;
+					if (o.temperature !== undefined) throw new Error("400 Unsupported parameter: temperature");
+					return { content: [{ type: "text", text: "<verdict>allow</verdict> fine" }], stopReason: "stop" };
+				},
+			}),
+		});
+		h.findMap = { "anthropic/claude-opus-5": { id: "claude-opus-5", api: "anthropic-messages" } };
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r).toBeUndefined();
+		expect(calls).toBe(2);
 	});
 
 	test("omp fallback forwards the omp-native reasoning dialect for a thinking-suffixed classifier model", async () => {

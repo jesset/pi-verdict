@@ -1003,6 +1003,22 @@ const APIS_WITHOUT_TEMPERATURE = new Set<string>([
 	"openai-codex-responses",
 ]);
 
+// Models whose provider rejected a temperature-bearing request ("`temperature`
+// is deprecated for this model" — current-gen Anthropic models, #47). Filled
+// adaptively and cached for the extension's lifetime: pi's model registry has
+// no sampling-capability metadata and the reject/accept split follows neither
+// `api` nor `reasoning`, so the provider's own error is the only reliable
+// signal. Later calls for a cached model omit the parameter upfront.
+const TEMPERATURE_REJECTED_MODELS = new Set<string>();
+
+/** The provider rejected the request over the `temperature` parameter itself (#47). */
+function temperatureRejection(
+	r: { ok: true; stopReason: string; errorMessage?: string } | { ok: false; error: string },
+): boolean {
+	if (r.ok) return (r.stopReason === "error" || r.stopReason === "aborted") && /temperature/i.test(r.errorMessage ?? "");
+	return /temperature/i.test(r.error);
+}
+
 /**
  * Minimal structural shape of a completion call (#35). pi exposes it as
  * ModelRegistry.complete; omp 18 does not, but the pi-ai compat module exports
@@ -1056,7 +1072,13 @@ function completionFor(registry: { complete?: unknown }, compatLoader?: CompatLo
 /** 分类器思考级别(pi 原生词表;后缀语法对齐 pi --model provider/id:thinking) */
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** 单次分类器调用:显式 reasoning:"off"(见下方注释),失败返回错误串而非抛出 */
+/**
+ * Single classifier attempt: reasoning "off" by default (see options below);
+ * failures return an error string instead of throwing. A provider rejection
+ * over `temperature` strips the parameter and retries once at the same tier
+ * (#47) — models that accept it keep the temperature 0 determinism pin,
+ * models that deprecate it self-heal instead of fail-closing every call.
+ */
 async function callClassifierOnce(
 	host: PipelineHost,
 	signal: AbortSignal | undefined,
@@ -1067,50 +1089,62 @@ async function callClassifierOnce(
 	thinking: ThinkingLevel = "off",
 	systemPrompt: string = CLASSIFIER_SYSTEM,
 ): Promise<{ ok: true; text: string; stopReason: string; errorMessage?: string } | { ok: false; error: string }> {
-	const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
-	if (signal) signals.push(signal);
-	try {
-		const response = await complete(
-			model,
-			{
-				systemPrompt,
-				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
-			},
-			{
-				signal: AbortSignal.any(signals),
-				maxTokens,
-				...(APIS_WITHOUT_TEMPERATURE.has(model.api) ? {} : { temperature: 0 }),
-				// Thinking params go out in both hosts' native dialects (#35):
-				// pi's registry.complete consumes thinkingEnabled/effort (the
-				// API-native fields, per the blackhole findings in
-				// research/thinking-param-blackhole.md); omp's compat complete
-				// consumes reasoning/disableReasoning. Both sides ignore unknown
-				// option fields, so dual-send lets each host pick its own.
-				// pi off = explicitly disabled (verified to send
-				// thinking:{"type":"disabled"}; GLM downgrades to effort-low light
-				// thinking); suffix levels arrive via adaptive effort (minimal→low).
-				// omp off = disableReasoning (without it, an absent `reasoning`
-				// leaves the model default undefined); level vocabularies share the
-				// ThinkingLevel word list, reasoning passes through as-is.
-				...(thinking === "off"
-					? { thinkingEnabled: false, disableReasoning: true }
-					: {
-							thinkingEnabled: true,
-							effort: thinking === "minimal" ? ("low" as const) : thinking,
-							reasoning: thinking === "minimal" ? ("low" as const) : thinking,
-						}),
-				cacheRetention: "short",
-				sessionId: host.getSessionId(),
-			},
-		);
-		const text = response.content
-			.filter((b) => b.type === "text")
-			.map((b) => b.text)
-			.join("");
-		return { ok: true, text, stopReason: response.stopReason ?? "unknown", errorMessage: response.errorMessage };
-	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+	const fire = async (
+		withTemperature: boolean,
+	): Promise<{ ok: true; text: string; stopReason: string; errorMessage?: string } | { ok: false; error: string }> => {
+		const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
+		if (signal) signals.push(signal);
+		try {
+			const response = await complete(
+				model,
+				{
+					systemPrompt,
+					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
+				},
+				{
+					signal: AbortSignal.any(signals),
+					maxTokens,
+					...(withTemperature ? { temperature: 0 } : {}),
+					// Thinking params go out in both hosts' native dialects (#35):
+					// pi's registry.complete consumes thinkingEnabled/effort (the
+					// API-native fields, per the blackhole findings in
+					// research/thinking-param-blackhole.md); omp's compat complete
+					// consumes reasoning/disableReasoning. Both sides ignore unknown
+					// option fields, so dual-send lets each host pick its own.
+					// pi off = explicitly disabled (verified to send
+					// thinking:{"type":"disabled"}; GLM downgrades to effort-low light
+					// thinking); suffix levels arrive via adaptive effort (minimal→low).
+					// omp off = disableReasoning (without it, an absent `reasoning`
+					// leaves the model default undefined); level vocabularies share the
+					// ThinkingLevel word list, reasoning passes through as-is.
+					...(thinking === "off"
+						? { thinkingEnabled: false, disableReasoning: true }
+						: {
+								thinkingEnabled: true,
+								effort: thinking === "minimal" ? ("low" as const) : thinking,
+								reasoning: thinking === "minimal" ? ("low" as const) : thinking,
+							}),
+					cacheRetention: "short",
+					sessionId: host.getSessionId(),
+				},
+			);
+			const text = response.content
+				.filter((b) => b.type === "text")
+				.map((b) => b.text)
+				.join("");
+			return { ok: true, text, stopReason: response.stopReason ?? "unknown", errorMessage: response.errorMessage };
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+		}
+	};
+	const modelKey = `${model.api}|${model.id}`;
+	const withTemperature = !APIS_WITHOUT_TEMPERATURE.has(model.api) && !TEMPERATURE_REJECTED_MODELS.has(modelKey);
+	const first = await fire(withTemperature);
+	if (withTemperature && temperatureRejection(first)) {
+		TEMPERATURE_REJECTED_MODELS.add(modelKey);
+		return fire(false);
 	}
+	return first;
 }
 
 /**
