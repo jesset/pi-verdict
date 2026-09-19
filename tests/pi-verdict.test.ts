@@ -91,7 +91,7 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -100,6 +100,7 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
 	if (cfg.audit !== undefined) raw.audit = cfg.audit;
+	if (cfg.notifyAllows !== undefined) raw.notifyAllows = cfg.notifyAllows;
 	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
@@ -1644,6 +1645,87 @@ describe("audit verdict records (#54)", () => {
 		const h = session({ audit: true });
 		await h.commands["automode"].handler("", h.ctx);
 		expect(h.notifies.some(([m]) => m.includes(`audit: on → ${VERDICTS()}`))).toBe(true);
+	});
+});
+
+// ── 10.8 notifyAllows (#60: classifier-allow visibility as a persistent preference) ──
+
+describe("notifyAllows (#60)", () => {
+	const SENS = path.join(TMP_AGENT, "sensitive-60");
+	const allowNotifies = (h: Harness) => h.notifies.filter(([m, l]) => l === "info" && m.includes("allow"));
+
+	test("default off: classifier allow is silent", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(allowNotifies(h).length).toBe(0);
+	});
+
+	test("notifyAllows: one classifier-allow notification with reason and action, no shadow suffix", async () => {
+		const h = session({ notifyAllows: true });
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 66% (confidence 49%; ask 33%, deny 1%)" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		const infos = allowNotifies(h);
+		expect(infos.length).toBe(1);
+		expect(infos[0][0]).toContain("allow (classifier)");
+		expect(infos[0][0]).toContain("jev: allow 66%");
+		expect(infos[0][0]).toContain("ls -la /tmp");
+		expect(infos[0][0]).not.toContain("shadow cache");
+	});
+
+	test("mechanical passes never notify under notifyAllows", async () => {
+		const h1 = session({ notifyAllows: true, allow: ["^ls\\b"] });
+		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
+		expect(r1).toBeUndefined();
+		expect(allowNotifies(h1).length).toBe(0);
+		fs.mkdirSync(SENS, { recursive: true });
+		const h2 = session({ notifyAllows: true, denyPaths: [SENS] });
+		const r2 = await toolCall(h2, "read", { path: path.join(SENS, "s.md") });
+		expect(r2).toBeUndefined(); // confirm defaults to allow
+		expect(allowNotifies(h2).length).toBe(0);
+	});
+
+	test("debug alone keeps today's behavior (incl. shadow suffix)", async () => {
+		const h = session({}, { debug: true });
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		const infos = allowNotifies(h);
+		expect(infos.length).toBe(1);
+		expect(infos[0][0]).toContain("shadow cache");
+	});
+
+	test("both switches on: exactly one notification, shadow suffix present", async () => {
+		const h = session({ notifyAllows: true }, { debug: true });
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		const infos = allowNotifies(h);
+		expect(infos.length).toBe(1);
+		expect(infos[0][0]).toContain("shadow cache");
+	});
+
+	test("deny notifications are unaffected by the preference", async () => {
+		const h = session({ notifyAllows: true });
+		h.responses = [{ text: "<verdict>deny</verdict> nope" }];
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r?.block).toBe(true);
+		expect(h.notifies.some(([m, l]) => l === "warning" && m.includes("Auto Mode blocked"))).toBe(true);
+		expect(allowNotifies(h).length).toBe(0);
+	});
+
+	test("invalid value falls back to off", async () => {
+		const h = makeHarness();
+		const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
+		fs.mkdirSync(path.dirname(p), { recursive: true });
+		fs.writeFileSync(p, JSON.stringify({ notifyAllows: "yes" }));
+		h.install();
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(allowNotifies(h).length).toBe(0);
 	});
 });
 

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Added
 
+- Optional allow-visibility preference (#60): `notifyAllows: true` in `pi-verdict.json` surfaces every classifier allow as an info notification (verdict reason + action line — e.g. jev's probability breakdown), default `false`. Mechanical passes (allow-rule echoes, protected-path confirms) never notify under it; the debug switch keeps its diagnostic scope unchanged, shadow-cache annotations stay debug-only, and with both on the notification appears exactly once. Config-only, new-session semantics.
 - Opt-in verdict audit log (#54): `"audit": true` in `pi-verdict.json` records every gray-zone adjudication (allow/ask/deny and fail-closed alike) as a self-contained JSONL line under `<agentDir>/verdicts/<sessionId>.jsonl` — timestamp, session id, cwd, model, tool + input, action line, thinking level, the full transcript sent, the raw response, the parsed verdict, source, and shadow-cache probe result. Rule-layer decisions are not recorded; retention keeps the 20 most recent session files (pruned at session start). Full fidelity stays local (ADR-0002 boundary note); the directory is denied to agent reads and writes; the sink is fail-soft (a write failure never affects a verdict — one warning per session) and never an adjudication input. `/automode` shows `audit: on → <path>` while active.
 
 ### Fixed

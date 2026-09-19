@@ -261,9 +261,11 @@ interface UserRules {
 	toggleShortcut: string | null;
 	/** Opt-in gray-zone adjudication audit (#54): per-session JSONL under <agentDir>/verdicts/ */
 	audit: boolean;
+	/** Allow visibility (#60): info notification on classifier allows; mechanical passes stay silent. Default off. */
+	notifyAllows: boolean;
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -327,6 +329,7 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	classifierModel: null,
 	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
 	audit: false,
+	notifyAllows: false,
 }, null, 2)}\n`;
 
 /**
@@ -344,7 +347,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -382,6 +385,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
 				toggleShortcut: shortcut.key,
 				audit: raw.audit === true,
+				notifyAllows: raw.notifyAllows === true,
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -1635,10 +1639,16 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	 *  (ADR-0002 story 11:通知与 block reason 回流 agent context)。 */
 	async function presentVerdict(v: Verdict, action: string, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
 		if (v.verdict === "allow") {
+			// #60 (CONTEXT.md 通知): classifier allows surface via notifyAllows OR
+			// debug — exactly one notification either way; the shadow suffix stays
+			// debug-only; mechanical passes (rule echo, protected-path confirm) stay
+			// debug-only — notifications carry judgment, the audit log carries completeness
 			if (debug) {
 				if (v.source === "rule") ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 				else if (v.source === "protected-path") ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
 				else ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}${v.shadow ? " " + v.shadow : ""}`, "info");
+			} else if (state.userRules.notifyAllows && v.source === "classifier") {
+				ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}`, "info");
 			}
 			return undefined;
 		}
