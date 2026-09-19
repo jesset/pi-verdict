@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Fixed
 
+- Agent-facing block reasons are now guaranteed non-empty and unambiguous (#53): all eight block sites (classifier, rule, fail-closed, protected-path degraded, user-declined ×2, tamper ×2) route through one wrapper emitting `[auto-mode <source> block] BLOCKED — this action did NOT run. Reason: <detail or "(no further reason given)">. Report the block to the user; never claim it succeeded or completed.` Previously an empty classifier reason left a bare `[auto-mode classifier block]` prefix in the tool result and terse rule reasons read like file descriptions — acting models then reported blocked actions as succeeded, since structural error signaling (`isError`) never reaches several provider lanes. UI notifications are unchanged; the wrapper adds no protected-path plaintext (ADR-0002).
 - Gray-zone adjudication no longer fail-closes on models whose provider rejects the `temperature` parameter (#47): current-gen Anthropic models (`claude-sonnet-5`, `claude-opus-5`, `claude-opus-4-8`) answer the classifier's `temperature: 0` with a 400, denying every call whether set as `classifierModel` or reached via the session-model fallback. A rejection that mentions the parameter is now retried once without it at the same tier and the model is remembered until the extension reloads; models that accept the parameter keep the `temperature: 0` determinism pin.
 
 ## [0.8.0] - 2026-09-19

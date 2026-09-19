@@ -1404,6 +1404,95 @@ describe("denyPaths (ADR-0002)", () => {
 	});
 });
 
+// ── 10.5 agent-facing block reason(#53:每个 block 站点的 canonical 形态)──
+
+describe("agent-facing block reason form (#53)", () => {
+	const HEAD = "BLOCKED — this action did NOT run. Reason: ";
+	const TAIL = ". Report the block to the user; never claim it succeeded or completed.";
+	const SENS = path.join(TMP_AGENT, "sensitive-53");
+	const CFG = () => path.join(TMP_AGENT, "config", "pi-verdict.json");
+	fs.mkdirSync(SENS, { recursive: true });
+
+	test("classifier with empty reason → fallback detail, exact canonical form", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>deny</verdict>" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toBe(`[auto-mode classifier block] ${HEAD}(no further reason given)${TAIL}`);
+	});
+
+	test("classifier with terse reason stays embedded, exact canonical form", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>deny</verdict> classifier says no" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r.reason).toBe(`[auto-mode classifier block] ${HEAD}classifier says no${TAIL}`);
+	});
+
+	test("rule block → rule tag; UI notify text unchanged", async () => {
+		const h = session({ deny: ["push"] });
+		const r = await toolCall(h, "bash", { command: "git push origin main" });
+		expect(r.reason.startsWith(`[auto-mode rule block] ${HEAD}`)).toBe(true);
+		expect(r.reason.endsWith(TAIL)).toBe(true);
+		expect(r.reason).toContain("user deny rule");
+		expect(h.notifies.some(([m, l]) => l === "warning" && m.startsWith("🛡️ Auto Mode blocked:"))).toBe(true);
+	});
+
+	test("classifier failure (fail-closed outcome) → classifier tag, both attempts' diagnostics intact", async () => {
+		const h = session({});
+		h.responses = [{ text: "", stopReason: "length" }, new Error("gateway boom")];
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r.reason.startsWith(`[auto-mode classifier block] ${HEAD}`)).toBe(true);
+		expect(r.reason.endsWith(TAIL)).toBe(true);
+		expect(r.reason).toContain("attempt 1 (512t)");
+		expect(r.reason).toContain("attempt 2 (1024t)");
+	});
+
+	test("no classifier model available → fail-closed tag", async () => {
+		const h = session({});
+		h.ctx.model = null;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r.reason).toBe(`[auto-mode fail-closed block] ${HEAD}no classifier model available (fail-closed)${TAIL}`);
+	});
+
+	test("ask + declined confirm → user-declined tag", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.confirmAnswer = false;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r.reason).toBe(`[auto-mode user-declined block] ${HEAD}user declined${TAIL}`);
+	});
+
+	test("protected-path declined confirm → user-declined tag with protected detail", async () => {
+		const h = session({ denyPaths: [SENS] });
+		h.confirmAnswer = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(r.reason).toBe(`[auto-mode user-declined block] ${HEAD}user declined protected-path access${TAIL}`);
+	});
+
+	test("protected-path headless degrade → protected-path tag, non-interactive preserved", async () => {
+		const h = session({ denyPaths: [SENS] });
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "read", { path: path.join(SENS, "secret.md") });
+		expect(r.reason.startsWith(`[auto-mode protected-path block] ${HEAD}`)).toBe(true);
+		expect(r.reason.endsWith(TAIL)).toBe(true);
+		expect(r.reason).toContain("non-interactive");
+	});
+
+	test("tamper detection and subsequent fail-closed → tamper tag on both paths", async () => {
+		const h = session({});
+		h.selectIndex = 1; // Decline — restore the session baseline
+		const before = fs.readFileSync(CFG(), "utf8");
+		fs.writeFileSync(CFG(), "{}");
+		const r1 = await toolCall(h, "bash", { command: "ls" });
+		expect(r1.reason.startsWith(`[auto-mode tamper block] ${HEAD}`)).toBe(true);
+		expect(r1.reason).toContain("config change declined by user");
+		expect(fs.readFileSync(CFG(), "utf8")).toBe(before);
+		const r2 = await toolCall(h, "bash", { command: "ls" });
+		expect(r2.reason.startsWith(`[auto-mode tamper block] ${HEAD}`)).toBe(true);
+		expect(r2.reason).toContain("self-protection");
+	});
+});
+
 // ── 11. omp 宿主支持(#35:completion 降级 / agentDir 自锚定 / omp 形态保护)──
 
 describe("completion fallback (omp runtime shape, #35)", () => {

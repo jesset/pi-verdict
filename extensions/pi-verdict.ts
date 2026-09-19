@@ -1424,6 +1424,14 @@ export async function adjudicate(
 // 扩展主体
 // ============================================================================
 
+/** Agent-facing block reason (#53): the text must be self-sufficient — structural
+ * error signaling does not reach several provider lanes, and verbatim rule/classifier
+ * reasons can be empty or too terse for the acting model to recognize as a block. */
+function blockedReason(tag: string, detail: string): string {
+	const clean = detail.trim().replace(/\.+$/, "");
+	return `[auto-mode ${tag} block] BLOCKED — this action did NOT run. Reason: ${clean || "(no further reason given)"}. Report the block to the user; never claim it succeeded or completed.`;
+}
+
 /** Optional dependency injection for tests (#35): fake the compat fallback loader. */
 export interface AutoModeDeps {
 	compatLoader?: CompatLoader;
@@ -1444,7 +1452,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	function presentTamper(changed: Array<{ file: string; kind: WatchKind }>, ctx: ExtensionContext, cause: string): { block: true; reason: string } {
 		const r = integrity.restoreAndFailClose(changed, cause);
 		ctx.ui.notify(`🛡️ pi-verdict TAMPER DETECTED${cause ? ` (${cause})` : ""}: ${r.files} modified bypassing the gate; restored from session snapshot where possible. Fail-closed for the rest of this session — review the file(s) and restart the session.`, "warning");
-		return { block: true, reason: r.reason };
+		return { block: true, reason: blockedReason("tamper", r.reason) };
 	}
 
 	/** Verdict → UI(本扩展唯一的裁决呈现点):按 source × degraded 查模板,文案与
@@ -1463,18 +1471,18 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			if (v.source === "protected-path") {
 				// 无 action 行:action 串可内嵌被触路径,通知不得携带受保护路径明文
 				ctx.ui.notify(`🛡️ Auto Mode blocked (non-interactive, protected-path ask→deny): ${v.reason}`, "warning");
-				return { block: true, reason: `[auto-mode] protected-path ask degraded to block in non-interactive mode: ${v.reason}` };
+				return { block: true, reason: blockedReason("protected-path", `ask degraded to block in non-interactive mode: ${v.reason}`) };
 			}
 			if (v.source === "fail-closed") {
 				ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
-				return { block: true, reason: `[auto-mode] ${v.reason}` };
+				return { block: true, reason: blockedReason("fail-closed", v.reason) };
 			}
 			if (v.source === "rule") {
 				ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
-				return { block: true, reason: `[auto-mode rule block] ${v.reason}` };
+				return { block: true, reason: blockedReason("rule", v.reason) };
 			}
 			ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}${debug && v.shadow ? " " + v.shadow : ""}`, "warning");
-			return { block: true, reason: `[auto-mode classifier block] ${v.reason}` };
+			return { block: true, reason: blockedReason("classifier", v.reason) };
 		}
 		// ask → 人工确认;非交互已在管线内降级,能走到这里的必有 UI
 		if (v.source === "protected-path") {
@@ -1484,10 +1492,10 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				if (debug) ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
 				return undefined;
 			}
-			return { block: true, reason: "[auto-mode] user declined protected-path access" };
+			return { block: true, reason: blockedReason("user-declined", "user declined protected-path access") };
 		}
 		const ok = await ctx.ui.confirm("🛡️ Auto Mode confirmation", `${action}\n\nClassifier opinion: ${v.reason}\n\nAllow execution?`);
-		return ok ? undefined : { block: true, reason: "[auto-mode] user declined" };
+		return ok ? undefined : { block: true, reason: blockedReason("user-declined", "user declined") };
 	}
 
 	function refreshStatus(ctx: ExtensionContext) {
@@ -1613,7 +1621,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		// 第 0 层前置:变更检测(ADR-0001)——篡改后本会话恒 deny(fail-closed)
 		if (integrity.tampered) {
 			ctx.ui.notify(`🛡️ Auto Mode blocked: self-protection fail-closed (tamper detected this session; restart to reset)\n  ${action}`, "warning");
-			return { block: true, reason: "[auto-mode] self-protection: fail-closed until session restart (protected file was tampered with)" };
+			return { block: true, reason: blockedReason("tamper", "self-protection: fail-closed until session restart (protected file was tampered with)") };
 		}
 		const changed = integrity.detect();
 		if (changed.length > 0) {
