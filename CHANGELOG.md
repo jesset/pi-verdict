@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in verdict audit log (#54): `"audit": true` in `pi-verdict.json` records every gray-zone adjudication (allow/ask/deny and fail-closed alike) as a self-contained JSONL line under `<agentDir>/verdicts/<sessionId>.jsonl` — timestamp, session id, cwd, model, tool + input, action line, thinking level, the full transcript sent, the raw response, the parsed verdict, source, and shadow-cache probe result. Rule-layer decisions are not recorded; retention keeps the 20 most recent session files (pruned at session start). Full fidelity stays local (ADR-0002 boundary note); the directory is denied to agent reads and writes; the sink is fail-soft (a write failure never affects a verdict — one warning per session) and never an adjudication input. `/automode` shows `audit: on → <path>` while active.
+
 ### Fixed
 
 - Agent-facing block reasons are now guaranteed non-empty and unambiguous (#53): all eight block sites (classifier, rule, fail-closed, protected-path degraded, user-declined ×2, tamper ×2) route through one wrapper emitting `[auto-mode <source> block] BLOCKED — this action did NOT run. Reason: <detail or "(no further reason given)">. Report the block to the user; never claim it succeeded or completed.` Previously an empty classifier reason left a bare `[auto-mode classifier block]` prefix in the tool result and terse rule reasons read like file descriptions — acting models then reported blocked actions as succeeded, since structural error signaling (`isError`) never reaches several provider lanes. UI notifications are unchanged; the wrapper adds no protected-path plaintext (ADR-0002).

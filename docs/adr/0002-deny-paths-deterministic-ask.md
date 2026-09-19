@@ -152,3 +152,19 @@ Two decisions:
    decides *deterministic ask vs classifier*, not *ask vs pass*. New built-in
    file tools in future pi versions are an existing maintenance point of the
    dispatch, not a bypass of it.
+
+## Boundary note: the verdict audit log (#54)
+
+The zero-plaintext-out promise scopes to data *leaving the machine* or
+*flowing into agent context* (reasons, notifies, observability).
+`<agentDir>/verdicts/` is a local observation record in the same trust
+domain as `pi-verdict.json` itself: records carry full-fidelity plaintext,
+including protected-path spellings matched by gray-zone adjudications — the
+transcripts already contain path-bearing command text, so redacting the
+`detail` field alone would be inconsistent. The directory is denied to agent
+reads *and* writes (records contain raw model output — including fail-closed
+failures — which must not flow back into agent context as untrusted text),
+and it is deliberately **not** part of the IntegrityWatch baseline: the log
+legitimately grows with every adjudication, so a snapshot diff would
+false-positive as tampering; write-deny on the directory is the actual
+bypass prevention.

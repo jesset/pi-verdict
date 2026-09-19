@@ -259,9 +259,11 @@ interface UserRules {
 	classifierModel: string | null;
 	/** 主开关 toggle 快捷键键位(#15);null = 禁用;缺省 DEFAULT_TOGGLE_SHORTCUT */
 	toggleShortcut: string | null;
+	/** Opt-in gray-zone adjudication audit (#54): per-session JSONL under <agentDir>/verdicts/ */
+	audit: boolean;
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -324,6 +326,7 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	builtinDenyFloor: true,
 	classifierModel: null,
 	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
+	audit: false,
 }, null, 2)}\n`;
 
 /**
@@ -341,7 +344,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -378,6 +381,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				builtinDenyFloor: raw.builtinDenyFloor !== false,
 				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
 				toggleShortcut: shortcut.key,
+				audit: raw.audit === true,
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -577,6 +581,8 @@ interface ProtectedSet {
 	exact: string[];
 	/** 受保护目录前缀(npm 包安装形态:整个包目录) */
 	prefixes: string[];
+	/** 读拒绝前缀(#54):verdicts 审计目录——记录含不可信原始输出,禁回流 agent context */
+	readPrefixes: string[];
 	/** bash/powershell 命令串危险特征(子串匹配,可绕——变更检测兜底) */
 	bashPatterns: RegExp[];
 	/** 变更检测基线(词法路径 + 类别;session_start 时快照全文) */
@@ -713,7 +719,28 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		bashPatterns.push(new RegExp(`(?:${[...alts].join("|")})`));
 	}
 
-	return { exact: [...exact], prefixes: [...prefixes], bashPatterns, watchBases };
+	// #54 verdicts dir: gate-owned audit storage. Writes ride the normal prefixes;
+	// reads are denied separately — records carry raw model output (including
+	// fail-closed failures) that must not flow back into agent context. Deliberately
+	// NOT added to watchBases: the log legitimately grows every adjudication, so a
+	// snapshot diff would false-positive as tampering.
+	const verdictsForms = baseForms(path.join(agentDir, "verdicts"));
+	for (const f of verdictsForms) prefixes.add(f);
+	const home = os.homedir();
+	const vAlts = new Set<string>(verdictsForms.map(escapeRegExp));
+	for (const f of verdictsForms) {
+		if (f.startsWith(home + path.sep)) {
+			const rel = f.slice(home.length + 1);
+			vAlts.add(escapeRegExp("~/" + rel));
+			vAlts.add("\\$HOME/" + escapeRegExp(rel));
+		}
+		for (const base of baseForms(agentDir)) {
+			if (f.startsWith(base + path.sep)) vAlts.add("\\$PI_CODING_AGENT_DIR/" + escapeRegExp(f.slice(base.length + 1)));
+		}
+	}
+	bashPatterns.push(new RegExp(`(?:${[...vAlts].join("|")})`));
+
+	return { exact: [...exact], prefixes: [...prefixes], readPrefixes: verdictsForms, bashPatterns, watchBases };
 }
 
 /** Does the resolved write path hit the protected set (realpath guards against
@@ -730,6 +757,20 @@ export function isProtectedWritePath(rawPath: string, cwd: string, prot: Protect
 	return false;
 }
 
+/** Read-deny for the verdicts dir (#54): audit records contain raw fail-closed
+ *  model output — untrusted text that must not flow back into agent context.
+ *  Unlike write protection (prefixes) this is read semantics, hence a separate set. */
+export function isProtectedReadPath(rawPath: string | undefined, cwd: string, prot: ProtectedSet): boolean {
+	if (prot.readPrefixes.length === 0) return false;
+	const target = rawPath ?? cwd; // #48: absent path → cwd is the effective target
+	for (const c of rebuiltForms(path.resolve(cwd, expandHome(target)))) {
+		for (const p of prot.readPrefixes) {
+			if (c === p || c.startsWith(p + path.sep)) return true;
+		}
+	}
+	return false;
+}
+
 /** 自保护层裁决(第 0 层,先于一切):触碰门禁自身文件 → 不可豁免的 deny;其余 null 交后续层 */
 function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd: string, prot: ProtectedSet): RuleResult | null {
 	switch (toolName) {
@@ -737,6 +778,14 @@ function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd:
 		case "edit":
 			if (isProtectedWritePath(String(input.path ?? ""), cwd, prot)) {
 				return { verdict: "deny", reason: `self-protection layer (ADR-0001): ${input.path} is part of the permission gate itself; agent-side modification is denied — edit it manually outside pi if intended` };
+			}
+			return null;
+		case "read":
+		case "grep":
+		case "find":
+		case "ls":
+			if (isProtectedReadPath(typeof input.path === "string" ? input.path : undefined, cwd, prot)) {
+				return { verdict: "deny", reason: `self-protection layer (#54): ${typeof input.path === "string" ? input.path : cwd} holds the gate's verdict audit records — agent reads are denied (untrusted raw model output inside); view them outside pi` };
 			}
 			return null;
 		case "bash":
@@ -994,6 +1043,8 @@ interface ClassifierOutcome {
 	verdict: "allow" | "ask" | "deny";
 	reason: string;
 	source: "model" | "fail-closed";
+	/** #54 audit material: the transcript actually sent and the last attempt's raw output (attached on both model and fail-closed outcomes) */
+	auditRaw?: { transcript: string; rawResponse: string; modelId: string; thinking: ThinkingLevel };
 }
 
 const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(15s 会误杀 ~15%),research/cache-sim 数据
@@ -1167,14 +1218,16 @@ async function classifyWithModel(
 	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
 	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
 	const failures: string[] = [];
+	let rawResponse = ""; // #54: raw output of the last attempt ("" for exception attempts — diagnostics already live in failures)
 	for (const [n, maxTokens] of attempts) {
 		if (signal?.aborted) break; // 用户已取消,不再重试
 		const r = await callClassifierOnce(host, signal, complete, model, userMessage, maxTokens, thinking, systemPrompt);
 		if (r.ok) {
+			rawResponse = r.text;
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, errorMessage=${JSON.stringify(r.errorMessage ?? null)}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
 				const parsed = parseVerdict(r.text);
-				if (parsed) return { ...parsed, source: "model" };
+				if (parsed) return { ...parsed, source: "model", auditRaw: { transcript, rawResponse, modelId: model.id, thinking } };
 				failures.push(`attempt ${n} (${maxTokens}t) contract violation: ${diag}`);
 			} else {
 				failures.push(`attempt ${n} (${maxTokens}t) aborted/errored: ${diag}`);
@@ -1183,7 +1236,7 @@ async function classifyWithModel(
 			failures.push(`attempt ${n} (${maxTokens}t) exception: ${r.error}`);
 		}
 	}
-	return { verdict: "deny", reason: `classifier failure (fail-closed): ${failures.join("; ")}`, source: "fail-closed" };
+	return { verdict: "deny", reason: `classifier failure (fail-closed): ${failures.join("; ")}`, source: "fail-closed", auditRaw: { transcript, rawResponse, modelId: model.id, thinking } };
 }
 
 // ============================================================================
@@ -1306,6 +1359,90 @@ function shadowTag(probe: ShadowProbe): string {
 }
 
 // ============================================================================
+// Gray-zone verdict audit (#54): opt-in JSONL decision records, observe-only
+// (never an adjudication input)
+// ============================================================================
+
+const AUDIT_KEEP_SESSIONS = 20;
+
+/** One gray-zone adjudication record (#54). Full fidelity on purpose: the file is
+ *  local-trust-domain (same as pi-verdict.json, per the ADR-0002 boundary note),
+ *  so protected-path plaintext is allowed here — it never leaves the machine nor
+ *  flows into agent context. */
+export interface AuditRecord {
+	ts: string;
+	sessionId: string;
+	cwd: string;
+	model: string | null;
+	tool: string;
+	input: unknown;
+	actionLine: string;
+	thinking: string | null;
+	transcript: string | null;
+	rawResponse: string | null;
+	verdict: "allow" | "ask" | "deny";
+	reason: string;
+	source: "model" | "fail-closed";
+	shadow: string;
+	degraded: boolean;
+}
+
+/** Audit sink (#54): append-only and fail-soft (the first write failure surfaces
+ *  once via drainWarning; verdicts are never affected). The dir is created
+ *  lazily — audit on with no gray-zone call all session leaves zero filesystem trace. */
+export class AuditLog {
+	private warning: string | null = null;
+	private warned = false;
+	constructor(readonly dir: string) {}
+
+	append(record: AuditRecord): void {
+		// sessionId comes from the host with no shape guarantee: narrow to a safe filename charset
+		const file = path.join(this.dir, `${record.sessionId.replace(/[^a-zA-Z0-9_-]/g, "_")}.jsonl`);
+		try {
+			fs.mkdirSync(this.dir, { recursive: true });
+			fs.appendFileSync(file, JSON.stringify(record) + "\n");
+		} catch (err) {
+			if (!this.warned) {
+				this.warned = true;
+				this.warning = `audit log write failed (${err instanceof Error ? err.message : String(err)}) — verdict records are NOT being persisted to ${this.dir}; adjudication is unaffected`;
+			}
+		}
+	}
+
+	/** One-shot drain: the extension handler polls after every tool_call; first failure warns, the rest stay silent */
+	drainWarning(): string | null {
+		const w = this.warning;
+		this.warning = null;
+		return w;
+	}
+
+	/** Keep the most recent AUDIT_KEEP_SESSIONS session files (called at session_start, best-effort) */
+	prune(): void {
+		let files: string[];
+		try {
+			files = fs.readdirSync(this.dir).filter((f) => f.endsWith(".jsonl"));
+		} catch {
+			return;
+		}
+		if (files.length <= AUDIT_KEEP_SESSIONS) return;
+		const byMtime = files
+			.map((f) => {
+				let m = 0;
+				try {
+					m = fs.statSync(path.join(this.dir, f)).mtimeMs;
+				} catch {}
+				return { f, m };
+			})
+			.sort((a, b) => b.m - a.m);
+		for (const { f } of byMtime.slice(AUDIT_KEEP_SESSIONS)) {
+			try {
+				fs.unlinkSync(path.join(this.dir, f));
+			} catch {}
+		}
+	}
+}
+
+// ============================================================================
 // 会话态:判定管线的会话期状态(复位清单集中一处)
 // ============================================================================
 
@@ -1318,11 +1455,20 @@ export class SessionState {
 	readonly prot: ProtectedSet;
 	readonly shadow = new ShadowCache();
 	userRules: UserRules;
+	audit: AuditLog | null;
 	private denyPathBases: string[] | null = null;
+	private readonly agentDir: string | null;
 
-	constructor(prot: ProtectedSet, userRules: UserRules = loadUserRules().rules) {
+	constructor(prot: ProtectedSet, userRules: UserRules = loadUserRules().rules, agentDir: string | null = null) {
 		this.prot = prot;
 		this.userRules = userRules;
+		this.agentDir = agentDir;
+		this.audit = this.makeAudit(userRules);
+	}
+
+	/** #54: the audit flag follows the rules (applies to new sessions); the dir is anchored to the install path */
+	private makeAudit(rules: UserRules): AuditLog | null {
+		return rules.audit && this.agentDir ? new AuditLog(path.join(this.agentDir, "verdicts")) : null;
 	}
 
 	/** 会话重置:重载用户规则(配置改动新会话生效)+ 按会话 cwd 重锚 denyPaths
@@ -1332,6 +1478,7 @@ export class SessionState {
 		this.userRules = loaded.rules;
 		this.denyPathBases = anchorDenyPaths(loaded.rules.denyPaths, cwd); // anchored to the session cwd, once (ADR-0002)
 		this.shadow.reset();
+		this.audit = this.makeAudit(loaded.rules);
 		return { skipped: loaded.skipped, shortcutWarning: loaded.shortcutWarning };
 	}
 
@@ -1396,15 +1543,41 @@ export async function adjudicate(
 	}
 
 	// 灰区 → 分类器;无可用模型 → fail-closed
+	// #54: gray-zone only (rule-layer verdicts carry no transcript corpus —
+	// brief decision); observe-only — recording never changes a verdict, and
+	// write failures are swallowed fail-soft by the sink and surfaced once via drainWarning
+	const actionLine = toolCallLine(call.toolName, call.input);
+	const audit = (v: Pick<AuditRecord, "verdict" | "reason" | "source" | "degraded">, raw: ClassifierOutcome["auditRaw"] | null, shadow: string): void => {
+		if (!state.audit) return;
+		state.audit.append({
+			ts: new Date().toISOString(),
+			sessionId: env.host.getSessionId(),
+			cwd: env.cwd,
+			model: raw?.modelId ?? null,
+			tool: call.toolName,
+			input: call.input,
+			actionLine,
+			thinking: raw?.thinking ?? null,
+			transcript: raw?.transcript ?? null,
+			rawResponse: raw?.rawResponse ?? null,
+			shadow,
+			...v,
+		});
+	};
+
 	const resolved = env.getModel();
-	if (!resolved) return { verdict: "deny", reason: "no classifier model available (fail-closed)", source: "fail-closed", degraded: false };
+	if (!resolved) {
+		const reason = "no classifier model available (fail-closed)";
+		audit({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-");
+		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
+	}
 
 	// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
 	const cmdKey = shadowCommandKey(call.toolName, call.input, env.cwd);
 	const ctxKey = shadowContextKey(env.host);
 	const probe = state.shadow.probe(cmdKey, ctxKey);
 
-	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, toolCallLine(call.toolName, call.input), resolved.thinking, state.userRules.denyPaths.length > 0);
+	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, actionLine, resolved.thinking, state.userRules.denyPaths.length > 0);
 
 	// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
 	// 命中且本次为可缓存裁决时,对比反事实一致性
@@ -1414,6 +1587,8 @@ export async function adjudicate(
 	}
 
 	const shadow = shadowTag(probe);
+	const askDegraded = !env.hasUI && outcome.verdict === "ask";
+	audit({ verdict: askDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: askDegraded }, outcome.auditRaw ?? null, shadow);
 	if (outcome.verdict === "allow") return { verdict: "allow", reason: outcome.reason, source: "classifier", degraded: false, shadow };
 	if (outcome.verdict === "deny") return { verdict: "deny", reason: outcome.reason, source: "classifier", degraded: false, shadow };
 	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
@@ -1445,7 +1620,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	let enabled = pi.getFlag("auto-mode") !== false;
 	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
 	// 会话态与门禁完整性监视:复位清单各归 SessionState.reset / IntegrityWatch.startSession
-	const state = new SessionState(buildProtectedSet(agentDirPath(), OWN_FILE_PATH));
+	const state = new SessionState(buildProtectedSet(agentDirPath(), OWN_FILE_PATH), undefined, agentDirPath());
 	const integrity = new IntegrityWatch(state.prot.watchBases);
 
 	/** 篡改处置呈现:还原 + fail-closed 的本地通知(含文件清单与原因) */
@@ -1515,6 +1690,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	pi.on("session_start", async (_event, ctx) => {
 		const report = state.reset(ctx.cwd);
 		integrity.startSession();
+		state.audit?.prune(); // #54: converge to the AUDIT_KEEP_SESSIONS most recent files at session start
 		if (report.skipped.length > 0) {
 			ctx.ui.notify(`pi-verdict: skipped ${report.skipped.length} invalid config value(s) in config (${userConfigPath()}): ${report.skipped.join(", ")}`, "warning");
 		}
@@ -1539,6 +1715,8 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	const toggleHint = () => (registeredToggleKey ? ` · toggle: ${registeredToggleKey}` : "");
 	/** Status line denyPaths count (ADR-0002): shown only when configured */
 	const denyPathsHint = () => (state.userRules.denyPaths.length > 0 ? `\ndenyPaths: ${state.userRules.denyPaths.length} active` : "");
+	/** Status line audit hint (#54): shown only while the sink is active */
+	const auditHint = () => (state.audit ? `\naudit: on → ${state.audit.dir}` : "");
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
@@ -1546,7 +1724,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}${auditHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -1657,6 +1835,8 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			host: ctx.sessionManager,
 			signal: ctx.signal,
 		});
+		const auditWarning = state.audit?.drainWarning(); // #54: fail-soft one-shot warning
+		if (auditWarning) ctx.ui.notify(`pi-verdict: ${auditWarning}`, "warning");
 		return presentVerdict(verdict, action, ctx);
 	});
 }

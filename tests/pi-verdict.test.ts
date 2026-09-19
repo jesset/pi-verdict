@@ -91,7 +91,7 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -99,6 +99,7 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.classifierModel !== undefined) raw.classifierModel = cfg.classifierModel;
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
+	if (cfg.audit !== undefined) raw.audit = cfg.audit;
 	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
@@ -957,7 +958,7 @@ describe("buildProtectedSet (pure)", () => {
 	test("dev checkout (outside agentDir/extensions) → 不保护扩展文件,仅配置", () => {
 		const s = buildProtectedSet(TMP_AGENT, "/repo/extensions/pi-verdict.ts");
 		expect(s.exact).not.toContain("/repo/extensions/pi-verdict.ts");
-		expect(s.prefixes.length).toBe(0);
+		expect(s.prefixes.every((p) => !p.startsWith("/repo/"))).toBe(true); // 扩展无前缀;#54 后 verdicts 前缀恒在
 		expect(isProtectedWritePath(path.join(TMP_AGENT, "config", "pi-verdict.json"), "/proj", s)).toBe(true);
 	});
 });
@@ -1490,6 +1491,159 @@ describe("agent-facing block reason form (#53)", () => {
 		const r2 = await toolCall(h, "bash", { command: "ls" });
 		expect(r2.reason.startsWith(`[auto-mode tamper block] ${HEAD}`)).toBe(true);
 		expect(r2.reason).toContain("self-protection");
+	});
+});
+
+// ── 10.7 verdict audit records (#54: opt-in JSONL decision records) ──
+
+describe("audit verdict records (#54)", () => {
+	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
+	const AUDIT_FILE = (sessionId = "s1") => path.join(VERDICTS(), `${sessionId}.jsonl`);
+	const readAudit = (sessionId = "s1") =>
+		fs.readFileSync(AUDIT_FILE(sessionId), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+	const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
+
+	beforeAll(clearAudit);
+	afterAll(clearAudit);
+
+	test("off by default: no verdicts dir, no writes", async () => {
+		clearAudit();
+		const h = session({});
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(fs.existsSync(VERDICTS())).toBe(false);
+	});
+
+	test("gray allow appends one full-fidelity record", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		const rec = recs[0];
+		expect(rec.verdict).toBe("allow");
+		expect(rec.source).toBe("model");
+		expect(rec.reason).toBe("ok");
+		expect(rec.sessionId).toBe("s1");
+		expect(rec.cwd).toBe("/proj");
+		expect(rec.model).toBe("mock/glm");
+		expect(rec.tool).toBe("bash");
+		expect(rec.input).toEqual({ command: "ls -la /tmp" });
+		expect(rec.actionLine).toContain("ls -la /tmp");
+		expect(rec.thinking).toBe("off");
+		expect(rec.transcript).toContain("ls -la /tmp");
+		expect(rec.rawResponse).toBe("<verdict>allow</verdict> ok");
+		expect(rec.degraded).toBe(false);
+		expect(rec.shadow).toContain("shadow cache");
+		expect(typeof rec.ts).toBe("string");
+		expect(new Date(rec.ts).toString()).not.toBe("Invalid Date");
+	});
+
+	test("ask outcome recorded as ask (interactive) and as degraded deny (headless)", async () => {
+		clearAudit();
+		const h1 = session({ audit: true });
+		h1.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h1.confirmAnswer = true;
+		const r1 = await toolCall(h1, "bash", { command: "cargo build" });
+		expect(r1).toBeUndefined();
+		const h2 = session({ audit: true });
+		h2.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h2.ctx.hasUI = false;
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		const recs = readAudit();
+		expect(recs.length).toBe(2);
+		expect(recs[0]).toMatchObject({ verdict: "ask", degraded: false, source: "model" });
+		expect(recs[1]).toMatchObject({ verdict: "deny", degraded: true, source: "model" });
+	});
+
+	test("classifier failure and no-model paths both record fail-closed", async () => {
+		clearAudit();
+		const h1 = session({ audit: true });
+		h1.responses = [{ text: "", stopReason: "length" }, new Error("gateway boom")];
+		const r1 = await toolCall(h1, "bash", { command: "cargo build" });
+		expect(r1?.block).toBe(true);
+		const h2 = session({ audit: true });
+		h2.ctx.model = null;
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		const recs = readAudit();
+		expect(recs.length).toBe(2);
+		expect(recs[0].source).toBe("fail-closed");
+		expect(recs[0].reason).toContain("attempt 2 (1024t)");
+		expect(recs[0].transcript).toContain("cargo build");
+		expect(recs[1]).toMatchObject({ source: "fail-closed", model: null, transcript: null, rawResponse: null });
+	});
+
+	test("rule-layer decisions produce no records (incl. protected-path ask)", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, deny: ["push"] });
+		const r1 = await toolCall(h1, "bash", { command: "git push origin main" });
+		expect(r1?.block).toBe(true);
+		const h2 = session({ audit: true, denyPaths: [path.join(TMP_AGENT, "sensitive-53")] });
+		const r2 = await toolCall(h2, "read", { path: path.join(TMP_AGENT, "sensitive-53", "secret.md") });
+		expect(r2).toBeUndefined(); // confirm defaults to allow
+		expect(fs.existsSync(VERDICTS())).toBe(false); // lazy dir: nothing gray → no dir
+	});
+
+	test("agent reads and writes under verdicts/ are denied (file tools and bash)", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		const inVerdicts = { path: path.join(VERDICTS(), "s1.jsonl") };
+		const wr = await toolCall(h, "write", { ...inVerdicts, content: "laundered" });
+		expect(wr?.block).toBe(true);
+		expect(wr.reason).toContain("self-protection");
+		const rd = await toolCall(h, "read", inVerdicts);
+		expect(rd?.block).toBe(true);
+		expect(rd.reason).toContain("self-protection");
+		const gr = await toolCall(h, "grep", { pattern: "verdict", path: VERDICTS() });
+		expect(gr?.block).toBe(true);
+		expect(gr.reason).toContain("self-protection");
+		const bs = await toolCall(h, "bash", { command: `cat ${path.join(VERDICTS(), "s1.jsonl")}` });
+		expect(bs?.block).toBe(true);
+		expect(bs.reason).toContain("self-protection");
+		expect(h.calls.length).toBe(0); // deterministic layer 0, classifier never reached
+	});
+
+	test("audit write failure never alters the verdict; warns exactly once", async () => {
+		clearAudit();
+		fs.writeFileSync(VERDICTS(), "not a directory"); // occupy the path with a file
+		try {
+			const h = session({ audit: true });
+			h.responses = [{ text: "<verdict>allow</verdict> ok" }, { text: "<verdict>allow</verdict> ok" }];
+			const r1 = await toolCall(h, "bash", { command: "ls -la /tmp" });
+			const r2 = await toolCall(h, "bash", { command: "cat /etc/hosts" });
+			expect(r1).toBeUndefined();
+			expect(r2).toBeUndefined();
+			const warnings = h.notifies.filter(([m, l]) => l === "warning" && m.includes("audit")).map(([m]) => m);
+			expect(warnings.length).toBe(1);
+			expect(warnings[0]).toContain("verdicts");
+		} finally {
+			fs.rmSync(VERDICTS(), { force: true });
+		}
+	});
+
+	test("session_start prunes to the 20 most recent session files", async () => {
+		clearAudit();
+		fs.mkdirSync(VERDICTS(), { recursive: true });
+		const names = Array.from({ length: 21 }, (_, i) => `${String(i).padStart(2, "0")}.jsonl`);
+		for (let i = 0; i < names.length; i++) {
+			fs.writeFileSync(path.join(VERDICTS(), names[i]), "{}\n");
+			fs.utimesSync(path.join(VERDICTS(), names[i]), new Date(2026, 0, 1 + i), new Date(2026, 0, 1 + i));
+		}
+		const h = session({ audit: true });
+		await h.handlers.session_start({}, h.ctx);
+		expect(fs.readdirSync(VERDICTS()).sort()).toEqual(names.slice(1));
+	});
+
+	test("/automode status shows the audit state and path when on", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		await h.commands["automode"].handler("", h.ctx);
+		expect(h.notifies.some(([m]) => m.includes(`audit: on → ${VERDICTS()}`))).toBe(true);
 	});
 });
 

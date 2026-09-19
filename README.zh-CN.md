@@ -101,7 +101,8 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
   ],
   "builtinDenyFloor": true,
   "classifierModel": null,
-  "toggleShortcut": "ctrl+shift+a"
+  "toggleShortcut": "ctrl+shift+a",
+  "audit": false
 }
 ```
 
@@ -110,6 +111,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担;下方自保护层永远开启)
 - `classifierModel` 指定分类器模型,如 `"zai/glm-5.3-flash:low"`(支持思考后缀;缺省 = 会话模型且显式关思考)
 - `classifierModel: "typesafe/jev-latest"` 启用随包的 **jev 决策适配器**——灰区裁决经 OpenRouter 的 TypeSafe jev(`/api/alpha/decisions`)完成,复用 pi 的 OpenRouter 登录态;实验性质,详见 [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
+- `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件,保留最近 20 个。仅存本机且全保真(受保护路径明文可能出现——永不出本机;[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注);agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
 

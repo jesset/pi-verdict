@@ -20,6 +20,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 对单次工具调用的判定结果。由 `tool_call` 钩子产出,放行则不做干预,拦截则返回 `{ block: true, reason }`。运行时载体为 `Verdict` 值对象(verdict / reason / detail / source / degraded / shadow):`detail` 为 UI-only 明文(受保护路径仅入本地确认框,ADR-0002 零泄漏承诺),`source` 区分 rule / protected-path / classifier / fail-closed,`degraded` 标记 ask 降级产物。
 
+### 裁决审计 (verdict audit records)
+
+灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/影子探针/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。observe-only:append-only、永不回流裁决输入(影子缓存同款纪律);全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
+
 ### 规则层 (rule layer)
 
 判定管线的第一段:确定性规则给出硬性 allow 或 deny。由两部分组成:**内置 deny floor**(bash 危险正则 + 文件路径敏感度分级,只做 deny 声明——误报方向安全)与**用户规则**(allow/deny 正则,由用户配置并背书)。内置层不提供白名单(0.2.0 起,安全审计结论:白名单健全性需要 shell AST 分析)。
