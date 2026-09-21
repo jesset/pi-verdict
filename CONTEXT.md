@@ -26,7 +26,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 裁决审计 (verdict audit records)
 
-灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/影子探针/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。observe-only:append-only、永不回流裁决输入(影子缓存同款纪律);全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
+灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/影子探针/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。#62 起审计面扩至 protected-path ask——其用户应答是对 denyPaths 声明质量的反馈——且交互式 ask 记录 ground truth(`userAnswer`/`answeredAt` 于确认应答后落盘,`ts` 仍为裁决时间;确认中途会话中断丢该条,已接受的代价);规则层 allow/deny 仍不入审计。observe-only:append-only、永不回流裁决输入(影子缓存同款纪律);全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
 
 ### 规则层 (rule layer)
 

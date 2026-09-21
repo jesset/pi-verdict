@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+
+- Ground truth for ask confirms (#62): interactive asks — classifier and protected-path alike — now record the user's answer in the verdict audit log. `userAnswer` (`allowed`/`declined`) and `answeredAt` (ISO of the confirm resolution; `ts` stays adjudication time) attach to the record after the confirm resolves, keeping one record per verdict; killing pi mid-dialog loses that ask record (accepted trade-off of the append-only discipline). The audit surface widens to protected-path asks (#54 boundary change) — their user answers grade the denyPaths rules, records carry the matched path in `detail`, and a headless degradation records as its effective deny; rule-layer allow/deny verdicts remain unaudited.
+
 ## [0.9.1] - 2026-09-19
 
 ### Added

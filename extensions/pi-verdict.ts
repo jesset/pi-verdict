@@ -1369,7 +1369,8 @@ function shadowTag(probe: ShadowProbe): string {
 
 const AUDIT_KEEP_SESSIONS = 20;
 
-/** One gray-zone adjudication record (#54). Full fidelity on purpose: the file is
+/** One adjudication record (#54; #62 widened the surface to protected-path asks and
+ *  added the ground-truth fields). Full fidelity on purpose: the file is
  *  local-trust-domain (same as pi-verdict.json, per the ADR-0002 boundary note),
  *  so protected-path plaintext is allowed here — it never leaves the machine nor
  *  flows into agent context. */
@@ -1386,9 +1387,18 @@ export interface AuditRecord {
 	rawResponse: string | null;
 	verdict: "allow" | "ask" | "deny";
 	reason: string;
-	source: "model" | "fail-closed";
+	/** #62: protected-path asks are recorded too — their user answers grade the
+	 *  denyPaths rules; rule allow/deny verdicts remain unaudited. */
+	source: "model" | "fail-closed" | "protected-path";
 	shadow: string;
 	degraded: boolean;
+	/** #62 ground truth: the user's answer to an interactive ask confirm. Present only
+	 *  on records whose confirm actually ran; headless/degraded asks omit it. */
+	userAnswer?: "allowed" | "declined";
+	/** #62: ISO timestamp of the confirm resolution; `ts` stays adjudication time. */
+	answeredAt?: string;
+	/** #62: protected-path records only — the matched path. */
+	detail?: string;
 }
 
 /** Audit sink (#54): append-only and fail-soft (the first write failure surfaces
@@ -1513,6 +1523,11 @@ export interface Verdict {
 	source: VerdictSource;
 	degraded: boolean;
 	shadow?: string;
+	/** #62: pending audit record for an interactive ask — adjudicate defers the append so
+	 *  the handler can attach the user's answer after the confirm resolves. The handler
+	 *  owns the single finalize: append with userAnswer/answeredAt, or without them when
+	 *  presentation throws. Unset for every non-interactive verdict. */
+	pendingAudit?: AuditRecord;
 }
 
 /** 逐调用环境:呈现无关的宿主能力。model 经 getModel 惰性求值——保持「仅灰区才
@@ -1541,38 +1556,46 @@ export async function adjudicate(
 	const rule = classifyByRules(call.toolName, call.input, env.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(env.cwd));
 	if (rule.verdict === "allow") return { verdict: "allow", reason: rule.reason ?? "", source: "rule", degraded: false };
 	if (rule.verdict === "deny") return { verdict: "deny", reason: rule.reason ?? "", source: "rule", degraded: false };
+
+	// #62: the audit surface widens to protected-path asks (their user answers grade the
+	// denyPaths rules); rule allow/deny stay unaudited (no corpus value, #54). Record
+	// building is split from appending: an interactive ask returns via pendingAudit and the
+	// handler appends after the confirm resolves (with the ground truth); everything else
+	// appends immediately. Recording stays observe-only — it never changes a verdict; write
+	// failures stay fail-soft in the sink and surface once via drainWarning.
+	const actionLine = toolCallLine(call.toolName, call.input);
+	const buildRecord = (v: Pick<AuditRecord, "verdict" | "reason" | "source" | "degraded">, raw: ClassifierOutcome["auditRaw"] | null, shadow: string): AuditRecord => ({
+		ts: new Date().toISOString(),
+		sessionId: env.host.getSessionId(),
+		cwd: env.cwd,
+		model: raw?.modelId ?? null,
+		tool: call.toolName,
+		input: call.input,
+		actionLine,
+		thinking: raw?.thinking ?? null,
+		transcript: raw?.transcript ?? null,
+		rawResponse: raw?.rawResponse ?? null,
+		shadow,
+		...v,
+	});
+
 	if (rule.verdict === "ask") {
 		// denyPaths 命中 → ask 终局(ADR-0002):声明者本人裁决例外;无 UI 降级为 deny
-		return { verdict: env.hasUI ? "ask" : "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: !env.hasUI };
+		if (env.hasUI) {
+			const ppRecord: AuditRecord = { ...buildRecord({ verdict: "ask", reason: rule.reason ?? "", source: "protected-path", degraded: false }, null, "-"), detail: rule.detail };
+			return { verdict: "ask", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: false, ...(state.audit ? { pendingAudit: ppRecord } : {}) };
+		}
+		// headless: ask 降级为 deny——记录与灰区同规(降级后的有效裁决入档)
+		state.audit?.append({ ...buildRecord({ verdict: "deny", reason: rule.reason ?? "", source: "protected-path", degraded: true }, null, "-"), detail: rule.detail });
+		return { verdict: "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: true };
 	}
 
 	// 灰区 → 分类器;无可用模型 → fail-closed
-	// #54: gray-zone only (rule-layer verdicts carry no transcript corpus —
-	// brief decision); observe-only — recording never changes a verdict, and
-	// write failures are swallowed fail-soft by the sink and surfaced once via drainWarning
-	const actionLine = toolCallLine(call.toolName, call.input);
-	const audit = (v: Pick<AuditRecord, "verdict" | "reason" | "source" | "degraded">, raw: ClassifierOutcome["auditRaw"] | null, shadow: string): void => {
-		if (!state.audit) return;
-		state.audit.append({
-			ts: new Date().toISOString(),
-			sessionId: env.host.getSessionId(),
-			cwd: env.cwd,
-			model: raw?.modelId ?? null,
-			tool: call.toolName,
-			input: call.input,
-			actionLine,
-			thinking: raw?.thinking ?? null,
-			transcript: raw?.transcript ?? null,
-			rawResponse: raw?.rawResponse ?? null,
-			shadow,
-			...v,
-		});
-	};
 
 	const resolved = env.getModel();
 	if (!resolved) {
 		const reason = "no classifier model available (fail-closed)";
-		audit({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-");
+		state.audit?.append(buildRecord({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-"));
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
@@ -1592,7 +1615,13 @@ export async function adjudicate(
 
 	const shadow = shadowTag(probe);
 	const askDegraded = !env.hasUI && outcome.verdict === "ask";
-	audit({ verdict: askDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: askDegraded }, outcome.auditRaw ?? null, shadow);
+	const grayRecord = buildRecord({ verdict: askDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: askDegraded }, outcome.auditRaw ?? null, shadow);
+	// #62: an interactive ask defers the append to the handler finalize (ground truth);
+	// a headless degraded ask and every other outcome append immediately as before
+	if (outcome.verdict === "ask" && env.hasUI) {
+		return { verdict: "ask", reason: outcome.reason, source: "classifier", degraded: false, shadow, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
+	}
+	state.audit?.append(grayRecord);
 	if (outcome.verdict === "allow") return { verdict: "allow", reason: outcome.reason, source: "classifier", degraded: false, shadow };
 	if (outcome.verdict === "deny") return { verdict: "deny", reason: outcome.reason, source: "classifier", degraded: false, shadow };
 	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
@@ -1847,6 +1876,22 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		});
 		const auditWarning = state.audit?.drainWarning(); // #54: fail-soft one-shot warning
 		if (auditWarning) ctx.ui.notify(`pi-verdict: ${auditWarning}`, "warning");
-		return presentVerdict(verdict, action, ctx);
+		// #62: an interactive ask's record is finalized here — exactly one append after the
+		// confirm, carrying the user's answer; a presentVerdict throw still lands the record
+		// (without the answer) and the error propagates unchanged. `undefined` = allowed.
+		let presented: { block: true; reason: string } | undefined;
+		try {
+			presented = await presentVerdict(verdict, action, ctx);
+		} catch (err) {
+			if (verdict.pendingAudit) state.audit?.append(verdict.pendingAudit);
+			throw err;
+		}
+		if (verdict.pendingAudit) {
+			state.audit?.append({ ...verdict.pendingAudit, userAnswer: presented === undefined ? "allowed" : "declined", answeredAt: new Date().toISOString() });
+			verdict.pendingAudit = undefined;
+			const lateWarning = state.audit?.drainWarning();
+			if (lateWarning) ctx.ui.notify(`pi-verdict: ${lateWarning}`, "warning");
+		}
+		return presented;
 	});
 }

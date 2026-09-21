@@ -31,6 +31,7 @@ interface Harness {
 	confirms: number;
 	confirmMsgs: string[];
 	confirmAnswer: boolean;
+	confirmError: unknown;
 	findMap: Record<string, any> | undefined;
 	install: (opts?: { flag?: boolean; debug?: boolean; modelFlag?: string; compatLoader?: () => Promise<{ complete: any }> }) => void;
 }
@@ -44,7 +45,7 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 	const fgCalls: Array<[string, string]> = [];
 	let flags: Record<string, unknown> = {};
 	const branch: any[] = [];
-	const h: any = { handlers, commands, shortcuts, notifies, statusSets, fgCalls, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, selects: 0, selectIndex: 0, findMap: undefined };
+	const h: any = { handlers, commands, shortcuts, notifies, statusSets, fgCalls, branch, calls: [], responses: [], confirms: 0, confirmMsgs: [] as string[], confirmAnswer: true, confirmError: undefined, selects: 0, selectIndex: 0, findMap: undefined };
 
 	const ctx: any = {
 		cwd, hasUI: true, signal: undefined, model: { id: "mock/glm" },
@@ -65,7 +66,12 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 		},
 		ui: {
 			notify: (msg: string, level: string) => notifies.push([msg, level]),
-			confirm: async (_t: string, m: string) => { h.confirms++; h.confirmMsgs.push(m); return h.confirmAnswer; },
+			confirm: async (_t: string, m: string) => {
+				if (h.confirmError !== undefined) throw h.confirmError;
+				h.confirms++;
+				h.confirmMsgs.push(m);
+				return h.confirmAnswer;
+			},
 			select: async (_t: string, options: string[]) => { h.selects++; return h.selectIndex === null ? undefined : options[h.selectIndex]; },
 			setStatus: (id: string, text: string) => statusSets.push([id, text]), theme: { fg: (c: string, s: string) => (fgCalls.push([c, s]), s) },
 		},
@@ -1579,15 +1585,20 @@ describe("audit verdict records (#54)", () => {
 		expect(recs[1]).toMatchObject({ source: "fail-closed", model: null, transcript: null, rawResponse: null });
 	});
 
-	test("rule-layer decisions produce no records (incl. protected-path ask)", async () => {
+	test("rule-layer verdicts stay unaudited; protected-path asks are recorded (#62)", async () => {
 		clearAudit();
 		const h1 = session({ audit: true, deny: ["push"] });
 		const r1 = await toolCall(h1, "bash", { command: "git push origin main" });
 		expect(r1?.block).toBe(true);
+		expect(fs.existsSync(VERDICTS())).toBe(false); // lazy dir: rule-only session → no dir
 		const h2 = session({ audit: true, denyPaths: [path.join(TMP_AGENT, "sensitive-53")] });
 		const r2 = await toolCall(h2, "read", { path: path.join(TMP_AGENT, "sensitive-53", "secret.md") });
 		expect(r2).toBeUndefined(); // confirm defaults to allow
-		expect(fs.existsSync(VERDICTS())).toBe(false); // lazy dir: nothing gray → no dir
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "ask", source: "protected-path", degraded: false, userAnswer: "allowed", model: null, shadow: "-" });
+		expect(recs[0].detail).toContain("sensitive-53");
+		expect(typeof recs[0].answeredAt).toBe("string");
 	});
 
 	test("agent reads and writes under verdicts/ are denied (file tools and bash)", async () => {
@@ -1645,6 +1656,118 @@ describe("audit verdict records (#54)", () => {
 		const h = session({ audit: true });
 		await h.commands["automode"].handler("", h.ctx);
 		expect(h.notifies.some(([m]) => m.includes(`audit: on → ${VERDICTS()}`))).toBe(true);
+	});
+});
+
+// ── 10.7b ground truth: user answers on ask records (#62) ──
+
+describe("audit user answers (#62)", () => {
+	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
+	const readAudit = () =>
+		fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+	const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
+
+	beforeAll(clearAudit);
+	afterAll(clearAudit);
+
+	test("classifier ask + user allows → one ask record with userAnswer allowed; answeredAt ≥ ts", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.confirmAnswer = true;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r).toBeUndefined();
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "ask", source: "model", degraded: false, userAnswer: "allowed" });
+		expect(new Date(recs[0].answeredAt).toString()).not.toBe("Invalid Date");
+		expect(new Date(recs[0].answeredAt).getTime()).toBeGreaterThanOrEqual(new Date(recs[0].ts).getTime());
+	});
+
+	test("classifier ask + user declines → userAnswer declined, user-declined block", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.confirmAnswer = false;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("user-declined");
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "ask", source: "model", userAnswer: "declined" });
+	});
+
+	test("headless ask → degraded deny record without userAnswer/answeredAt keys", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.ctx.hasUI = false;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r?.block).toBe(true);
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "deny", degraded: true, source: "model" });
+		expect("userAnswer" in recs[0]).toBe(false);
+		expect("answeredAt" in recs[0]).toBe(false);
+	});
+
+	test("non-ask gray records append immediately and carry no userAnswer", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.confirms).toBe(0);
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0].verdict).toBe("allow");
+		expect("userAnswer" in recs[0]).toBe(false);
+	});
+
+	test("confirm throw → record still lands without the answer, error propagates", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.confirmError = new Error("ui exploded");
+		await expect(toolCall(h, "bash", { command: "cargo build" })).rejects.toThrow("ui exploded");
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0].verdict).toBe("ask");
+		expect("userAnswer" in recs[0]).toBe(false);
+	});
+
+	test("protected-path ask: decline records userAnswer + detail; headless appends degraded immediately", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, denyPaths: [path.join(TMP_AGENT, "sensitive-62")] });
+		h1.confirmAnswer = false;
+		const r1 = await toolCall(h1, "read", { path: path.join(TMP_AGENT, "sensitive-62", "s.md") });
+		expect(r1?.block).toBe(true);
+		expect(r1.reason).toContain("user-declined");
+		expect(readAudit()[0]).toMatchObject({ verdict: "ask", source: "protected-path", userAnswer: "declined" });
+		expect(readAudit()[0].detail).toContain("sensitive-62");
+		const h2 = session({ audit: true, denyPaths: [path.join(TMP_AGENT, "sensitive-62")] });
+		h2.ctx.hasUI = false;
+		const r2 = await toolCall(h2, "read", { path: path.join(TMP_AGENT, "sensitive-62", "s.md") });
+		expect(r2?.block).toBe(true);
+		const recs = readAudit();
+		expect(recs.length).toBe(2);
+		expect(recs[1]).toMatchObject({ verdict: "deny", source: "protected-path", degraded: true });
+		expect("userAnswer" in recs[1]).toBe(false);
+	});
+
+	test("adjudicate returns pendingAudit for interactive asks instead of appending (both flavors)", async () => {
+		clearAudit();
+		setConfig({ audit: true, denyPaths: ["/proj/secret-project"] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null), undefined, TMP_AGENT);
+		const v1 = await adjudicate(state, { toolName: "write", input: { path: "/proj/secret-project/n.md", content: "x" } }, adjudicateEnv());
+		expect(v1.verdict).toBe("ask");
+		expect(v1.source).toBe("protected-path");
+		expect(v1.pendingAudit).toMatchObject({ verdict: "ask", source: "protected-path" });
+		const v2 = await adjudicate(state, { toolName: "bash", input: { command: "echo hello" } }, adjudicateEnv({ text: "<verdict>ask</verdict> maybe" }));
+		expect(v2.verdict).toBe("ask");
+		expect(v2.source).toBe("classifier");
+		expect(v2.pendingAudit).toMatchObject({ verdict: "ask", source: "model" });
+		expect(fs.existsSync(VERDICTS())).toBe(false); // nothing appended — the handler owns the finalize
 	});
 });
 
