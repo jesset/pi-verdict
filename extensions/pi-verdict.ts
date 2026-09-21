@@ -1585,7 +1585,7 @@ export async function adjudicate(
 			const ppRecord: AuditRecord = { ...buildRecord({ verdict: "ask", reason: rule.reason ?? "", source: "protected-path", degraded: false }, null, "-"), detail: rule.detail };
 			return { verdict: "ask", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: false, ...(state.audit ? { pendingAudit: ppRecord } : {}) };
 		}
-		// headless: ask 降级为 deny——记录与灰区同规(降级后的有效裁决入档)
+		// headless: the ask degrades to deny — recorded like the gray-zone rule (the effective post-degradation verdict is what lands in the record)
 		state.audit?.append({ ...buildRecord({ verdict: "deny", reason: rule.reason ?? "", source: "protected-path", degraded: true }, null, "-"), detail: rule.detail });
 		return { verdict: "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: true };
 	}
