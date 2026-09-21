@@ -100,6 +100,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 为「是否引入生效裁决缓存」积累实测数据的 observe-only 遥测:每次灰区裁决前后同步回放「双键 LRU(128)」的 would-be 命中(命令键 = 工具+输入+cwd,上下文键 = 最近 5 条 user 行),**只记录永不生效** —— 裁决永远来自模型。只回写真实模型 allow/deny,ask 与 fail-closed 不入;会话内存态,`session_start` 重置。观察口:`/automode` 统计行与 `PI_AUTO_MODE_DEBUG=1` 通知标注。
 
-### 回退分类器 (fallback classifier / uncertainty-gated cascade)
+### 置信降级 (confidence demotion)
 
-可选的第二层分类器(ADR-0004;`classifierFallbackModel` 配置,未配置即整体关闭)。仅当第一层不确定时征询:触发优先级为 fail-closed → ask → jev confidence 严格低于 `classifierFallbackConfidence`(默认 50;LLM 第一层无数值置信度,仅前两种触发)。shadow 模式(默认)只观察不改判——结果落审计记录的 `fallback` 子对象与 `/automode` 会话计数;enforce 模式为**安全棘轮**:生效裁决取两层中更严者,第二层只可升严永不放宽,fallback 调用失败或模型不可解析时该次触发调用 fail-closed deny(配置了却静默失效不可接受;未触发调用恒单层)。审计顶层恒为第一层语义,生效裁决在 `fallback.effective`(shadow/enforce 语料可比)。jev 侧 confidence 为硬要求(契约保证,缺失即 fail-closed)。
+置信地板(`classifierMinConfidence`,ADR-0004 amendment)触发时第一层裁决被降级的机制:jev 裁决的 confidence 严格低于地板时,**无论 allow/ask/deny 一律降级**——级联到回退分类器(若配置),否则转人工 ask(非交互降级 deny)。不低于地板时第一层完全自主。地板可独立采用(无需第二层);LLM 第一层无数值置信度,地板对其惰性。
+
+### 回退分类器 (fallback classifier)
+
+级联的第二层(`classifierFallbackModel` 配置),仅在置信降级或第一层 fail-closed 时参与。shadow 模式(默认)只记录意见——结果落审计记录的 `fallback` 子对象与 `/automode` 会话计数,降级调用仍由人工裁决,fail-closed 的 deny 照旧;enforce 模式**全权裁决**(de novo),唯一例外:降级 deny 不可被翻成自动 allow,转人工。fallback 调用失败或不可解析时,该级联调用转人工(非交互降级 deny)——该裁决的层级已失效,人工是下一级。审计顶层恒为第一层语义(`demoted: true` 标记降级),生效裁决在 `fallback.effective`(仅 enforce 行)。jev 侧 confidence 为硬要求(契约保证,缺失即 fail-closed)。

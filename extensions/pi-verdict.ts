@@ -264,15 +264,19 @@ interface UserRules {
 	audit: boolean;
 	/** Allow visibility (#60): info notification on classifier allows; mechanical passes stay silent. Default off. */
 	notifyAllows: boolean;
-	/** #63: second-layer classifier spec (provider/id[:thinking]); null = the cascade is entirely off */
+	/** #67: autonomy floor for the first layer — a jev verdict with confidence strictly
+	 *  below this is demoted (cascaded to the fallback if configured, else asked of the
+	 *  user; non-interactive degrades to deny). null = floor off. */
+	classifierMinConfidence: number | null;
+	/** #63/#67: second-layer model spec (provider/id[:thinking]); consulted on demotion
+	 *  and fail-closed only. null = no second layer. */
 	classifierFallbackModel: string | null;
-	/** #63: trigger when the first layer's jev confidence is strictly below this (0–100). Default 50. */
-	classifierFallbackConfidence: number;
-	/** #63: "shadow" (default — observe-only, verdicts unchanged) | "enforce" (safety ratchet: the fallback may only escalate strictness, never relax) */
+	/** #67: does the second layer adjudicate cascaded calls ("enforce") or only record its
+	 *  opinion while the human decides ("shadow", default)? */
 	classifierFallbackMode: "shadow" | "enforce";
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierFallbackModel: null, classifierFallbackConfidence: 50, classifierFallbackMode: "shadow" };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "shadow" };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -337,8 +341,8 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
 	audit: false,
 	notifyAllows: false,
+	classifierMinConfidence: null,
 	classifierFallbackModel: null,
-	classifierFallbackConfidence: 50,
 	classifierFallbackMode: "shadow",
 }, null, 2)}\n`;
 
@@ -357,7 +361,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierFallbackMode?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -386,10 +390,11 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			return [x.trim()];
 		});
 		const shortcut = resolveToggleShortcut(raw.toggleShortcut);
-		// #63: fallback cascade keys — invalid values skip into the one-shot warning channel and default (50 / shadow)
-		const fbConfRaw = raw.classifierFallbackConfidence;
-		const fbConfOk = typeof fbConfRaw === "number" && Number.isFinite(fbConfRaw) && fbConfRaw >= 0 && fbConfRaw <= 100;
-		if (fbConfRaw !== undefined && !fbConfOk) skipped.push(`classifierFallbackConfidence: ${JSON.stringify(fbConfRaw)}`);
+		// #63/#67: confidence-floor keys — invalid values skip into the one-shot warning channel
+		if (raw.classifierFallbackConfidence !== undefined) skipped.push("classifierFallbackConfidence: renamed to classifierMinConfidence (0.11.0) — key ignored");
+		const minConfRaw = raw.classifierMinConfidence;
+		const minConfOk = typeof minConfRaw === "number" && Number.isFinite(minConfRaw) && minConfRaw >= 0 && minConfRaw <= 100;
+		if (minConfRaw !== undefined && minConfRaw !== null && !minConfOk) skipped.push(`classifierMinConfidence: ${JSON.stringify(minConfRaw)}`);
 		const fbModeRaw = raw.classifierFallbackMode;
 		if (fbModeRaw !== undefined && fbModeRaw !== "shadow" && fbModeRaw !== "enforce") skipped.push(`classifierFallbackMode: ${JSON.stringify(fbModeRaw)}`);
 		return {
@@ -403,7 +408,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				audit: raw.audit === true,
 				notifyAllows: raw.notifyAllows === true,
 				classifierFallbackModel: typeof raw.classifierFallbackModel === "string" && raw.classifierFallbackModel.trim() ? raw.classifierFallbackModel.trim() : null,
-				classifierFallbackConfidence: fbConfOk ? fbConfRaw : 50,
+				classifierMinConfidence: minConfOk ? minConfRaw : null,
 				classifierFallbackMode: fbModeRaw === "enforce" ? "enforce" : "shadow",
 			},
 			skipped,
@@ -1385,42 +1390,40 @@ function shadowTag(probe: ShadowProbe): string {
 }
 
 // ============================================================================
-// Fallback cascade stats (#63: observe-first, session-memory state; the #7 discipline)
+// Confidence cascade stats (#63/#67: observe-first, session-memory state; the #7 discipline)
 // ============================================================================
 
-/** #63: ratchet strictness order — the fallback may only escalate, never relax */
-const STRICTNESS_RANK: Record<"allow" | "ask" | "deny", number> = { allow: 0, ask: 1, deny: 2 };
-
 interface FallbackStats {
-	triggered: number; // the gate fired (ask / fail-closed / confidence below threshold)
-	agreed: number; // fallback verdict no stricter than the first layer's
-	escalated: number; // fallback stricter than the first layer (enforce applies it; shadow observes the would-be)
+	triggered: number; // the floor fired or the first layer fail-closed (with a fallback configured)
+	agreed: number; // fallback verdict equals the first layer's (fail-closed defaults to deny)
+	overruled: number; // fallback verdict differs (enforce applies it; shadow observes the would-be)
 	errored: number; // fallback unresolvable or its call failed
 }
 
 class FallbackCascade {
-	readonly stats: FallbackStats = { triggered: 0, agreed: 0, escalated: 0, errored: 0 };
+	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0 };
 
 	/** Session reset (#7 discipline: session-memory state) */
 	reset(): void {
-		Object.assign(this.stats, { triggered: 0, agreed: 0, escalated: 0, errored: 0 });
+		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0 });
 	}
 
-	note(first: "allow" | "ask" | "deny", fb: "allow" | "ask" | "deny" | null): void {
+	note(first: "allow" | "ask" | "deny" | null, fb: "allow" | "ask" | "deny" | null): void {
 		this.stats.triggered++;
 		if (fb === null) {
 			this.stats.errored++;
 			return;
 		}
-		if (STRICTNESS_RANK[fb] > STRICTNESS_RANK[first]) this.stats.escalated++;
+		// A fail-closed origin produced no first-layer verdict; its default outcome is deny
+		if ((first ?? "deny") !== fb) this.stats.overruled++;
 		else this.stats.agreed++;
 	}
 
 	/** Summary line for /automode */
 	summary(mode: "shadow" | "enforce"): string {
 		const s = this.stats;
-		if (s.triggered === 0) return "fallback cascade: not triggered this session";
-		return `fallback cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "escalated" : "would-escalate"} ${s.escalated} · errored ${s.errored}`;
+		if (s.triggered === 0) return "confidence cascade: not triggered this session";
+		return `confidence cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "overruled" : "would-overrule"} ${s.overruled} · errored ${s.errored}`;
 	}
 }
 
@@ -1431,21 +1434,21 @@ class FallbackCascade {
 
 const AUDIT_KEEP_SESSIONS = 20;
 
-/** #63: second-layer classifier outcome on a triggered call. The record's top-level
- *  fields keep first-layer semantics for corpus comparability (grill decision); the
- *  verdict actually applied under enforce lives in `effective` (absent in shadow). */
+/** #63/#67: second-layer outcome on a cascaded call. The record's top-level fields keep
+ *  first-layer semantics for corpus comparability; the verdict actually applied under
+ *  enforce lives in `effective` (failure rows carry the ask the human got). */
 export interface FallbackAudit {
 	model: string;
 	mode: "shadow" | "enforce";
-	triggeredBy: "ask" | "confidence" | "fail-closed";
-	/** jev confidence that fired the gate; null unless triggeredBy = "confidence" */
+	triggeredBy: "confidence" | "fail-closed";
+	/** jev confidence that fired the floor; null unless triggeredBy = "confidence" */
 	confidence: number | null;
 	/** null = the fallback call itself failed (unresolvable model, timeout, parse) */
 	verdict: "allow" | "ask" | "deny" | null;
 	reason: string | null;
 	durationMs: number;
 	error: string | null;
-	/** enforce mode only: the verdict applied after the ratchet */
+	/** enforce mode only: the verdict applied (pre headless-degradation) */
 	effective?: "allow" | "ask" | "deny";
 }
 
@@ -1479,7 +1482,9 @@ export interface AuditRecord {
 	answeredAt?: string;
 	/** #62: protected-path records only — the matched path. */
 	detail?: string;
-	/** #63: second-layer outcome when the uncertainty gate fired. */
+	/** #67: the confidence floor fired — the first-layer verdict was demoted. */
+	demoted?: true;
+	/** #63/#67: second-layer outcome when the fallback was consulted. */
 	fallback?: FallbackAudit;
 }
 
@@ -1627,66 +1632,78 @@ export interface AdjudicateEnv {
 	getFallbackModel?: () => { model: NonNullable<ExtensionContext["model"]>; thinking: ThinkingLevel } | null;
 }
 
-/** #63: should the second layer be consulted for this first-layer outcome? Precedence:
- *  fail-closed → ask → jev confidence strictly below the threshold. LLM reasons carry
- *  no numeric confidence (parseJevConfidence → null) — their gate is ask/fail-closed only. */
-function fallbackTrigger(outcome: ClassifierOutcome, rules: UserRules): { triggeredBy: "ask" | "confidence" | "fail-closed"; confidence: number | null } | null {
-	if (!rules.classifierFallbackModel) return null;
-	if (outcome.source === "fail-closed") return { triggeredBy: "fail-closed", confidence: null };
-	if (outcome.verdict === "ask") return { triggeredBy: "ask", confidence: null };
+/** #67: the confidence floor. Below it the first layer abstains and the call cascades —
+ *  to the fallback if configured, else to the human (headless degrades to deny). Numeric
+ *  confidence exists only on jev-formatted reasons; LLM first layers never demote. */
+function confidenceDemotion(outcome: ClassifierOutcome, rules: UserRules): { confidence: number } | null {
+	if (rules.classifierMinConfidence === null || outcome.source === "fail-closed") return null;
 	const conf = parseJevConfidence(outcome.reason);
-	if (conf !== null && conf < rules.classifierFallbackConfidence) return { triggeredBy: "confidence", confidence: conf };
+	if (conf !== null && conf < rules.classifierMinConfidence) return { confidence: conf };
 	return null;
 }
 
 interface CascadeResult {
-	/** audit material; absent when no trigger fired */
+	/** set whenever the confidence floor fired (with or without a fallback) */
+	demoted?: true;
+	/** audit material; present when the fallback was consulted */
 	fb?: FallbackAudit;
-	/** enforce-mode override; absent = keep the first-layer verdict (shadow never overrides) */
+	/** the applied outcome when the cascade changes it (pre-degradation — the caller's
+	 *  tail applies the usual headless ask → deny rule) */
 	effective?: { verdict: "allow" | "ask" | "deny"; reason: string; source: "classifier" | "fail-closed" };
 }
 
-/** #63: run the second layer on a triggered call. Safety ratchet: the fallback may
- *  only escalate strictness, never relax. A failed fallback (unresolvable model or
- *  failed call) denies in enforce — an explicitly configured second layer must not
- *  silently degrade the gate to single-layer (grill decision); in shadow a failure
- *  is recorded and never changes the verdict. */
-async function runFallbackCascade(
+/** #67: run the cascade for one triggered call. `first` is the first-layer verdict, or
+ *  null when the first layer never produced one (fail-closed origin). Semantics:
+ *  - demotion with no fallback → ask the human
+ *  - shadow → the fallback records its opinion; a demotion still asks the human, a
+ *    fail-closed deny stands
+ *  - enforce → the fallback adjudicates de novo, with one carve-out: a demoted first-layer
+ *    deny may not be flipped to an automatic allow — the human decides
+ *  - fallback failure/unresolvable on a cascaded call → ask the human (the tier that was
+ *    to adjudicate is down); headless degrades downstream */
+async function runConfidenceCascade(
 	state: SessionState,
 	env: AdjudicateEnv,
-	first: "allow" | "ask" | "deny",
-	trigger: { triggeredBy: "ask" | "confidence" | "fail-closed"; confidence: number | null },
+	first: { verdict: "allow" | "ask" | "deny"; reason: string } | null,
+	trigger: { kind: "demotion"; confidence: number } | { kind: "fail-closed" },
 	denyPathsActive: boolean,
 	actionLine: string,
 ): Promise<CascadeResult> {
 	const rules = state.userRules;
-	if (!rules.classifierFallbackModel || !env.getFallbackModel) return {};
+	const demotionAsk = (): CascadeResult["effective"] => ({
+		verdict: "ask",
+		reason: `${first!.reason} (confidence ${trigger.kind === "demotion" ? trigger.confidence : "?"}% is below your classifierMinConfidence of ${rules.classifierMinConfidence}%)`,
+		source: "classifier",
+	});
+	const getFb = env.getFallbackModel;
+	if (!rules.classifierFallbackModel || !getFb) {
+		// A fail-closed without a fallback keeps its deny; a demotion asks the human
+		return trigger.kind === "demotion" ? { demoted: true, effective: demotionAsk() } : {};
+	}
 	const mode = rules.classifierFallbackMode;
 	const start = Date.now();
-	const base = { mode, triggeredBy: trigger.triggeredBy, confidence: trigger.confidence };
-	// A failed fallback (unresolvable model or failed call) records the error and, under
-	// enforce, denies the triggered call; `fallback.effective` carries the applied "deny"
-	// so failure rows read through the same sub-object as every other enforce row
+	const base = { mode, triggeredBy: trigger.kind === "demotion" ? ("confidence" as const) : ("fail-closed" as const), confidence: trigger.kind === "demotion" ? trigger.confidence : null };
+	const demotedMark = trigger.kind === "demotion" ? ({ demoted: true } as const) : {};
+	const shadowApplied = trigger.kind === "demotion" ? { effective: demotionAsk() } : {};
 	const failed = (model: string, error: string): CascadeResult => {
-		state.fallback.note(first, null);
+		state.fallback.note(first?.verdict ?? null, null);
 		const fb: FallbackAudit = { ...base, model, verdict: null, reason: null, durationMs: Date.now() - start, error };
-		return mode === "enforce" ? { fb: { ...fb, effective: "deny" }, effective: { verdict: "deny", reason: "fallback classifier unavailable (fail-closed)", source: "fail-closed" } } : { fb };
+		if (mode === "shadow") return { ...demotedMark, fb, ...shadowApplied };
+		return { ...demotedMark, fb: { ...fb, effective: "ask" }, effective: { verdict: "ask", reason: "fallback classifier unavailable (first layer abstained) — your call", source: "fail-closed" } };
 	};
-	const resolved = env.getFallbackModel();
+	const resolved = getFb();
 	if (!resolved) return failed(rules.classifierFallbackModel, "fallback model unresolvable (not found or no configured auth)");
 	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, actionLine, resolved.thinking, denyPathsActive, FALLBACK_TIMEOUT_MS);
-	const durationMs = Date.now() - start;
 	if (outcome.source !== "model") return failed(resolved.model.id, outcome.reason);
-	state.fallback.note(first, outcome.verdict);
-	const fb: FallbackAudit = { ...base, model: resolved.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs, error: null };
-	if (mode === "enforce") {
-		const effective = STRICTNESS_RANK[outcome.verdict] > STRICTNESS_RANK[first] ? outcome.verdict : first;
-		if (effective !== first) {
-			return { fb: { ...fb, effective }, effective: { verdict: outcome.verdict, reason: `${outcome.reason} (second-opinion classifier escalated ${first} to ${outcome.verdict})`, source: "classifier" } };
-		}
-		return { fb: { ...fb, effective } };
+	state.fallback.note(first?.verdict ?? null, outcome.verdict);
+	const fb: FallbackAudit = { ...base, model: resolved.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs: Date.now() - start, error: null };
+	if (mode === "shadow") return { ...demotedMark, fb, ...shadowApplied };
+	// The one carve-out on second-layer authority: a demoted first-layer deny may not
+	// become an automatic allow — the human decides (headless degrades to deny downstream)
+	if (trigger.kind === "demotion" && first?.verdict === "deny" && outcome.verdict === "allow") {
+		return { demoted: true, fb: { ...fb, effective: "ask" }, effective: { verdict: "ask", reason: `${outcome.reason} (first layer said deny at confidence ${trigger.confidence}%; second opinion allows — your call)`, source: "classifier" } };
 	}
-	return { fb };
+	return { ...demotedMark, fb: { ...fb, effective: outcome.verdict }, effective: { verdict: outcome.verdict, reason: outcome.reason, source: "classifier" } };
 }
 
 /**
@@ -1743,13 +1760,19 @@ export async function adjudicate(
 	const resolved = env.getModel();
 	if (!resolved) {
 		const reason = "no classifier model available (fail-closed)";
-		// #63: no-model fail-closed triggers the cascade as well — the ratchet has no
-		// exception for first-layer absence (grill decision: enforce can never relax this
-		// deny; in shadow it is observability only)
-		const cascade = await runFallbackCascade(state, env, "deny", { triggeredBy: "fail-closed", confidence: null }, state.userRules.denyPaths.length > 0, actionLine);
+		// #67: a fail-closed origin cascades to the fallback if configured — under enforce
+		// the fallback adjudicates de novo (superseding the 0.10.0 ratchet decision);
+		// shadow records its opinion and the deny stands
+		const cascade = await runConfidenceCascade(state, env, null, { kind: "fail-closed" }, state.userRules.denyPaths.length > 0, actionLine);
+		const eff = cascade.effective;
 		const fcRecord = buildRecord({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-");
 		if (cascade.fb) fcRecord.fallback = cascade.fb;
+		if (eff?.verdict === "ask" && env.hasUI) {
+			return { verdict: "ask", reason: eff.reason, source: eff.source, degraded: false, ...(state.audit ? { pendingAudit: fcRecord } : {}) };
+		}
 		state.audit?.append(fcRecord);
+		if (eff?.verdict === "allow") return { verdict: "allow", reason: eff.reason, source: "classifier", degraded: false };
+		if (eff) return { verdict: "deny", reason: eff.reason, source: eff.source, degraded: !env.hasUI };
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
@@ -1769,22 +1792,26 @@ export async function adjudicate(
 
 	const shadow = shadowTag(probe);
 
-	// #63 cascade: consult the second layer when the gate fires; `effective` is the
-	// ratchet result the returned verdict follows (shadow never overrides)
-	const trigger = fallbackTrigger(outcome, state.userRules);
-	const cascade = trigger ? await runFallbackCascade(state, env, outcome.verdict, trigger, state.userRules.denyPaths.length > 0, actionLine) : {};
+	// #67 cascade: a confidence-floor demotion, or a classifier fail-closed outcome
+	// (the first layer produced no verdict)
+	const demotion = confidenceDemotion(outcome, state.userRules);
+	const cascade = demotion || outcome.source === "fail-closed"
+		? await runConfidenceCascade(state, env, demotion ? { verdict: outcome.verdict, reason: outcome.reason } : null, demotion ? { kind: "demotion", confidence: demotion.confidence } : { kind: "fail-closed" }, state.userRules.denyPaths.length > 0, actionLine)
+		: {};
 	const effVerdict = cascade.effective?.verdict ?? outcome.verdict;
 	const effReason = cascade.effective?.reason ?? outcome.reason;
 	const effSource = cascade.effective?.source ?? "classifier";
 
-	// #62: record top-level keeps FIRST-layer semantics (grill decision — corpus
-	// comparability); the enforced outcome lives in fallback.effective and evaluators
-	// must read enforce rows accordingly
-	const firstAskDegraded = !env.hasUI && outcome.verdict === "ask";
-	const grayRecord = buildRecord({ verdict: firstAskDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: firstAskDegraded }, outcome.auditRaw ?? null, shadow);
+	// #62/#67: top-level keeps first-layer semantics (corpus comparability); the applied
+	// verdict lives in fallback.effective (enforce rows). Non-interactive asks of any
+	// origin — native, demoted, escalated — record as their effective deny, the
+	// pre-existing ask-degradation convention.
+	const appliedAskHeadless = !env.hasUI && effVerdict === "ask";
+	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null, shadow);
+	if (cascade.demoted) grayRecord.demoted = true;
 	if (cascade.fb) grayRecord.fallback = cascade.fb;
 	// #62: an interactive ask defers the append to the handler finalize (ground truth);
-	// a headless degraded ask and every other outcome append immediately as before
+	// every other outcome appends immediately as before
 	if (effVerdict === "ask" && env.hasUI) {
 		return { verdict: "ask", reason: effReason, source: effSource, degraded: false, shadow, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
 	}
@@ -1792,7 +1819,7 @@ export async function adjudicate(
 	if (effVerdict === "allow") return { verdict: "allow", reason: effReason, source: effSource, degraded: false, shadow };
 	if (effVerdict === "deny") return { verdict: "deny", reason: effReason, source: effSource, degraded: false, shadow };
 	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
-	return { verdict: "deny", reason: effReason, source: effSource, degraded: !env.hasUI, shadow };
+	return { verdict: "deny", reason: effReason, source: effSource, degraded: true, shadow };
 }
 
 // ============================================================================
@@ -1923,8 +1950,8 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	const denyPathsHint = () => (state.userRules.denyPaths.length > 0 ? `\ndenyPaths: ${state.userRules.denyPaths.length} active` : "");
 	/** Status line audit hint (#54): shown only while the sink is active */
 	const auditHint = () => (state.audit ? `\naudit: on → ${state.audit.dir}` : "");
-	/** Status line fallback hint (#63): shown only while the cascade is configured */
-	const fallbackHint = () => (state.userRules.classifierFallbackModel ? `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}` : "");
+	/** Status line cascade hint (#63/#67): shown while the floor or the fallback is configured */
+	const fallbackHint = () => (state.userRules.classifierMinConfidence !== null || state.userRules.classifierFallbackModel ? `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}` : "");
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",

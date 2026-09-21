@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Changed
+
+- Confidence floor semantics (#67, [ADR-0004 amendment](docs/adr/0004-classifier-fallback-cascade.md)): the cascade gate becomes an **autonomy floor**. `classifierFallbackConfidence` is renamed **`classifierMinConfidence`** (`number | null`, default null = off; the old key warns as renamed and is ignored — clean break, no alias) and now means: a jev verdict with confidence strictly below the floor is **demoted, whatever the verdict** (allow/ask/deny alike) — cascaded to the fallback if `classifierFallbackModel` is set, otherwise asked of the user directly (non-interactive degrades to deny). The floor works standalone without a second layer, and is inert for LLM first layers (no numeric confidence). High-confidence asks no longer consult the fallback (the 0.10.0 ask-trigger is gone).
+- Second-layer authority under `enforce` is now **de novo adjudication** with one carve-out (#67): a demoted first-layer **deny** that the second layer would allow is asked of the user, never an automatic allow; every other combination applies as the second layer rules (a demoted allow can be re-allowed — the absorb direction). This supersedes the 0.10.0 safety ratchet and its fail-closed no-exception decision. A failed or unresolvable fallback on a cascaded call now asks the user (the tier that was to adjudicate is down; headless → deny, one-time warning) instead of denying outright.
+
+### Added
+
+- Audit `demoted: true` marker on floor fires (#67); `/automode` cascade counters renamed to `triggered · agreed · overruled (would-overrule in shadow) · errored`.
+
 ## [0.10.0] - 2026-09-21
 
 ### Added

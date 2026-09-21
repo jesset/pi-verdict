@@ -104,8 +104,8 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
   "toggleShortcut": "ctrl+shift+a",
   "audit": false,
   "notifyAllows": false,
+  "classifierMinConfidence": null,
   "classifierFallbackModel": null,
-  "classifierFallbackConfidence": 50,
   "classifierFallbackMode": "shadow"
 }
 ```
@@ -117,7 +117,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - `classifierModel: "typesafe/jev-latest"` 启用随包的 **jev 决策适配器**——灰区裁决经 TypeSafe jev 完成(默认 OpenRouter,或 `PI_VERDICT_JEV_TRANSPORT=typesafe` 直连官方 API);实验性质,详见 [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
 - `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件,保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth,确认结束后落盘),protected-path ask 也入审计(#62);规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机;[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注);agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 - `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解);默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知;shadow 标注仍属 debug;两开关同开时通知只出现一次
-- `classifierFallbackModel`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))添加**第二层分类器**,仅当第一层不确定时征询(ask / fail-closed / jev confidence 低于 `classifierFallbackConfidence`,默认 50);`classifierFallbackMode: "shadow"`(默认)只观察不改判,`"enforce"` 仅升严(安全棘轮——永不放宽;fallback 失败时该次触发调用 deny)。未设置即完全关闭——天然搭配:jev 打头 + haiku 级兜底
+- `classifierMinConfidence`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**:低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`shadow` = 第二层只记录意见、由你裁决;`enforce` = 第二层全权裁决,但降级 deny 永不被自动翻成 allow),否则直接问你。不低于地板时第一层自主。天然搭配:jev 打头 + haiku 级兜底
 
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
 
@@ -136,7 +136,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - **宿主**:仅支持pi。omp 上该设置会警告并回退会话模型。也绝不能选作会话主模型(不生成文本,选中即警告)
 - **逃生口**:`PI_VERDICT_JEV_URL` 可覆盖当前 transport 的端点(OpenRouter 侧为 alpha 接口)
 
-jev 的校准 confidence 正是回退级联的触发依据——搭配第二层使用(`"classifierFallbackModel": "anthropic/claude-haiku-4-5"`),把低置信调用交给更深的模型([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
+jev 的校准 confidence 正是置信地板的判定依据——搭配第二层使用(`"classifierMinConfidence": 50, "classifierFallbackModel": "anthropic/claude-haiku-4-5"`),让低置信调用交给更深的模型而非直接生效([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 

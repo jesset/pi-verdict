@@ -13,6 +13,42 @@ The literature's answer to exactly this tradeoff is the LLM cascade (FrugalGPT, 
 
 ## Decision
 
+> **Amendment (2026-09-21, #67) — autonomy-floor semantics.** The sections below are the
+> original 0.10.0 design. #67 reworked the gate from "when to consult a second opinion"
+> into "who holds adjudication authority": `classifierFallbackConfidence` is renamed
+> **`classifierMinConfidence`** (`number | null`, default null = off; the old key warns as
+> renamed and is ignored — clean break in 0.11.0, no alias) and now means an **autonomy
+> floor** — a jev verdict with confidence strictly below it is **demoted**, whatever the
+> verdict (allow/ask/deny alike): cascaded to the fallback if configured, else asked of
+> the human (headless → deny). The floor is a first-layer rule, independent of
+> `classifierFallbackMode`, and works standalone — fixing the 0.10.0 wart where the
+> threshold was inert without a fallback model. Consequences for the sections below:
+> - Trigger set is now **demotion + fail-closed only** — the ask trigger is gone: a
+>   high-confidence ask goes straight to the human (saves a call, respects the first
+>   layer's confident request).
+> - Decision 4's **safety ratchet is superseded**: under enforce the fallback **adjudicates
+>   de novo**, with exactly one carve-out — a demoted first-layer **deny** that the
+>   fallback would allow is asked of the human, never auto-allowed. Every other
+>   combination applies as the fallback rules (a demoted allow can be re-allowed: the
+>   absorb direction the cascade exists for).
+> - Decision 5's failure semantics are refined: on a cascaded call, a failed or
+>   unresolvable fallback **asks the human** (the tier that was to adjudicate is down;
+>   headless → deny) — the first layer abstained, so there is no verdict to fall back to,
+>   and nothing degrades silently.
+> - Decision 6's "no exception for first-layer absence" is superseded with it: a
+>   fail-closed origin under enforce is adjudicated de novo by the fallback (including
+>   allow); shadow keeps the deny and records the opinion.
+> - Shadow's promise is narrowed to what it always meant: **the second layer never changes
+>   a verdict**; the demotion itself is deterministic first-layer behavior, active in both
+>   modes whenever the floor is set.
+> - Audit: records carry `demoted: true` when the floor fires; non-interactive asks of any
+>   origin (native, demoted, escalated) record as their effective deny per the standing
+>   convention; `fallback.effective` holds the applied verdict on enforce rows (failure
+>   rows carry the `"ask"` the human got). Stats counters: triggered / agreed / overruled
+>   (would-overrule in shadow) / errored.
+> - LLM first layers emit no numeric confidence: floor and cascade are inert for them
+>   (unchanged from the original design).
+
 1. **Uncertainty-gated cascade, opt-in** via three config keys: `classifierFallbackModel` (`provider/id[:thinking]` spec, same format/validation as `classifierModel`; the feature is entirely off unless set), `classifierFallbackConfidence` (0–100, default 50), `classifierFallbackMode` (`"shadow"` | `"enforce"`, default `"shadow"`). Trigger precedence: first-layer **fail-closed → ask → jev confidence strictly below the threshold**. Resolution is config-only (no flag/env precedence) and never falls back to the session model — a second layer silently inheriting the session model would bill the same judgment twice, not add a second opinion.
 2. **Confidence is hard-required in the jev adapter**: the decisions contract guarantees `choice + probabilities + confidence` on choice answers, so a missing or non-numeric confidence in `verdictText` throws, joining the existing malformed → fail-closed discipline. Contract drift therefore fails closed — and the cascade's fail-closed trigger means the second layer still runs on those calls. `parseJevConfidence(reason)` is exported for the gate; it returns null for non-jev reasons, so **LLM first layers gate on ask/fail-closed only** (they carry no numeric confidence).
 3. **Shadow-first rollout**: in shadow (the default) the second layer runs on triggered calls and its outcome is recorded — an optional `fallback` sub-object on the audit record and session-memory counters surfaced via `/automode` — while the effective verdict never changes. This follows the #7 shadow-cache discipline (observe-only, session-memory stats, never an adjudication input).
