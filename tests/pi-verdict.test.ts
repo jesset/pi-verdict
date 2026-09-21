@@ -94,6 +94,13 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 	return h as Harness;
 }
 
+// Shared audit-file helpers for the s1-session describes (the #54 describe keeps its own
+// sessionId-parameterized local copies)
+const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
+const readAudit = () =>
+	fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
+
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
@@ -1665,11 +1672,6 @@ describe("audit verdict records (#54)", () => {
 // ── 10.7b ground truth: user answers on ask records (#62) ──
 
 describe("audit user answers (#62)", () => {
-	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
-	const readAudit = () =>
-		fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-	const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
-
 	beforeAll(clearAudit);
 	afterAll(clearAudit);
 
@@ -1777,10 +1779,6 @@ describe("audit user answers (#62)", () => {
 // ── 10.7c classifier fallback cascade (#63: uncertainty-gated, shadow-first) ──
 
 describe("classifier fallback cascade (#63)", () => {
-	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
-	const readAudit = () =>
-		fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-	const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
 	const JEV_ALLOW_49 = "<verdict>allow</verdict> jev: allow 66% (confidence 49%; ask 33%, deny 1%)";
 	const JEV_ALLOW_80 = "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)";
 
@@ -1965,7 +1963,7 @@ describe("classifier fallback cascade (#63)", () => {
 		expect(r1?.block).toBe(true);
 		expect(r1.reason).toContain("fallback classifier unavailable (fail-closed)");
 		expect(readAudit()[0]).toMatchObject({ verdict: "allow" });
-		expect(readAudit()[0].fallback).toMatchObject({ verdict: null, error: expect.stringContaining("fail-closed") });
+		expect(readAudit()[0].fallback).toMatchObject({ verdict: null, effective: "deny", error: expect.stringContaining("fail-closed") });
 		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
 		h2.findMap = { "mock/fb": { id: "fb-model" } };
 		h2.responses = [{ text: "<verdict>ask</verdict> hmm" }, { text: "" }, new Error("fb boom")];
@@ -2023,6 +2021,16 @@ describe("classifier fallback cascade (#63)", () => {
 		await toolCall(h, "bash", { command: "ls -la /tmp" });
 		const allows = h.notifies.filter(([m, l]) => l === "info" && m.includes("allow (classifier)")).map(([m]) => m);
 		expect(allows[1]).toContain("would-hit allow");
+	});
+
+	test("the fallback suffix warning and the first-layer unavailable warning never suppress each other", async () => {
+		const h = session({ classifierModel: "ghost/nope", classifierFallbackModel: "mock/fb:bogus" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> no" }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		const warns = h.notifies.filter(([m, l]) => l === "warning").map(([m]) => m);
+		expect(warns.some((m) => m.includes('classifier model "ghost/nope" unavailable'))).toBe(true);
+		expect(warns.some((m) => m.includes("invalid thinking-level suffix"))).toBe(true);
 	});
 
 	test("aborted signal aborts the fallback attempt: enforce denies, shadow keeps the first-layer verdict", async () => {

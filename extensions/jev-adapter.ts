@@ -180,7 +180,10 @@ export function verdictText(parsed: unknown): string {
 	const rest = VERDICTS.filter((v) => v !== choice)
 		.map((v) => `${v} ${pct(probs[v])}`)
 		.join(", ");
-	return `<verdict>${choice}</verdict> jev: ${choice} ${pct(probs[choice])} (confidence ${pct(conf)}; ${rest})`;
+	// The confidence segment floors instead of rounding: the cascade gate parses it back
+	// with a strict-below threshold, and overstating a 49.6% as 50% would slip past a 50
+	// gate. The 1e-9 epsilon only absorbs FP representation error (0.29*100 = 28.999…).
+	return `<verdict>${choice}</verdict> jev: ${choice} ${pct(probs[choice])} (confidence ${Math.floor(conf * 100 + 1e-9)}%; ${rest})`;
 }
 
 /** #63: parse the confidence back out of a `verdictText` reason. Returns null for any

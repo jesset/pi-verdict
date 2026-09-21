@@ -127,6 +127,11 @@ describe("verdictText", () => {
 		expect(() => verdictText(decisionResponse("allow", { allow: 1 }, Number.NaN))).toThrow("missing numeric confidence");
 		expect(() => verdictText(decisionResponse("allow", { allow: 1 }, "0.9" as unknown as number))).toThrow("missing numeric confidence");
 	});
+	test("confidence floors instead of rounding (a 49.6% must not render as 50% and slip past a 50 gate)", () => {
+		const text = verdictText(decisionResponse("allow", { allow: 1 }, 0.496));
+		expect(text).toContain("confidence 49%");
+		expect(parseJevConfidence(text.replace(/^<verdict>allow<\/verdict>\s*/, ""))).toBe(49);
+	});
 });
 
 describe("parseJevConfidence (#63)", () => {
