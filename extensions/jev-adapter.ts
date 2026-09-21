@@ -161,21 +161,38 @@ interface DecisionAnswer {
  * (`<verdict>…</verdict>` + one-line reason). Any malformed shape throws —
  * the classifier's fail-closed path owns the fallout. The reason is
  * user-facing (block reasons, ask dialogs): plain percentages, no internal
- * notation. */
+ * notation. Confidence is hard-required (#63): the decisions contract
+ * guarantees it on choice answers, so absence is contract drift and drift
+ * fails closed like any malformed shape — the cascade's confidence gate
+ * depends on the segment always being present. */
 export function verdictText(parsed: unknown): string {
 	const answer = (parsed as { answers?: { verdict?: DecisionAnswer } })?.answers?.verdict;
 	const choice = String(answer?.choice ?? "").trim().toLowerCase();
 	if (!VERDICTS.includes(choice as Verdict)) {
 		throw new Error(`jev adapter: malformed verdict answer (choice=${JSON.stringify(answer?.choice) ?? "missing"})`);
 	}
+	const conf = answer?.confidence;
+	if (typeof conf !== "number" || !Number.isFinite(conf)) {
+		throw new Error(`jev adapter: verdict answer missing numeric confidence (confidence=${JSON.stringify(conf) ?? "missing"})`);
+	}
 	const probs = (answer?.probabilities ?? {}) as Record<string, unknown>;
 	const pct = (n: unknown): string => `${Math.round((typeof n === "number" && Number.isFinite(n) ? n : 0) * 100)}%`;
 	const rest = VERDICTS.filter((v) => v !== choice)
 		.map((v) => `${v} ${pct(probs[v])}`)
 		.join(", ");
-	const conf = answer?.confidence;
-	const confText = typeof conf === "number" && Number.isFinite(conf) ? `confidence ${pct(conf)}; ` : "";
-	return `<verdict>${choice}</verdict> jev: ${choice} ${pct(probs[choice])} (${confText}${rest})`;
+	// The confidence segment floors instead of rounding: the cascade gate parses it back
+	// with a strict-below threshold, and overstating a 49.6% as 50% would slip past a 50
+	// gate. The 1e-9 epsilon only absorbs FP representation error (0.29*100 = 28.999…).
+	return `<verdict>${choice}</verdict> jev: ${choice} ${pct(probs[choice])} (confidence ${Math.floor(conf * 100 + 1e-9)}%; ${rest})`;
+}
+
+/** #63: parse the confidence back out of a `verdictText` reason. Returns null for any
+ *  non-jev reason — LLM classifiers emit free text and carry no numeric confidence
+ *  (their gate is ask/fail-closed only). jev reasons always carry the segment
+ *  (hard-required in verdictText). Format pinned by tests/jev-adapter.test.ts. */
+export function parseJevConfidence(reason: string): number | null {
+	const m = /jev: (?:allow|ask|deny) \d+% \(confidence (\d+)%/.exec(reason);
+	return m ? Number(m[1]) : null;
 }
 
 function mapUsage(u: unknown): AssistantMessage["usage"] {

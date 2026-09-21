@@ -19,6 +19,7 @@ import jevAdapter, {
 	PROVIDER_ID,
 	TRANSPORT_DEFAULTS,
 	VERDICT_QUESTIONS,
+	parseJevConfidence,
 	verdictText,
 	wireModel,
 } from "../extensions/jev-adapter.ts";
@@ -110,16 +111,40 @@ describe("verdictText", () => {
 			"<verdict>deny</verdict> jev: deny 96% (confidence 94%; allow 1%, ask 3%)",
 		);
 	});
-	test("missing probabilities render as zero, missing confidence is omitted", () => {
-		expect(verdictText(decisionResponse("allow"))).toBe("<verdict>allow</verdict> jev: allow 0% (ask 0%, deny 0%)");
+	test("missing probabilities render as zero (confidence is hard-required)", () => {
+		expect(verdictText(decisionResponse("allow", {}, 1))).toBe("<verdict>allow</verdict> jev: allow 0% (confidence 100%; ask 0%, deny 0%)");
 	});
 	test("case-normalizes the choice", () => {
-		expect(verdictText(decisionResponse("Ask"))).toMatch(/^<verdict>ask<\/verdict>/);
+		expect(verdictText(decisionResponse("Ask", { ask: 1 }, 0.9))).toMatch(/^<verdict>ask<\/verdict>/);
 	});
 	test("malformed answers throw (fail-closed upstream)", () => {
-		expect(() => verdictText(decisionResponse("maybe"))).toThrow("malformed verdict answer");
+		expect(() => verdictText(decisionResponse("maybe", {}, 0.9))).toThrow("malformed verdict answer");
 		expect(() => verdictText({ answers: {} })).toThrow("malformed verdict answer");
 		expect(() => verdictText({})).toThrow("malformed verdict answer");
+	});
+	test("missing or non-numeric confidence throws (#63 hard-require — contract drift fails closed)", () => {
+		expect(() => verdictText(decisionResponse("allow"))).toThrow("missing numeric confidence");
+		expect(() => verdictText(decisionResponse("allow", { allow: 1 }, Number.NaN))).toThrow("missing numeric confidence");
+		expect(() => verdictText(decisionResponse("allow", { allow: 1 }, "0.9" as unknown as number))).toThrow("missing numeric confidence");
+	});
+	test("confidence floors instead of rounding (a 49.6% must not render as 50% and slip past a 50 gate)", () => {
+		const text = verdictText(decisionResponse("allow", { allow: 1 }, 0.496));
+		expect(text).toContain("confidence 49%");
+		expect(parseJevConfidence(text.replace(/^<verdict>allow<\/verdict>\s*/, ""))).toBe(49);
+	});
+});
+
+describe("parseJevConfidence (#63)", () => {
+	test("extracts the confidence from a verdictText reason", () => {
+		expect(parseJevConfidence("jev: deny 96% (confidence 94%; allow 1%, ask 3%)")).toBe(94);
+	});
+	test("returns null when the segment is absent or the reason is not jev-formatted", () => {
+		expect(parseJevConfidence("ok")).toBeNull();
+		expect(parseJevConfidence("jev: allow 66% (ask 33%, deny 1%)")).toBeNull();
+	});
+	test("boundary values 0 and 100 parse", () => {
+		expect(parseJevConfidence("jev: allow 100% (confidence 0%; ask 0%, deny 0%)")).toBe(0);
+		expect(parseJevConfidence("jev: allow 100% (confidence 100%; ask 0%, deny 0%)")).toBe(100);
 	});
 });
 

@@ -94,10 +94,17 @@ function makeHarness(cwd: string = "/proj", opts?: { ompRegistry?: boolean }): H
 	return h as Harness;
 }
 
+// Shared audit-file helpers for the s1-session describes (the #54 describe keeps its own
+// sessionId-parameterized local copies)
+const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
+const readAudit = () =>
+	fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
+
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierFallbackMode?: unknown }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -107,6 +114,9 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
 	if (cfg.audit !== undefined) raw.audit = cfg.audit;
 	if (cfg.notifyAllows !== undefined) raw.notifyAllows = cfg.notifyAllows;
+	if (cfg.classifierFallbackModel !== undefined) raw.classifierFallbackModel = cfg.classifierFallbackModel;
+	if (cfg.classifierFallbackConfidence !== undefined) raw.classifierFallbackConfidence = cfg.classifierFallbackConfidence;
+	if (cfg.classifierFallbackMode !== undefined) raw.classifierFallbackMode = cfg.classifierFallbackMode;
 	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
@@ -1662,11 +1672,6 @@ describe("audit verdict records (#54)", () => {
 // ── 10.7b ground truth: user answers on ask records (#62) ──
 
 describe("audit user answers (#62)", () => {
-	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
-	const readAudit = () =>
-		fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-	const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
-
 	beforeAll(clearAudit);
 	afterAll(clearAudit);
 
@@ -1768,6 +1773,290 @@ describe("audit user answers (#62)", () => {
 		expect(v2.source).toBe("classifier");
 		expect(v2.pendingAudit).toMatchObject({ verdict: "ask", source: "model" });
 		expect(fs.existsSync(VERDICTS())).toBe(false); // nothing appended — the handler owns the finalize
+	});
+});
+
+// ── 10.7c classifier fallback cascade (#63: uncertainty-gated, shadow-first) ──
+
+describe("classifier fallback cascade (#63)", () => {
+	const JEV_ALLOW_49 = "<verdict>allow</verdict> jev: allow 66% (confidence 49%; ask 33%, deny 1%)";
+	const JEV_ALLOW_80 = "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)";
+
+	beforeAll(clearAudit);
+	afterAll(clearAudit);
+
+	test("off unless configured: every trigger flavor stays single-layer", async () => {
+		clearAudit();
+		const h1 = session({ audit: true });
+		h1.responses = [{ text: JEV_ALLOW_49 }];
+		await toolCall(h1, "bash", { command: "ls -la /tmp" });
+		expect(h1.calls.length).toBe(1);
+		const h2 = session({ audit: true });
+		h2.responses = [{ text: "<verdict>ask</verdict> hmm" }];
+		await toolCall(h2, "bash", { command: "cargo build" });
+		expect(h2.calls.length).toBe(1);
+		const h3 = session({ audit: true });
+		h3.responses = [{ text: "" }, new Error("boom")];
+		await toolCall(h3, "bash", { command: "cargo build" });
+		const recs = readAudit();
+		expect(recs.length).toBe(3);
+		expect(recs.every((r) => r.fallback === undefined)).toBe(true);
+	});
+
+	test("invalid classifierFallbackConfidence/mode skip into the one-shot warning channel", async () => {
+		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackConfidence: "high" as unknown, classifierFallbackMode: "yes" as unknown });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		await h.handlers.session_start({}, h.ctx);
+		const warnings = h.notifies.filter(([m, l]) => l === "warning" && m.includes("skipped")).map(([m]) => m).join(" ");
+		expect(warnings).toContain("classifierFallbackConfidence");
+		expect(warnings).toContain("classifierFallbackMode");
+	});
+
+	test("unresolvable fallback: shadow inert, verdicts untouched, one-time warning", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierFallbackModel: "mock/ghost" });
+		h.findMap = {};
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: JEV_ALLOW_49 }];
+		const r1 = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		const r2 = await toolCall(h, "bash", { command: "cat /etc/hosts" });
+		expect(r1).toBeUndefined();
+		expect(r2).toBeUndefined();
+		expect(h.calls.length).toBe(2); // first-layer only
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("fallback model")).map(([m]) => m);
+		expect(warns.length).toBe(1);
+		const recs = readAudit();
+		expect(recs.length).toBe(2);
+		expect(recs[0].fallback).toMatchObject({ triggeredBy: "confidence", confidence: 49, verdict: null, error: expect.stringContaining("unresolvable") });
+	});
+
+	test("ask triggers in shadow; the confirm still surfaces; the record carries the outcome", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }, { text: "<verdict>deny</verdict> risky delete" }];
+		h.confirmAnswer = true;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r).toBeUndefined();
+		expect(h.confirms).toBe(1);
+		expect(h.calls.length).toBe(2);
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "ask", source: "model", userAnswer: "allowed" });
+		expect(recs[0].fallback).toMatchObject({ mode: "shadow", triggeredBy: "ask", model: "fb-model", verdict: "deny" });
+		expect(typeof recs[0].fallback.durationMs).toBe("number");
+		expect(recs[0].fallback.effective).toBeUndefined();
+	});
+
+	test("confidence gate: below triggers with the number, exactly-at does not, non-jev never does", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h1.findMap = { "mock/fb": { id: "fb-model" } };
+		h1.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }];
+		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
+		expect(r1).toBeUndefined();
+		expect(readAudit()[0].fallback).toMatchObject({ triggeredBy: "confidence", confidence: 49 });
+		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		h2.responses = [{ text: "<verdict>allow</verdict> jev: allow 92% (confidence 50%; ask 7%, deny 1%)" }];
+		await toolCall(h2, "bash", { command: "ls -la /tmp" });
+		expect(h2.calls.length).toBe(1);
+		expect(readAudit()[1].fallback).toBeUndefined();
+		const h3 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackConfidence: 90 });
+		h3.findMap = { "mock/fb": { id: "fb-model" } };
+		h3.responses = [{ text: JEV_ALLOW_80 }];
+		await toolCall(h3, "bash", { command: "ls -la /tmp" });
+		expect(readAudit()[2].fallback).toMatchObject({ triggeredBy: "confidence", confidence: 80 });
+		const h4 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h4.findMap = { "mock/fb": { id: "fb-model" } };
+		h4.responses = [{ text: "<verdict>allow</verdict> looks fine" }];
+		await toolCall(h4, "bash", { command: "ls -la /tmp" });
+		expect(h4.calls.length).toBe(1);
+		expect(readAudit()[3].fallback).toBeUndefined();
+	});
+
+	test("classifier fail-closed and no-model fail-closed both trigger the cascade", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h1.findMap = { "mock/fb": { id: "fb-model" } };
+		h1.responses = [{ text: "" }, new Error("gateway boom"), { text: "<verdict>deny</verdict> fb says no" }];
+		const r1 = await toolCall(h1, "bash", { command: "cargo build" });
+		expect(r1?.block).toBe(true);
+		expect(readAudit()[0].fallback).toMatchObject({ triggeredBy: "fail-closed", verdict: "deny" });
+		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		h2.ctx.model = null;
+		h2.responses = [{ text: "<verdict>deny</verdict> fb says no" }];
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		expect(readAudit()[1]).toMatchObject({ source: "fail-closed" });
+		expect(readAudit()[1].fallback).toMatchObject({ triggeredBy: "fail-closed" });
+	});
+
+	test("shadow disagreement never changes the verdict; notifyAllows text unchanged", async () => {
+		clearAudit();
+		const h = session({ audit: true, notifyAllows: true, classifierFallbackModel: "mock/fb" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		const infos = h.notifies.filter(([m, l]) => l === "info" && m.includes("allow"));
+		expect(infos.length).toBe(1);
+		expect(infos[0][0]).toContain("jev: allow 66%");
+		expect(infos[0][0]).not.toContain("second-opinion");
+	});
+
+	test("enforce: allow→deny blocks with the second-opinion reason; record top-level stays first-layer", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> destructive pipeline" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("destructive pipeline");
+		expect(r.reason).toContain("second-opinion classifier escalated allow to deny");
+		const recs = readAudit();
+		expect(recs[0]).toMatchObject({ verdict: "allow", source: "model" });
+		expect(recs[0].fallback).toMatchObject({ mode: "enforce", verdict: "deny", effective: "deny" });
+	});
+
+	test("enforce: allow→ask escalates to a confirm and records userAnswer on the same record", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>ask</verdict> borderline" }];
+		h.confirmAnswer = true;
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.confirms).toBe(1);
+		expect(h.confirmMsgs[0]).toContain("borderline");
+		const recs = readAudit();
+		expect(recs.length).toBe(1);
+		expect(recs[0]).toMatchObject({ verdict: "allow", userAnswer: "allowed" });
+		expect(recs[0].fallback).toMatchObject({ verdict: "ask", effective: "ask" });
+	});
+
+	test("enforce: ask→deny skips the confirm; fb-allow over a first-layer deny keeps the deny", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h1.findMap = { "mock/fb": { id: "fb-model" } };
+		h1.responses = [{ text: "<verdict>ask</verdict> needs a human" }, { text: "<verdict>deny</verdict> no" }];
+		const r1 = await toolCall(h1, "bash", { command: "cargo build" });
+		expect(r1?.block).toBe(true);
+		expect(h1.confirms).toBe(0);
+		expect(readAudit()[0]).toMatchObject({ verdict: "ask" });
+		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		h2.responses = [{ text: "<verdict>deny</verdict> jev: deny 64% (confidence 29%; allow 36%)" }, { text: "<verdict>allow</verdict> fine actually" }];
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		expect(r2.reason).toContain("jev: deny 64%");
+		expect(readAudit()[1]).toMatchObject({ verdict: "deny" });
+		expect(readAudit()[1].fallback).toMatchObject({ verdict: "allow", effective: "deny" });
+	});
+
+	test("enforce: fallback failure denies (ask+failure denies without confirm); unresolvable denies triggered calls only", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h1.findMap = { "mock/fb": { id: "fb-model" } };
+		h1.responses = [{ text: JEV_ALLOW_49 }, { text: "" }, new Error("fb gateway boom")];
+		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
+		expect(r1?.block).toBe(true);
+		expect(r1.reason).toContain("fallback classifier unavailable (fail-closed)");
+		expect(readAudit()[0]).toMatchObject({ verdict: "allow" });
+		expect(readAudit()[0].fallback).toMatchObject({ verdict: null, effective: "deny", error: expect.stringContaining("fail-closed") });
+		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		h2.responses = [{ text: "<verdict>ask</verdict> hmm" }, { text: "" }, new Error("fb boom")];
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		expect(h2.confirms).toBe(0);
+		const h3 = session({ audit: true, classifierFallbackModel: "mock/ghost", classifierFallbackMode: "enforce" });
+		h3.findMap = {};
+		h3.responses = [{ text: JEV_ALLOW_49 }, { text: JEV_ALLOW_80 }];
+		const r3 = await toolCall(h3, "bash", { command: "ls -la /tmp" });
+		expect(r3?.block).toBe(true);
+		expect(r3.reason).toContain("fallback classifier unavailable (fail-closed)");
+		const r4 = await toolCall(h3, "bash", { command: "cat /etc/hosts" });
+		expect(r4).toBeUndefined();
+		const warns = h3.notifies.filter(([m, l]) => l === "warning" && m.includes("fallback model")).map(([m]) => m);
+		expect(warns.length).toBe(1);
+	});
+
+	test("enforce: an escalated ask degrades to deny headless", async () => {
+		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.ctx.hasUI = false;
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 60% (confidence 40%; ask 39%, deny 1%)" }, { text: "<verdict>ask</verdict> borderline" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r?.block).toBe(true);
+		expect(r.reason).toContain("second-opinion classifier escalated allow to ask");
+	});
+
+	test("/automode shows cascade stats only when configured; session_start resets counters", async () => {
+		const off = session({});
+		await off.handlers.session_start({}, off.ctx);
+		await off.commands["automode"].handler("", off.ctx);
+		expect(off.notifies.some(([m]) => m.includes("fallback cascade"))).toBe(false);
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }, { text: JEV_ALLOW_80 }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		await toolCall(h, "bash", { command: "cat /etc/hosts" });
+		await h.commands["automode"].handler("", h.ctx);
+		const lines = h.notifies.filter(([m]) => m.includes("fallback cascade")).map(([m]) => m);
+		expect(lines[0]).toContain("(shadow)");
+		expect(lines[0]).toContain("triggered 1");
+		expect(lines[0]).toContain("would-escalate 1");
+		await h.handlers.session_start({}, h.ctx);
+		await h.commands["automode"].handler("", h.ctx);
+		const after = h.notifies.filter(([m]) => m.includes("fallback cascade")).map(([m]) => m);
+		expect(after[after.length - 1]).toContain("not triggered");
+	});
+
+	test("shadow cache still records the first-layer verdict through the cascade path", async () => {
+		const h = session({ classifierFallbackModel: "mock/fb" }, { debug: true });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }, { text: JEV_ALLOW_49 }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		const allows = h.notifies.filter(([m, l]) => l === "info" && m.includes("allow (classifier)")).map(([m]) => m);
+		expect(allows[1]).toContain("would-hit allow");
+	});
+
+	test("the fallback suffix warning and the first-layer unavailable warning never suppress each other", async () => {
+		const h = session({ classifierModel: "ghost/nope", classifierFallbackModel: "mock/fb:bogus" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> no" }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		const warns = h.notifies.filter(([m, l]) => l === "warning").map(([m]) => m);
+		expect(warns.some((m) => m.includes('classifier model "ghost/nope" unavailable'))).toBe(true);
+		expect(warns.some((m) => m.includes("invalid thinking-level suffix"))).toBe(true);
+	});
+
+	test("aborted signal aborts the fallback attempt: enforce denies, shadow keeps the first-layer verdict", async () => {
+		const run = async (mode: "shadow" | "enforce") => {
+			setConfig({ classifierFallbackModel: "mock/fb", classifierFallbackMode: mode });
+			const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+			const ctrl = new AbortController();
+			const env = {
+				cwd: "/proj",
+				hasUI: true,
+				getModel: () => ({ model: { id: "glm" }, thinking: "off" as const }),
+				getFallbackModel: () => ({ model: { id: "fb-model" }, thinking: "off" as const }),
+				signal: ctrl.signal,
+				complete: (async () => {
+					ctrl.abort();
+					return { content: [{ type: "text", text: JEV_ALLOW_49 }], stopReason: "stop" };
+				}) as any,
+				host: { getBranch: () => [], getSessionId: () => "s1" },
+			};
+			return adjudicate(state, { toolName: "bash", input: { command: "ls" } }, env as any);
+		};
+		const shadow = await run("shadow");
+		expect(shadow.verdict).toBe("allow");
+		const enforce = await run("enforce");
+		expect(enforce.verdict).toBe("deny");
+		expect(enforce.source).toBe("fail-closed");
 	});
 });
 
@@ -2135,7 +2424,7 @@ describe("omp host forms: S0 floor + self-protection (#35)", () => {
 // ── 20. 判定管线 interface 级(adjudicate):ask 降级统一 / source × degraded / 明文零泄漏 ──
 
 /** 构造直接驱动 adjudicate 的最小环境:fake complete + 空 branch 的 host */
-function adjudicateEnv(overrides: { text?: string; hasUI?: boolean; model?: any; failModel?: boolean } = {}) {
+function adjudicateEnv(overrides: { text?: string; hasUI?: boolean; model?: any; failModel?: boolean; fallback?: any } = {}) {
 	return {
 		cwd: "/proj",
 		hasUI: overrides.hasUI ?? true,
@@ -2146,6 +2435,7 @@ function adjudicateEnv(overrides: { text?: string; hasUI?: boolean; model?: any;
 		})) as any,
 		host: { getBranch: () => [], getSessionId: () => "s1" },
 		signal: undefined,
+		getFallbackModel: overrides.fallback === undefined ? undefined : () => overrides.fallback,
 	};
 }
 

@@ -91,6 +91,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { parseJevConfidence } from "./jev-adapter";
 
 // ============================================================================
 // 规则层:bash
@@ -263,9 +264,15 @@ interface UserRules {
 	audit: boolean;
 	/** Allow visibility (#60): info notification on classifier allows; mechanical passes stay silent. Default off. */
 	notifyAllows: boolean;
+	/** #63: second-layer classifier spec (provider/id[:thinking]); null = the cascade is entirely off */
+	classifierFallbackModel: string | null;
+	/** #63: trigger when the first layer's jev confidence is strictly below this (0–100). Default 50. */
+	classifierFallbackConfidence: number;
+	/** #63: "shadow" (default — observe-only, verdicts unchanged) | "enforce" (safety ratchet: the fallback may only escalate strictness, never relax) */
+	classifierFallbackMode: "shadow" | "enforce";
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierFallbackModel: null, classifierFallbackConfidence: 50, classifierFallbackMode: "shadow" };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -314,7 +321,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules — full reference: https://github.com/jesset/pi-verdict/blob/main/docs/configuration.md. deny beats allow. denyPaths: protected paths, any touch asks for your confirmation (non-interactive degrades to deny); the pre-filled starter list is your declaration, edit or empty freely. builtinDenyFloor=false disables the built-in danger floor at your own risk (the self-protection layer always stays on). classifierModel pins the classifier (provider/id, e.g. zai/glm-5.3-flash; empty = session model). toggleShortcut sets the master-switch toggle key (null or empty disables). This file is part of the permission gate: agent-side modification is denied — edit it manually outside pi. Changes apply to new sessions.",
+	_hint: "pi-verdict user rules — full reference: https://github.com/jesset/pi-verdict/blob/main/docs/configuration.md. deny beats allow. denyPaths: protected paths, any touch asks for your confirmation (non-interactive degrades to deny); the pre-filled starter list is your declaration, edit or empty freely. builtinDenyFloor=false disables the built-in danger floor at your own risk (the self-protection layer always stays on). classifierModel pins the classifier (provider/id, e.g. zai/glm-5.3-flash; empty = session model). classifierFallbackModel (optional) adds a second-layer classifier consulted only when the first layer is uncertain (ask / fail-closed / jev confidence below classifierFallbackConfidence, default 50); mode shadow (default) observes without changing verdicts, enforce escalates strictness only. toggleShortcut sets the master-switch toggle key (null or empty disables). This file is part of the permission gate: agent-side modification is denied — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	denyPaths: [
@@ -330,6 +337,9 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
 	audit: false,
 	notifyAllows: false,
+	classifierFallbackModel: null,
+	classifierFallbackConfidence: 50,
+	classifierFallbackMode: "shadow",
 }, null, 2)}\n`;
 
 /**
@@ -347,7 +357,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierFallbackMode?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -376,6 +386,12 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			return [x.trim()];
 		});
 		const shortcut = resolveToggleShortcut(raw.toggleShortcut);
+		// #63: fallback cascade keys — invalid values skip into the one-shot warning channel and default (50 / shadow)
+		const fbConfRaw = raw.classifierFallbackConfidence;
+		const fbConfOk = typeof fbConfRaw === "number" && Number.isFinite(fbConfRaw) && fbConfRaw >= 0 && fbConfRaw <= 100;
+		if (fbConfRaw !== undefined && !fbConfOk) skipped.push(`classifierFallbackConfidence: ${JSON.stringify(fbConfRaw)}`);
+		const fbModeRaw = raw.classifierFallbackMode;
+		if (fbModeRaw !== undefined && fbModeRaw !== "shadow" && fbModeRaw !== "enforce") skipped.push(`classifierFallbackMode: ${JSON.stringify(fbModeRaw)}`);
 		return {
 			rules: {
 				allow: compile(raw.allow),
@@ -386,6 +402,9 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				toggleShortcut: shortcut.key,
 				audit: raw.audit === true,
 				notifyAllows: raw.notifyAllows === true,
+				classifierFallbackModel: typeof raw.classifierFallbackModel === "string" && raw.classifierFallbackModel.trim() ? raw.classifierFallbackModel.trim() : null,
+				classifierFallbackConfidence: fbConfOk ? fbConfRaw : 50,
+				classifierFallbackMode: fbModeRaw === "enforce" ? "enforce" : "shadow",
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -1052,6 +1071,7 @@ interface ClassifierOutcome {
 }
 
 const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(15s 会误杀 ~15%),research/cache-sim 数据
+const FALLBACK_TIMEOUT_MS = 15_000; // #63: second-layer per-attempt budget — matches the first layer's per-attempt discipline (the two-tier retry can spend it twice)
 const CLASSIFIER_MAX_TOKENS = 512;
 const CLASSIFIER_RETRY_MAX_TOKENS = 1024; // 防御重试档:覆盖无视 reasoning:off 或轻思考仍超预算的模型
 const APIS_WITHOUT_TEMPERATURE = new Set<string>([
@@ -1143,11 +1163,12 @@ async function callClassifierOnce(
 	maxTokens: number,
 	thinking: ThinkingLevel = "off",
 	systemPrompt: string = CLASSIFIER_SYSTEM,
+	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
 ): Promise<{ ok: true; text: string; stopReason: string; errorMessage?: string } | { ok: false; error: string }> {
 	const fire = async (
 		withTemperature: boolean,
 	): Promise<{ ok: true; text: string; stopReason: string; errorMessage?: string } | { ok: false; error: string }> => {
-		const signals = [AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)];
+		const signals = [AbortSignal.timeout(timeoutMs)];
 		if (signal) signals.push(signal);
 		try {
 			const response = await complete(
@@ -1216,6 +1237,7 @@ async function classifyWithModel(
 	actionLine: string,
 	thinking: ThinkingLevel = "off",
 	denyPathsActive = false,
+	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
 ): Promise<ClassifierOutcome> {
 	const transcript = buildTranscript(host, actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
@@ -1225,7 +1247,7 @@ async function classifyWithModel(
 	let rawResponse = ""; // #54: raw output of the last attempt ("" for exception attempts — diagnostics already live in failures)
 	for (const [n, maxTokens] of attempts) {
 		if (signal?.aborted) break; // 用户已取消,不再重试
-		const r = await callClassifierOnce(host, signal, complete, model, userMessage, maxTokens, thinking, systemPrompt);
+		const r = await callClassifierOnce(host, signal, complete, model, userMessage, maxTokens, thinking, systemPrompt, timeoutMs);
 		if (r.ok) {
 			rawResponse = r.text;
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, errorMessage=${JSON.stringify(r.errorMessage ?? null)}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
@@ -1363,11 +1385,69 @@ function shadowTag(probe: ShadowProbe): string {
 }
 
 // ============================================================================
+// Fallback cascade stats (#63: observe-first, session-memory state; the #7 discipline)
+// ============================================================================
+
+/** #63: ratchet strictness order — the fallback may only escalate, never relax */
+const STRICTNESS_RANK: Record<"allow" | "ask" | "deny", number> = { allow: 0, ask: 1, deny: 2 };
+
+interface FallbackStats {
+	triggered: number; // the gate fired (ask / fail-closed / confidence below threshold)
+	agreed: number; // fallback verdict no stricter than the first layer's
+	escalated: number; // fallback stricter than the first layer (enforce applies it; shadow observes the would-be)
+	errored: number; // fallback unresolvable or its call failed
+}
+
+class FallbackCascade {
+	readonly stats: FallbackStats = { triggered: 0, agreed: 0, escalated: 0, errored: 0 };
+
+	/** Session reset (#7 discipline: session-memory state) */
+	reset(): void {
+		Object.assign(this.stats, { triggered: 0, agreed: 0, escalated: 0, errored: 0 });
+	}
+
+	note(first: "allow" | "ask" | "deny", fb: "allow" | "ask" | "deny" | null): void {
+		this.stats.triggered++;
+		if (fb === null) {
+			this.stats.errored++;
+			return;
+		}
+		if (STRICTNESS_RANK[fb] > STRICTNESS_RANK[first]) this.stats.escalated++;
+		else this.stats.agreed++;
+	}
+
+	/** Summary line for /automode */
+	summary(mode: "shadow" | "enforce"): string {
+		const s = this.stats;
+		if (s.triggered === 0) return "fallback cascade: not triggered this session";
+		return `fallback cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "escalated" : "would-escalate"} ${s.escalated} · errored ${s.errored}`;
+	}
+}
+
+// ============================================================================
 // Gray-zone verdict audit (#54): opt-in JSONL decision records, observe-only
 // (never an adjudication input)
 // ============================================================================
 
 const AUDIT_KEEP_SESSIONS = 20;
+
+/** #63: second-layer classifier outcome on a triggered call. The record's top-level
+ *  fields keep first-layer semantics for corpus comparability (grill decision); the
+ *  verdict actually applied under enforce lives in `effective` (absent in shadow). */
+export interface FallbackAudit {
+	model: string;
+	mode: "shadow" | "enforce";
+	triggeredBy: "ask" | "confidence" | "fail-closed";
+	/** jev confidence that fired the gate; null unless triggeredBy = "confidence" */
+	confidence: number | null;
+	/** null = the fallback call itself failed (unresolvable model, timeout, parse) */
+	verdict: "allow" | "ask" | "deny" | null;
+	reason: string | null;
+	durationMs: number;
+	error: string | null;
+	/** enforce mode only: the verdict applied after the ratchet */
+	effective?: "allow" | "ask" | "deny";
+}
 
 /** One adjudication record (#54; #62 widened the surface to protected-path asks and
  *  added the ground-truth fields). Full fidelity on purpose: the file is
@@ -1399,6 +1479,8 @@ export interface AuditRecord {
 	answeredAt?: string;
 	/** #62: protected-path records only — the matched path. */
 	detail?: string;
+	/** #63: second-layer outcome when the uncertainty gate fired. */
+	fallback?: FallbackAudit;
 }
 
 /** Audit sink (#54): append-only and fail-soft (the first write failure surfaces
@@ -1468,6 +1550,7 @@ export class AuditLog {
 export class SessionState {
 	readonly prot: ProtectedSet;
 	readonly shadow = new ShadowCache();
+	readonly fallback = new FallbackCascade();
 	userRules: UserRules;
 	audit: AuditLog | null;
 	private denyPathBases: string[] | null = null;
@@ -1492,6 +1575,7 @@ export class SessionState {
 		this.userRules = loaded.rules;
 		this.denyPathBases = anchorDenyPaths(loaded.rules.denyPaths, cwd); // anchored to the session cwd, once (ADR-0002)
 		this.shadow.reset();
+		this.fallback.reset();
 		this.audit = this.makeAudit(loaded.rules);
 		return { skipped: loaded.skipped, shortcutWarning: loaded.shortcutWarning };
 	}
@@ -1531,7 +1615,8 @@ export interface Verdict {
 }
 
 /** 逐调用环境:呈现无关的宿主能力。model 经 getModel 惰性求值——保持「仅灰区才
- *  解析」的原行为(回退警告不会出现在规则已裁决的调用上);null → fail-closed。 */
+ *  解析」的原行为(回退警告不会出现在规则已裁决的调用上);null → fail-closed。
+ *  getFallbackModel(#63)更惰性:仅在门控触发后才解析。 */
 export interface AdjudicateEnv {
 	cwd: string;
 	hasUI: boolean;
@@ -1539,6 +1624,69 @@ export interface AdjudicateEnv {
 	complete: CompletionFn;
 	host: PipelineHost;
 	signal?: AbortSignal;
+	getFallbackModel?: () => { model: NonNullable<ExtensionContext["model"]>; thinking: ThinkingLevel } | null;
+}
+
+/** #63: should the second layer be consulted for this first-layer outcome? Precedence:
+ *  fail-closed → ask → jev confidence strictly below the threshold. LLM reasons carry
+ *  no numeric confidence (parseJevConfidence → null) — their gate is ask/fail-closed only. */
+function fallbackTrigger(outcome: ClassifierOutcome, rules: UserRules): { triggeredBy: "ask" | "confidence" | "fail-closed"; confidence: number | null } | null {
+	if (!rules.classifierFallbackModel) return null;
+	if (outcome.source === "fail-closed") return { triggeredBy: "fail-closed", confidence: null };
+	if (outcome.verdict === "ask") return { triggeredBy: "ask", confidence: null };
+	const conf = parseJevConfidence(outcome.reason);
+	if (conf !== null && conf < rules.classifierFallbackConfidence) return { triggeredBy: "confidence", confidence: conf };
+	return null;
+}
+
+interface CascadeResult {
+	/** audit material; absent when no trigger fired */
+	fb?: FallbackAudit;
+	/** enforce-mode override; absent = keep the first-layer verdict (shadow never overrides) */
+	effective?: { verdict: "allow" | "ask" | "deny"; reason: string; source: "classifier" | "fail-closed" };
+}
+
+/** #63: run the second layer on a triggered call. Safety ratchet: the fallback may
+ *  only escalate strictness, never relax. A failed fallback (unresolvable model or
+ *  failed call) denies in enforce — an explicitly configured second layer must not
+ *  silently degrade the gate to single-layer (grill decision); in shadow a failure
+ *  is recorded and never changes the verdict. */
+async function runFallbackCascade(
+	state: SessionState,
+	env: AdjudicateEnv,
+	first: "allow" | "ask" | "deny",
+	trigger: { triggeredBy: "ask" | "confidence" | "fail-closed"; confidence: number | null },
+	denyPathsActive: boolean,
+	actionLine: string,
+): Promise<CascadeResult> {
+	const rules = state.userRules;
+	if (!rules.classifierFallbackModel || !env.getFallbackModel) return {};
+	const mode = rules.classifierFallbackMode;
+	const start = Date.now();
+	const base = { mode, triggeredBy: trigger.triggeredBy, confidence: trigger.confidence };
+	// A failed fallback (unresolvable model or failed call) records the error and, under
+	// enforce, denies the triggered call; `fallback.effective` carries the applied "deny"
+	// so failure rows read through the same sub-object as every other enforce row
+	const failed = (model: string, error: string): CascadeResult => {
+		state.fallback.note(first, null);
+		const fb: FallbackAudit = { ...base, model, verdict: null, reason: null, durationMs: Date.now() - start, error };
+		return mode === "enforce" ? { fb: { ...fb, effective: "deny" }, effective: { verdict: "deny", reason: "fallback classifier unavailable (fail-closed)", source: "fail-closed" } } : { fb };
+	};
+	const resolved = env.getFallbackModel();
+	if (!resolved) return failed(rules.classifierFallbackModel, "fallback model unresolvable (not found or no configured auth)");
+	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, actionLine, resolved.thinking, denyPathsActive, FALLBACK_TIMEOUT_MS);
+	const durationMs = Date.now() - start;
+	if (outcome.source !== "model") return failed(resolved.model.id, outcome.reason);
+	state.fallback.note(first, outcome.verdict);
+	const fb: FallbackAudit = { ...base, model: resolved.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs, error: null };
+	if (mode === "enforce") {
+		const effective = STRICTNESS_RANK[outcome.verdict] > STRICTNESS_RANK[first] ? outcome.verdict : first;
+		if (effective !== first) {
+			return { fb: { ...fb, effective }, effective: { verdict: outcome.verdict, reason: `${outcome.reason} (second-opinion classifier escalated ${first} to ${outcome.verdict})`, source: "classifier" } };
+		}
+		return { fb: { ...fb, effective } };
+	}
+	return { fb };
 }
 
 /**
@@ -1595,7 +1743,13 @@ export async function adjudicate(
 	const resolved = env.getModel();
 	if (!resolved) {
 		const reason = "no classifier model available (fail-closed)";
-		state.audit?.append(buildRecord({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-"));
+		// #63: no-model fail-closed triggers the cascade as well — the ratchet has no
+		// exception for first-layer absence (grill decision: enforce can never relax this
+		// deny; in shadow it is observability only)
+		const cascade = await runFallbackCascade(state, env, "deny", { triggeredBy: "fail-closed", confidence: null }, state.userRules.denyPaths.length > 0, actionLine);
+		const fcRecord = buildRecord({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-");
+		if (cascade.fb) fcRecord.fallback = cascade.fb;
+		state.audit?.append(fcRecord);
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
@@ -1614,18 +1768,31 @@ export async function adjudicate(
 	}
 
 	const shadow = shadowTag(probe);
-	const askDegraded = !env.hasUI && outcome.verdict === "ask";
-	const grayRecord = buildRecord({ verdict: askDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: askDegraded }, outcome.auditRaw ?? null, shadow);
+
+	// #63 cascade: consult the second layer when the gate fires; `effective` is the
+	// ratchet result the returned verdict follows (shadow never overrides)
+	const trigger = fallbackTrigger(outcome, state.userRules);
+	const cascade = trigger ? await runFallbackCascade(state, env, outcome.verdict, trigger, state.userRules.denyPaths.length > 0, actionLine) : {};
+	const effVerdict = cascade.effective?.verdict ?? outcome.verdict;
+	const effReason = cascade.effective?.reason ?? outcome.reason;
+	const effSource = cascade.effective?.source ?? "classifier";
+
+	// #62: record top-level keeps FIRST-layer semantics (grill decision — corpus
+	// comparability); the enforced outcome lives in fallback.effective and evaluators
+	// must read enforce rows accordingly
+	const firstAskDegraded = !env.hasUI && outcome.verdict === "ask";
+	const grayRecord = buildRecord({ verdict: firstAskDegraded ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: firstAskDegraded }, outcome.auditRaw ?? null, shadow);
+	if (cascade.fb) grayRecord.fallback = cascade.fb;
 	// #62: an interactive ask defers the append to the handler finalize (ground truth);
 	// a headless degraded ask and every other outcome append immediately as before
-	if (outcome.verdict === "ask" && env.hasUI) {
-		return { verdict: "ask", reason: outcome.reason, source: "classifier", degraded: false, shadow, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
+	if (effVerdict === "ask" && env.hasUI) {
+		return { verdict: "ask", reason: effReason, source: effSource, degraded: false, shadow, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
 	}
 	state.audit?.append(grayRecord);
-	if (outcome.verdict === "allow") return { verdict: "allow", reason: outcome.reason, source: "classifier", degraded: false, shadow };
-	if (outcome.verdict === "deny") return { verdict: "deny", reason: outcome.reason, source: "classifier", degraded: false, shadow };
+	if (effVerdict === "allow") return { verdict: "allow", reason: effReason, source: effSource, degraded: false, shadow };
+	if (effVerdict === "deny") return { verdict: "deny", reason: effReason, source: effSource, degraded: false, shadow };
 	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
-	return { verdict: env.hasUI ? "ask" : "deny", reason: outcome.reason, source: "classifier", degraded: !env.hasUI, shadow };
+	return { verdict: "deny", reason: effReason, source: effSource, degraded: !env.hasUI, shadow };
 }
 
 // ============================================================================
@@ -1756,6 +1923,8 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	const denyPathsHint = () => (state.userRules.denyPaths.length > 0 ? `\ndenyPaths: ${state.userRules.denyPaths.length} active` : "");
 	/** Status line audit hint (#54): shown only while the sink is active */
 	const auditHint = () => (state.audit ? `\naudit: on → ${state.audit.dir}` : "");
+	/** Status line fallback hint (#63): shown only while the cascade is configured */
+	const fallbackHint = () => (state.userRules.classifierFallbackModel ? `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}` : "");
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
@@ -1763,7 +1932,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}${auditHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -1774,7 +1943,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				const head = next
 					? `🛡️ Auto Mode enabled${changed ? "" : " (unchanged)"}: tool calls adjudicated by rules + classifier`
 					: `Auto Mode disabled${changed ? "" : " (unchanged)"}: tool calls execute directly`;
-				ctx.ui.notify(`${head}\n${state.shadow.summary()}`, "info");
+				ctx.ui.notify(`${head}\n${state.shadow.summary()}${fallbackHint()}`, "info");
 				return;
 			}
 			// 未知参数:严格拒绝并列出用法(大小写已归一化)
@@ -1786,17 +1955,16 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	/** 思考级别集(pi 原生 EXTENDED_THINKING_LEVELS;后缀语法对齐 pi --model provider/id:thinking) */
 	const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-	/** 解析 "provider/id:thinking" → { specPart, level }。无效后缀 → 忽略并警告一次 */
-	function parseModelSpec(raw: string, ctx: ExtensionContext): { specPart: string; level: string | null } {
+	/** Parse "provider/id:thinking" → { specPart, level }. An invalid suffix is ignored and
+	 *  reported through warnOnce — the one-shot latch is the caller's, so the two layers'
+	 *  warnings never suppress each other (#63 review fix). */
+	function parseModelSpec(raw: string, warnOnce: (msg: string) => void): { specPart: string; level: string | null } {
 		const slash = raw.lastIndexOf("/");
 		const colon = raw.lastIndexOf(":");
 		if (colon > slash + 1 && THINKING_LEVELS.has(raw.slice(colon + 1))) {
 			return { specPart: raw.slice(0, colon), level: raw.slice(colon + 1) };
 		}
-		if (colon > slash + 1 && !warnedClassifierModel) {
-			warnedClassifierModel = true;
-			ctx.ui.notify(`pi-verdict: invalid thinking-level suffix "${raw.slice(colon + 1)}" (valid: ${[...THINKING_LEVELS].join("/")}), ignored`, "warning");
-		}
+		if (colon > slash + 1) warnOnce(`pi-verdict: invalid thinking-level suffix "${raw.slice(colon + 1)}" (valid: ${[...THINKING_LEVELS].join("/")}), ignored`);
 		return { specPart: raw, level: null };
 	}
 
@@ -1809,7 +1977,11 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? state.userRules.classifierModel;
 		let thinking: ThinkingLevel = "off";
 		if (raw) {
-			const { specPart, level } = parseModelSpec(raw, ctx);
+			const { specPart, level } = parseModelSpec(raw, (msg) => {
+				if (warnedClassifierModel) return;
+				warnedClassifierModel = true;
+				ctx.ui.notify(msg, "warning");
+			});
 			thinking = (level ?? "off") as ThinkingLevel;
 			const slash = specPart.indexOf("/");
 			if (slash > 0) {
@@ -1823,6 +1995,34 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		}
 		// 自省:继承当前会话模型;显式指定的思考级别在回退时仍生效(原语义)
 		return ctx.model ? { model: ctx.model, thinking } : null;
+	}
+
+	let warnedFallbackSuffix = false;
+	let warnedFallbackModel = false;
+	/** #63: second-layer resolution — config-only (no flag/env precedence) and NO
+	 *  session-model fallback: silently inheriting the session model would bill the same
+	 *  judgment twice instead of adding a second opinion. Unresolvable → one-time warning
+	 *  + null (shadow: inert; enforce: triggered calls fail-closed, see runFallbackCascade).
+	 *  Resolved lazily via AdjudicateEnv.getFallbackModel, only after the gate fires. */
+	function resolveFallbackClassifier(ctx: ExtensionContext): { model: NonNullable<ExtensionContext["model"]>; thinking: ThinkingLevel } | null {
+		const raw = state.userRules.classifierFallbackModel;
+		if (!raw) return null;
+		const { specPart, level } = parseModelSpec(raw, (msg) => {
+			if (warnedFallbackSuffix) return;
+			warnedFallbackSuffix = true;
+			ctx.ui.notify(msg, "warning");
+		});
+		const thinking = (level ?? "off") as ThinkingLevel;
+		const slash = specPart.indexOf("/");
+		if (slash > 0) {
+			const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
+			if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return { model, thinking };
+		}
+		if (!warnedFallbackModel) {
+			warnedFallbackModel = true; // one warning per session
+			ctx.ui.notify(`pi-verdict: fallback model "${raw}" unavailable (not found or no configured auth) — classifierFallbackModel inactive this session`, "warning");
+		}
+		return null;
 	}
 
 	function describeAction(toolName: string, input: Record<string, unknown>): string {
@@ -1873,6 +2073,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			complete: completionFor(ctx.modelRegistry, deps.compatLoader),
 			host: ctx.sessionManager,
 			signal: ctx.signal,
+			getFallbackModel: () => resolveFallbackClassifier(ctx),
 		});
 		const auditWarning = state.audit?.drainWarning(); // #54: fail-soft one-shot warning
 		if (auditWarning) ctx.ui.notify(`pi-verdict: ${auditWarning}`, "warning");

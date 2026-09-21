@@ -99,3 +99,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 ### 影子缓存 (shadow cache)
 
 为「是否引入生效裁决缓存」积累实测数据的 observe-only 遥测:每次灰区裁决前后同步回放「双键 LRU(128)」的 would-be 命中(命令键 = 工具+输入+cwd,上下文键 = 最近 5 条 user 行),**只记录永不生效** —— 裁决永远来自模型。只回写真实模型 allow/deny,ask 与 fail-closed 不入;会话内存态,`session_start` 重置。观察口:`/automode` 统计行与 `PI_AUTO_MODE_DEBUG=1` 通知标注。
+
+### 回退分类器 (fallback classifier / uncertainty-gated cascade)
+
+可选的第二层分类器(ADR-0004;`classifierFallbackModel` 配置,未配置即整体关闭)。仅当第一层不确定时征询:触发优先级为 fail-closed → ask → jev confidence 严格低于 `classifierFallbackConfidence`(默认 50;LLM 第一层无数值置信度,仅前两种触发)。shadow 模式(默认)只观察不改判——结果落审计记录的 `fallback` 子对象与 `/automode` 会话计数;enforce 模式为**安全棘轮**:生效裁决取两层中更严者,第二层只可升严永不放宽,fallback 调用失败或模型不可解析时该次触发调用 fail-closed deny(配置了却静默失效不可接受;未触发调用恒单层)。审计顶层恒为第一层语义,生效裁决在 `fallback.effective`(shadow/enforce 语料可比)。jev 侧 confidence 为硬要求(契约保证,缺失即 fail-closed)。
