@@ -1565,9 +1565,14 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	}
 
 	function refreshStatus(ctx: ExtensionContext) {
-		// Always-on dual-state footer: on = success (gate active), off = warning
-		// (ungated YOLO is a deliberate user choice — a note, not a fault, hence not error)
-		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg(enabled ? "success" : "warning", enabled ? "auto mode on" : "auto mode off"));
+		// Quiet-unless-on (geoyws, 2026-09-22): the estate chip owns the left of
+		// the bar, so an always-on "auto mode off" would sit inside the same
+		// `status` segment ahead of it. Clear when ungated; show only when active.
+		if (!enabled) {
+			ctx.ui.setStatus("auto-mode", undefined);
+			return;
+		}
+		ctx.ui.setStatus("auto-mode", ctx.ui.theme.fg("success", "auto mode on"));
 	}
 
 	/** 主开关设定(共用,#15):/automode 命令与 toggle 快捷键同一入口,不因操作面引入额外规则 */
