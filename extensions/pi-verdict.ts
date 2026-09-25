@@ -254,6 +254,14 @@ interface UserRules {
 	deny: RegExp[];
 	/** User-declared protected paths (ADR-0002): plain paths, tool-owned normalization; hit → ask */
 	denyPaths: string[];
+	/** User-declared tool passthrough: names of tools OUTSIDE the command/file
+	 *  families (todo, web_search, MCP/custom tools, …) that skip adjudication —
+	 *  session-metadata/read-only tools the owner exempts, same stance as user allow
+	 *  rules: no built-in passthrough, every exemption is the user's own claim.
+	 *  Entries naming covered tools (bash/read/write/edit/grep/find/ls/powershell)
+	 *  are inert: those are governed by the deny floor and user allow/deny rules,
+	 *  which this list can never weaken. */
+	ignoreTools: string[];
 	/** 内置 deny floor 开关(危险正则 + 路径敏感度 deny),默认 true;关闭后依赖用户规则与分类器 */
 	builtinDenyFloor: boolean;
 	/** 分类器模型 spec(provider/id);null = 未配置(自省继承会话模型) */
@@ -276,7 +284,7 @@ interface UserRules {
 	classifierFallbackMode: "shadow" | "enforce";
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "shadow" };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "shadow" };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -325,7 +333,7 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules — full reference: https://github.com/jesset/pi-verdict/blob/main/docs/configuration.md. deny beats allow. denyPaths: protected paths, any touch asks for your confirmation (non-interactive degrades to deny); the pre-filled starter list is your declaration, edit or empty freely. builtinDenyFloor=false disables the built-in danger floor at your own risk (the self-protection layer always stays on). classifierModel pins the classifier (provider/id, e.g. zai/glm-5.3-flash; empty = session model). classifierFallbackModel (optional) adds a second-layer classifier consulted only when the first layer is uncertain (ask / fail-closed / jev confidence below classifierFallbackConfidence, default 50); mode shadow (default) observes without changing verdicts, enforce escalates strictness only. toggleShortcut sets the master-switch toggle key (null or empty disables). This file is part of the permission gate: agent-side modification is denied — edit it manually outside pi. Changes apply to new sessions.",
+	_hint: "pi-verdict user rules — full reference: https://github.com/jesset/pi-verdict/blob/main/docs/configuration.md. deny beats allow. denyPaths: protected paths, any touch asks for your confirmation (non-interactive degrades to deny); the pre-filled starter list is your declaration, edit or empty freely. ignoreTools: tool names outside the command/file families (e.g. todo, web_search, MCP/custom tools) that skip adjudication entirely — allow with zero model calls; entries naming covered tools (bash/read/write/edit/grep/find/ls/powershell) are inert: those stay governed by the deny floor and your allow/deny rules; the pre-filled starter list is a recommendation (side-effect-free tools observed in production audits), edit or empty freely. builtinDenyFloor=false disables the built-in danger floor at your own risk (the self-protection layer always stays on). classifierModel pins the classifier (provider/id, e.g. zai/glm-5.3-flash; empty = session model). classifierFallbackModel (optional) adds a second-layer classifier consulted only when the first layer is uncertain (ask / fail-closed / jev confidence below classifierFallbackConfidence, default 50); mode shadow (default) observes without changing verdicts, enforce escalates strictness only. toggleShortcut sets the master-switch toggle key (null or empty disables). This file is part of the permission gate: agent-side modification is denied — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	denyPaths: [
@@ -335,6 +343,12 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 		"~/.mc",
 		"~/.zshrc",
 		"~/.bashrc",
+	],
+	ignoreTools: [
+		"todo",
+		"ask_user_question",
+		"memory_write",
+		"memory_search",
 	],
 	builtinDenyFloor: true,
 	classifierModel: null,
@@ -361,7 +375,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -389,6 +403,15 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			}
 			return [x.trim()];
 		});
+		// ignoreTools entries are plain tool names: only type-valid non-empty strings
+		// survive; anything else joins the same one-shot warning channel
+		const ignoreTools = (Array.isArray(raw.ignoreTools) ? raw.ignoreTools : []).flatMap((x) => {
+			if (typeof x !== "string" || !x.trim()) {
+				if (x !== undefined && x !== null) skipped.push(`ignoreTools: ${JSON.stringify(x)}`);
+				return [];
+			}
+			return [x.trim()];
+		});
 		const shortcut = resolveToggleShortcut(raw.toggleShortcut);
 		// #63/#67: confidence-floor keys — invalid values skip into the one-shot warning channel
 		if (raw.classifierFallbackConfidence !== undefined) skipped.push("classifierFallbackConfidence: renamed to classifierMinConfidence (0.11.0) — key ignored");
@@ -402,6 +425,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				allow: compile(raw.allow),
 				deny: compile(raw.deny),
 				denyPaths,
+				ignoreTools,
 				builtinDenyFloor: raw.builtinDenyFloor !== false,
 				classifierModel: typeof raw.classifierModel === "string" && raw.classifierModel.trim() ? raw.classifierModel.trim() : null,
 				toggleShortcut: shortcut.key,
@@ -923,7 +947,8 @@ class IntegrityWatch {
  *   2. user deny → deny (beats allow)
  *   3. denyPaths hit → terminal ask (ADR-0002: the declaring user adjudicates; before user allow)
  *   4. user allow → allow
- *   5. base (path tools' default allow/gray; everything else gray) → classifier
+ *   5. base (path tools' default allow/gray; uncovered tools: ignoreTools hit → allow
+ *      passthrough, else gray) → classifier
  */
 function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: string, user: UserRules, prot: ProtectedSet, denyPathBases: string[]): RuleResult {
 	// 第 0 层:自保护层(ADR-0001)——先于一切,不可经任何配置豁免
@@ -946,7 +971,12 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 		const p = typeof input.path === "string" ? input.path : undefined;
 		base = p ? classifyPath(toolName, p, cwd, false, user.builtinDenyFloor) : { verdict: "allow" };
 	} else {
-		base = { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
+		// ignoreTools passthrough: user-declared exempt tools skip adjudication;
+		// reached only after self-protection and the deny floor, so neither can be
+		// weakened by it. Everything else uncovered stays gray for the classifier.
+		base = user.ignoreTools.includes(toolName)
+			? { verdict: "allow", reason: `user ignoreTools passthrough: ${toolName}` }
+			: { verdict: "gray", reason: `tool not covered by built-in rules: ${toolName}` };
 	}
 	if (base.verdict === "deny") return base; // 内置 floor:deny 优先于一切用户规则
 

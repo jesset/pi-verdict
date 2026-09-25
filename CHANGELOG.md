@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+
+- `ignoreTools` user config (PR #45, by @geoyws): a plain list of tool names outside the command/file families (`todo`, `web_search`, MCP/custom tools, …) that skip adjudication entirely — verdict allow with zero model calls. Entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs before the passthrough — the list can never weaken either. Invalid entries join the one-shot config warning channel. The first-run template pre-fills a starter list of side-effect-free tools (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit, [research](research/classifier-cascade-production-audit.md); `memory_forget` deliberately absent: it deletes); a recommendation, not a built-in passthrough — existing configs are never rewritten.
+
 ## [0.11.0] - 2026-09-21
 
 ### Changed

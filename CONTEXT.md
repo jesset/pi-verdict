@@ -14,7 +14,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 判定管线 (adjudication pipeline)
 
-从 tool_call 到三态裁决的完整判定流程,按序:自保护层 → 内置 floor → 用户 deny → denyPaths ask → 用户 allow → 灰区交分类器;ask 降级(无 UI → deny)与 fail-closed 内建于管线语义。实现形态:`adjudicate(session, call, env) → Verdict` 纯函数——零 UI 依赖的 deep module,表现(notify/confirm/select)由扩展 handler 承担。变更检测(门禁完整性)是管线前置的独立关注点,不属于判定管线。_Avoid_: 裁决管线(全仓统一用「判定管线」)。
+从 tool_call 到三态裁决的完整判定流程,按序:自保护层 → 内置 floor → 用户 deny → denyPaths ask → 用户 allow → 灰区交分类器(未覆盖工具的 ignoreTools 命中先于灰区直接放行);ask 降级(无 UI → deny)与 fail-closed 内建于管线语义。实现形态:`adjudicate(session, call, env) → Verdict` 纯函数——零 UI 依赖的 deep module,表现(notify/confirm/select)由扩展 handler 承担。变更检测(门禁完整性)是管线前置的独立关注点,不属于判定管线。_Avoid_: 裁决管线(全仓统一用「判定管线」)。
 
 ### 裁决 (verdict)
 
@@ -47,6 +47,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 ### denyPaths (受保护路径)
 
 用户在 config 中声明的敏感路径列表,是**路径语义声明**:归一化(`~` 展开、词法 resolve、realpath 消解符号链接,realpath 失败降级词法层,macOS/Windows 上大小写折叠)与路径段前缀比对由**工具负责**,提取范围覆盖文件类工具的绝对路径与 bash 命令串中可提取的路径 token。命中即 **ask 终局**(非交互降级 deny),优先于用户 allow、劣后于用户 deny 与内置 floor。与用户规则的 deny(正则黑名单,用户自负归一化假设)相对:同一安全声明,声明更强的通道。路径提取与命中判定全部在本地完成,分类器只见**存在性话术**(不知路径明文、不见命中调用的裁决)。_Avoid_: denyPath(单数)。泛指 "protected paths" 单独出现时易与自保护层的 protected files 混淆——本词条语境优先用全称 "user-declared protected path (denyPaths)" 或中文「受保护路径(用户声明)」。
+
+### ignoreTools (工具豁免)
+
+用户在 config 中声明的工具名列表,是**无副作用声明**:命令/文件族之外的未覆盖工具(`todo`、`web_search`、MCP/自定义工具)命中即跳过全部裁决——零模型调用直接 allow。条目列出已覆盖工具(`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`)时惰性无效:那些仍由 deny floor 与用户 allow/deny 规则治理;自保护层永远先于豁免执行,列表无法削弱任一层。与 denyPaths 的对称关系:一个声明「更严」(触碰即问),一个声明「更松」(免审放行),同为用户主权配置;首启模板预填无副作用入门列表(生产审计背书,可增删清空)。代价面:被豁免工具失去分类器的存在性话术警戒(未覆盖工具本就不进路径提取器)。_Avoid_: 称其为「内置白名单」——ignoreTools 是用户声明,项目无内置放行清单。
 
 ### 存在性话术 (existence hint)
 

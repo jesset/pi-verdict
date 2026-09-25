@@ -104,7 +104,7 @@ const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true })
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -120,6 +120,8 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.classifierFallbackMode !== undefined) raw.classifierFallbackMode = cfg.classifierFallbackMode;
 	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
+	// ignoreTools: unknown[] lets negative tests mix in non-string entries
+	if (cfg.ignoreTools !== undefined) raw.ignoreTools = cfg.ignoreTools;
 	// 非法正则测试:把 invalid 条目直接混入 allow 数组
 	if (invalid) raw.allow = [...config.allow, ...invalid];
 	fs.writeFileSync(p, JSON.stringify(raw));
@@ -211,6 +213,41 @@ describe("user rules (deny > allow > gray)", () => {
 		const r = await toolCall(h, "mcp__x__y", { a: 1 });
 		expect(r).toBeUndefined();
 		expect(h.calls.length).toBe(1);
+	});
+	test("ignoreTools passes listed uncovered tools through with zero model calls", async () => {
+		const h = session({ ignoreTools: ["todo", "ask"] });
+		const r = await toolCall(h, "todo", { op: "init", list: [] });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0);
+	});
+	test("ignoreTools leaves unlisted uncovered tools on the classifier path", async () => {
+		const h = session({ ignoreTools: ["todo"] });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "mcp__x__y", { a: 1 });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+	test("ignoreTools entries naming covered tools are inert: floor still denies bash", async () => {
+		const h = session({ ignoreTools: ["bash"] });
+		const r = await toolCall(h, "bash", { command: "rm " + "-rf /tmp/x" });
+		expect(r?.block).toBe(true);
+		expect(h.calls.length).toBe(0);
+	});
+	test("config template contains the ignoreTools starter list", () => {
+		fs.rmSync(path.join(TMP_AGENT, "config", "pi-verdict.json"));
+		const h = makeHarness(); h.install(); // first run → template
+		const tpl = fs.readFileSync(path.join(TMP_AGENT, "config", "pi-verdict.json"), "utf8");
+		for (const t of ["todo", "ask_user_question", "memory_write", "memory_search"]) expect(tpl).toContain(`"${t}"`);
+		expect(tpl).not.toContain("memory_forget"); // deletion semantics stay adjudicated
+	});
+	test("invalid ignoreTools entries skip into the one-shot warning; valid entries still pass through", async () => {
+		const h = session({ ignoreTools: ["todo", "", 42] });
+		await h.handlers["session_start"]({}, h.ctx);
+		const warnings = h.notifies.filter(([, level]) => level === "warning").map(([m]) => m).join("\n");
+		expect(warnings).toContain("ignoreTools: 42");
+		const r = await toolCall(h, "todo", { op: "init", list: [] });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0);
 	});
 	test("invalid regexes are skipped, valid ones still apply", async () => {
 		const h = session({ allow: ["^ls\\b"] }, ["[unclosed"]);

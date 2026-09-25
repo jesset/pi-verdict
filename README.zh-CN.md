@@ -8,7 +8,7 @@
 
 **pi-verdict 是 [pi](https://pi.dev) 的 Claude Code 风格的 Auto mode 式的极简权限门禁:每次工具调用执行前先过检查——放行、拦截,或先问你。**
 
-- 只有1k行左右的极简代码
+- 只有2k行左右的极简代码
 - 内置危险规则与你的 allow/deny 规则以零延迟先行裁决明确情形
 - 其余交给携带会话上下文的模型分类器
 - 任何不确定或失败一律 fail-closed, 绝不静默放行
@@ -99,6 +99,12 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
     "~/.zshrc",
     "~/.bashrc"
   ],
+  "ignoreTools": [
+    "todo",
+    "ask_user_question",
+    "memory_write",
+    "memory_search"
+  ],
   "builtinDenyFloor": true,
   "classifierModel": null,
   "toggleShortcut": "ctrl+shift+a",
@@ -111,13 +117,14 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 ```
 
 - `allow`/`deny` 为 JS 正则数组;**`deny` 优先于 `allow`**,两者都优先于分类器
-- `denyPaths` 是你声明**受保护**的普通路径列表:触碰触发**终局 ask** 由你裁决(非交互降级 deny);分类器只被告知路径**存在**,路径明文永不出本机。`grep`/`find`/`ls` 按**整个搜索范围**比较:省略 `path`(pi 默认:当前目录)或传入位于声明路径之上的父目录,同样触发 ask。全新安装会预填一份**入门列表**(`~/.ssh/`、`~/.gnupg`、`~/.mc`、shell rc/profile 文件),自初次运行后的第一个会话起生效(一切配置变更均自新会话生效)——它是预填的*用户声明*而非内置 floor:可随意增删清空,也可与自己的路径(`~/Documents/private`、……)并列;既有配置永不被改写
+- `denyPaths` 是你声明**受保护**的普通路径列表:触碰触发**终局 ask** 由你裁决(非交互降级 deny);分类器只被告知路径**存在**,路径明文永不出本机。`grep`/`find`/`ls` 按**整个搜索范围**比较:省略 `path`(pi 默认:当前目录)或传入位于声明路径之上的父目录,同样触发 ask。全新安装会预填一份**入门列表**(`~/.ssh/`、`~/.gnupg`、`~/.mc`、shell rc/profile 文件)
+- `ignoreTools` 列出规则未覆盖的工具(`todo`、`web_search`、MCP/自定义工具):**直接放行、零模型调用**;列出已覆盖工具(`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`)的条目无效:它们仍受 deny floor 与你的 allow/deny 规则约束,自保护层也永远先行。全新安装会预填一份**入门列表**(`todo`、`ask_user_question`、`memory_write`、`memory_search`——来自项目 1265 条生产审计的观察) 注意:被豁免的工具失去分类器对 `denyPaths` 的存在性话术警戒(未覆盖工具本就不进路径提取器)
 - `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担;下方自保护层永远开启)
 - `classifierModel` 指定分类器模型,如 `"zai/glm-5.3-flash:low"`(支持思考后缀;缺省 = 会话模型且显式关思考)
 - `classifierModel: "typesafe/jev-latest"` 启用随包的 **jev 决策适配器**——灰区裁决经 TypeSafe jev 完成(默认 OpenRouter,或 `PI_VERDICT_JEV_TRANSPORT=typesafe` 直连官方 API);实验性质,详见 [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
 - `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件,保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth,确认结束后落盘),protected-path ask 也入审计(#62);规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机;[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注);agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 - `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解);默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知;shadow 标注仍属 debug;两开关同开时通知只出现一次
-- `classifierMinConfidence`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**:低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`shadow` = 第二层只记录意见、由你裁决;`enforce` = 第二层全权裁决,但降级 deny 永不被自动翻成 allow),否则直接问你。不低于地板时第一层自主。天然搭配:jev 打头 + haiku 级兜底
+- `classifierMinConfidence`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**:低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`shadow` = 第二层只记录意见、由你裁决;`enforce` = 第二层全权裁决,但降级 deny 永不被自动翻成 allow),否则直接问你。不低于地板时第一层自主。天然搭配:jev 打头 + haiku/flash 级兜底
 
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
 
@@ -136,7 +143,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - **宿主**:仅支持pi。omp 上该设置会警告并回退会话模型。也绝不能选作会话主模型(不生成文本,选中即警告)
 - **逃生口**:`PI_VERDICT_JEV_URL` 可覆盖当前 transport 的端点(OpenRouter 侧为 alpha 接口)
 
-jev 的校准 confidence 正是置信地板的判定依据——搭配第二层使用(`"classifierMinConfidence": 50, "classifierFallbackModel": "anthropic/claude-haiku-4-5"`),让低置信调用交给更深的模型而非直接生效([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
+jev 的校准 confidence 正是置信地板的判定依据——搭配第二层使用(`"classifierMinConfidence", "classifierFallbackModel"`),让低置信调用交给更深的模型而非直接生效([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 
@@ -146,6 +153,8 @@ jev 的校准 confidence 正是置信地板的判定依据——搭配第二层�
 - **变更检测**作纵深兜底:受保护文件在 `session_start` 快照、每次裁决前复核——扩展副本被改 → 自动还原 + 本会话 fail-closed;配置被改 → 一次明确的双选确认(差分处置的完整语义见 [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
 需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持;非交互模式下 `ask` 降级为 `deny`。
+
+---
 
 ## 与品类对比
 
@@ -175,6 +184,7 @@ tool_call
   │     ├─ 用户规则:deny 优先于 allow
   │     ├─ denyPaths(ADR-0002):受保护路径 → 终局 ask,先于用户 allow;
   │     │   分类器只见存在性话术
+  │     ├─ ignoreTools:用户声明的未覆盖工具 → 直接放行,零模型调用
   │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
   ├─ 2. 灰区 → 模型分类器(默认继承会话模型 —— "自省")
