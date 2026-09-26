@@ -2021,6 +2021,20 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(h.confirms).toBe(0);
 		expect(readAudit()[0].fallback).toMatchObject({ mode: "enforce", verdict: "deny", effective: "deny" });
 	});
+	test("an invalid classifierFallbackMode lands on the conservative shadow with a warning", async () => {
+		const h = session({ classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforc" as unknown });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		await h.handlers.session_start({}, h.ctx);
+		const warnings = h.notifies.filter(([, l]) => l === "warning").map(([m]) => m).join("\n");
+		expect(warnings).toContain('classifierFallbackMode: "enforc"');
+		// shadow semantics: a demoted call is asked of the human, never auto-applied
+		h.confirmAnswer = true;
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(h.confirms).toBe(1);
+		expect(readAudit()[0].fallback).toMatchObject({ mode: "shadow" });
+	});
+
 	test("/automode hints activation when the second layer sits in shadow", async () => {
 		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
@@ -2028,6 +2042,11 @@ describe("confidence floor + cascade (#67)", () => {
 		const line = h.notifies.filter(([m]) => m.includes("confidence cascade")).map(([m]) => m)[0];
 		expect(line).toContain("confidence cascade");
 		expect(line).toContain("set classifierFallbackMode to \"enforce\" to activate");
+		const h2 = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		await h2.commands["automode"].handler("", h2.ctx);
+		const line2 = h2.notifies.filter(([m]) => m.includes("confidence cascade")).map(([m]) => m)[0];
+		expect(line2).not.toContain("to activate");
 	});
 
 	test("/automode cascade summary counts a fail-closed rescue distinctly (#71)", async () => {
