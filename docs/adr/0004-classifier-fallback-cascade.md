@@ -87,7 +87,7 @@ Recorded as a minimum bar plus a human decision, never an automatic threshold: a
 
 ## Amendment 2026-09-26 (#71)
 
-status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording in Decision 6, and the fail-closed rows of the top-level audit semantics · grounding: [production audit](../../research/classifier-cascade-production-audit.md) + grilling dispositions.
+status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording in Decision 6, and the fail-closed rows of the top-level audit semantics · grounding: [production audit](../../research/classifier-cascade-production-audit-en.md) + grilling dispositions.
 
 **1. The relaxation carve-out covers every negative first-layer verdict, not only deny.** Under enforce, a demoted **ask** that the fallback would allow is now asked of the human (headless degrades to deny), exactly like the existing demoted-deny carve-out. The second layer may not auto-relax any negative verdict; it adjudicates freely elsewhere (demoted allow → anything, demoted ask → ask/deny). A **fail-closed** origin keeps full de novo authority including automatic allow: an absent layer emits no negative verdict, so the fallback's allow is a first ruling, not a relaxation — the alternative would turn a first-layer outage into full-session manual confirmation (observed: 26 consecutive failures inside one 178-call session). Rationale: relaxation errors are irreversible where over-ask errors cost one confirmation; production showed 24 ask→allow relaxations of which ~2 were genuinely contentious after the side-effect-free tools moved to `ignoreTools` (#69), costing ≈1 confirmation/day.
 
@@ -99,7 +99,7 @@ status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording
 
 ## Amendment 2026-09-26 (default mode)
 
-status: accepted · date: 2026-09-26 · supersedes: the shadow-by-default decision in this ADR's Decision section · grounding: the [production audit](../../research/classifier-cascade-production-audit.md).
+status: accepted · date: 2026-09-26 · supersedes: the shadow-by-default decision in this ADR's Decision section · grounding: the [production audit](../../research/classifier-cascade-production-audit-en.md).
 
 **`classifierFallbackMode` now defaults to `"enforce"`** (0.12.0). `shadow` remains available as an explicit opt-in. Users who configure `classifierFallbackModel` without a mode get an active second layer; `/automode` shows a one-line activation hint whenever a configured second layer sits in shadow.
 

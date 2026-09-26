@@ -1,5 +1,7 @@
 # 调研: jev + fallback 两层级联的生产 audit 数据分析
 
+**[English](classifier-cascade-production-audit-en.md) | [简体中文](classifier-cascade-production-audit-zh.md)**
+
 > 调研日期: 2026-09-25。
 > 问题: 基于 2026-09-19 ~ 2026-09-25 两台主机（本地 macOS 与远程 Linux）的真实 audit 日志，评估 jev（第一层分类器）与 fallback 分类器（第二层）级联在生产中的表现，并对该组合提出改进意见。
 > 数据源: `~/.pi/agent/verdicts/*.jsonl`（本地 22 个会话文件 + 远程 13 个独有会话文件；其中 7 个文件两台机器内容完全一致，为同步副本，只计一次）。
