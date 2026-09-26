@@ -360,10 +360,12 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 }, null, 2)}\n`;
 
 /**
- * 加载用户规则。首启生成模板(键值 + starter 列表,无内嵌说明——完整参考在
- * docs/configuration.md;allow 内示例默认仅 ^ls\b 可用,其余为说明占位);
- * 配置缺失/损坏/字段非法一律回退空规则(安全默认,不失效),非法正则收集回报,
- * 非法 toggleShortcut 收集警告文案(与 skipped 同经 session_start 发出)。
+ * Load user rules. First run generates a template (bare keys + starter lists, no
+ * embedded prose — the full reference is docs/configuration.md; only ^ls\b in the
+ * allow example is live, the rest are placeholders). A missing/malformed/invalid
+ * config falls back to empty rules (safe default — the gate never disables);
+ * invalid regexes are collected and reported, an invalid toggleShortcut collects
+ * a warning text (both surface via session_start alongside `skipped`).
  */
 function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning: string | null } {
 	try {
