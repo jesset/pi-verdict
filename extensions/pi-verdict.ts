@@ -1430,15 +1430,15 @@ interface FallbackStats {
 	agreed: number; // fallback verdict equals the first layer's (fail-closed defaults to deny)
 	overruled: number; // fallback verdict differs (enforce applies it; shadow observes the would-be)
 	errored: number; // fallback unresolvable or its call failed
-	rescued: number; // #71: fail-closed origin the fallback ruled allow (enforce: actually allowed; shadow: would)
+	rescuedAllow: number; // #71: fail-closed origin the fallback ruled allow (enforce: actually allowed; shadow: would) — counted within overruled as well, surfaced distinctly for the rescue reading
 }
 
 class FallbackCascade {
-	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescued: 0 };
+	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescuedAllow: 0 };
 
 	/** Session reset (#7 discipline: session-memory state) */
 	reset(): void {
-		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescued: 0 });
+		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescuedAllow: 0 });
 	}
 
 	note(first: "allow" | "ask" | "deny" | null, fb: "allow" | "ask" | "deny" | null): void {
@@ -1448,7 +1448,7 @@ class FallbackCascade {
 			return;
 		}
 		// A fail-closed origin produced no first-layer verdict; its default outcome is deny
-		if (first === null && fb === "allow") this.stats.rescued++;
+		if (first === null && fb === "allow") this.stats.rescuedAllow++;
 		if ((first ?? "deny") !== fb) this.stats.overruled++;
 		else this.stats.agreed++;
 	}
@@ -1457,7 +1457,7 @@ class FallbackCascade {
 	summary(mode: "shadow" | "enforce"): string {
 		const s = this.stats;
 		if (s.triggered === 0) return "confidence cascade: not triggered this session";
-		return `confidence cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "overruled" : "would-overrule"} ${s.overruled} · ${mode === "enforce" ? "rescued-allow" : "would-rescue-allow"} ${s.rescued} · errored ${s.errored}`;
+		return `confidence cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "overruled" : "would-overrule"} ${s.overruled} · ${mode === "enforce" ? "rescued-allow" : "would-rescue-allow"} ${s.rescuedAllow} · errored ${s.errored}`;
 	}
 }
 
