@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Changed
+
+- Cascade semantics (#71, [ADR-0004 amendment](docs/adr/0004-classifier-fallback-cascade.md)): under `enforce`, the fallback may no longer auto-relax a **negative** first-layer verdict — a demoted **ask** it would allow now goes to you (headless → deny), mirroring the demoted-deny carve-out. A **fail-closed** first layer keeps full de novo authority including automatic allow: it emitted no verdict, so a fallback allow is a first ruling, not a relaxation (otherwise a first-layer outage becomes full-session manual confirmation). Enforced fail-closed rescues now record the **applied verdict** at the audit top level (source stays `fail-closed`; previously all such rows carried `verdict: "deny"` — 26 observed rows, 25 actually allowed, distorting deny-rate statistics; shadow rescues keep the deny). `/automode` gains a distinct `rescued-allow` / `would-rescue-allow` counter. Grounded in the [production audit](research/classifier-cascade-production-audit.md).
+
 ### Removed
 
 - The first-run config template's embedded `_hint` field (#72): it duplicated docs/configuration.md and had drifted twice (the stale `classifierFallbackConfidence` key name and the pre-#67 "escalates strictness only" wording both lived only there). The template is now bare keys + starter lists; the full reference is [docs/configuration.md](docs/configuration.md). Existing configs are untouched.

@@ -84,3 +84,15 @@ Recorded as a minimum bar plus a human decision, never an automatic threshold: a
 - `pi-verdict.ts` imports `parseJevConfidence` from the jev adapter (top-level side-effect-free — the import cannot register providers or touch the network; coupling noted in the PR).
 - The audit schema gains an optional `fallback` sub-object; consumers ignoring unknown fields are unaffected, and `fallback.effective` is the only place the enforced verdict lives.
 - The corpus question "is the first layer reliable?" becomes measurable once #62 ground truth accumulates; revisit shape (b) (judge everything) only if shadow data shows confidently-wrong first-layer allows are common.
+
+## Amendment 2026-09-26 (#71)
+
+status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording in Decision 6, and the fail-closed rows of the top-level audit semantics · grounding: [production audit](../../research/classifier-cascade-production-audit.md) + grilling dispositions.
+
+**1. The relaxation carve-out covers every negative first-layer verdict, not only deny.** Under enforce, a demoted **ask** that the fallback would allow is now asked of the human (headless degrades to deny), exactly like the existing demoted-deny carve-out. The second layer may not auto-relax any negative verdict; it adjudicates freely elsewhere (demoted allow → anything, demoted ask → ask/deny). A **fail-closed** origin keeps full de novo authority including automatic allow: an absent layer emits no negative verdict, so the fallback's allow is a first ruling, not a relaxation — the alternative would turn a first-layer outage into full-session manual confirmation (observed: 26 consecutive failures inside one 178-call session). Rationale: relaxation errors are irreversible where over-ask errors cost one confirmation; production showed 24 ask→allow relaxations of which ~2 were genuinely contentious after the side-effect-free tools moved to `ignoreTools` (#69), costing ≈1 confirmation/day.
+
+**2. An enforced fail-closed rescue records the applied verdict at the audit top level.** `source` stays `"fail-closed"`; `verdict` now carries the fallback's effective ruling instead of the pre-cascade default deny. Grounding: all 26 observed fail-closed rows carried `verdict: "deny"` while 25 were actually allowed — deny-rate statistics were distorted. Shadow rescues (no `effective`) keep the deny, which is the real outcome there. Reading-discipline change for analysis scripts: from this version on, fail-closed rows mean "first layer absent; verdict as applied", no longer "denied".
+
+**3. `/automode` cascade summary counts `rescued-allow`** (fail-closed origin the fallback ruled allow; `would-rescue-allow` in shadow) distinctly from `overruled`.
+
+**Costs:** enforce users gain ≈1 confirmation/day (the relaxed-ask population); cross-version audit analysis must treat fail-closed verdicts as version-dependent (before: always deny; after: the applied ruling).
