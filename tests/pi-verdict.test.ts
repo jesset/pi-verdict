@@ -827,7 +827,7 @@ describe("toggle shortcut", () => {
 		const raw = fs.readFileSync(path.join(TMP_AGENT, "config", "pi-verdict.json"), "utf8");
 		expect(raw).toContain("toggleShortcut");
 		expect(raw).toContain("ctrl+shift+a");
-		expect(raw).toContain("toggleShortcut sets the master-switch toggle key"); // _hint 说明文案
+		expect(raw).not.toContain("_hint"); // #72: the embedded hint is gone; docs/configuration.md is the reference
 	});
 });
 
