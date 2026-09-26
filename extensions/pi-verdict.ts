@@ -39,7 +39,8 @@
  * Structure: the pipeline is adjudicate() — a zero-UI module returning a Verdict
  * value object (source: rule|protected-path|classifier|fail-closed, plus a
  * `degraded` flag for ask→deny in non-interactive sessions); the tool_call
- * handler maps verdicts to UI (notify/confirm/select) by source × degraded and
+ * handler maps verdicts to UI (notify/confirm/select) by source (the degraded
+ * context is implicit in the protected-path source's deny wording) and
  * runs IntegrityWatch (ADR-0001) as a pre-pipeline gate-integrity check.
  *
  * fail-closed: classifier exception/timeout/contract violation → deny; in
@@ -1615,10 +1616,13 @@ async function runConfidenceCascade(
 
 /**
  * 判定管线(CONTEXT.md「判定管线」词条的实现):自保护 → 内置 floor → 用户 deny →
- * denyPaths ask → 用户 allow → 灰区分类器;ask 降级(无 UI → deny)与 fail-closed
- * 内建于此,两处重复的降级实现自此唯一。零 UI:表现(notify/confirm/select)由扩展
- * handler 按 source × degraded 模板呈现;变更检测(IntegrityWatch)是管线前置的
- * 独立关注点,不在 adjudicate 内。导出仅为测试(内部 seam 的测试面,#35 既有模式)。
+ * denyPaths ask → user allow → gray-zone classifier; ask degradation (no UI → deny)
+ * and fail-closed are built in here — the two formerly duplicated degradation
+ * implementations now live in one place. Zero UI: presentation (notify/confirm/
+ * select) is the handler's job, keyed on source alone (the degraded context is
+ * implicit in the protected-path deny wording); IntegrityWatch (tamper detection)
+ * is a pre-pipeline concern, not part of adjudicate. Exported for tests only
+ * (the internal-seam test surface, the standing #35 pattern).
  */
 export async function adjudicate(
 	state: SessionState,
@@ -1682,7 +1686,7 @@ export async function adjudicate(
 		}
 		state.audit?.append(fcRecord);
 		if (eff?.verdict === "allow") return { verdict: "allow", reason: eff.reason, source: "classifier", degraded: false };
-		if (eff) return { verdict: "deny", reason: eff.reason, source: eff.source, degraded: !env.hasUI };
+		if (eff) return { verdict: "deny", reason: eff.reason, source: eff.source, degraded: effAskHeadless };
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
@@ -1757,8 +1761,10 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		return { block: true, reason: blockedReason("tamper", r.reason) };
 	}
 
-	/** Verdict → UI(本扩展唯一的裁决呈现点):按 source × degraded 查模板,文案与
-	 *  重构前逐字节一致。受保护路径分支的通知永不携带路径明文与 action 行
+	/** Verdict → UI (the extension's single presentation point): presentation keys on
+	 *  source alone — the degraded context is implicit in the protected-path deny
+	 *  wording. Byte-identical with the pre-refactor wording; protected-path
+	 *  notifications never carry path plaintext or the action line
 	 *  (ADR-0002 story 11:通知与 block reason 回流 agent context)。 */
 	async function presentVerdict(v: Verdict, action: string, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
 		if (v.verdict === "allow") {
@@ -1992,7 +1998,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			}
 		}
 
-		// 判定管线(零 UI)→ 呈现(source × degraded 模板)
+		// 判定管线(零 UI)→ 呈现(source 模板)
 		const verdict = await adjudicate(state, { toolName: event.toolName, input }, {
 			cwd: ctx.cwd,
 			hasUI: !!ctx.hasUI,

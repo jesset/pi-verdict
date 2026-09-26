@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Fixed
+
+- The early fail-closed path (no classifier model available) misflagged the returned verdict's `degraded` on headless fallback denies (#77): `!env.hasUI` marked every headless deny as degraded, but `degraded` is defined as the **ask-degradation product** marker — a fallback that rules `deny` never passed through an ask, so it is not a degradation product regardless of UI state. Now it reuses the audit record's `effAskHeadless` predicate — one named predicate, so return and record cannot drift apart again. No behavior change surfaces: presentation and block reasons read only `source`. Four doc comments claiming presentation maps "by source × degraded" corrected to source-only — the stale wording had drifted from the implementation.
+
 ### Changed
 
 - Cascade semantics (#71, [ADR-0004 amendment](docs/adr/0004-classifier-fallback-cascade.md)): under `enforce`, the fallback may no longer auto-relax a **negative** first-layer verdict — a demoted **ask** it would allow now goes to you (headless → deny), mirroring the demoted-deny carve-out. A **fail-closed** first layer keeps full de novo authority including automatic allow: it emitted no verdict, so a fallback allow is a first ruling, not a relaxation (otherwise a first-layer outage becomes full-session manual confirmation). Enforced fail-closed rescues now record the **applied verdict** at the audit top level (source stays `fail-closed`; previously all such rows carried `verdict: "deny"` — 26 observed rows, 25 actually allowed, distorting deny-rate statistics; shadow rescues keep the deny). `/automode` gains a distinct `rescued-allow` / `would-rescue-allow` counter. Grounded in the [production audit](research/classifier-cascade-production-audit.md).
