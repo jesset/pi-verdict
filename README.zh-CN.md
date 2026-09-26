@@ -70,7 +70,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 | 用户规则 | `~/.pi/agent/config/pi-verdict.json` | `~/.omp/agent/config/pi-verdict.json` |
 | 凭据文件(S0 硬 deny) | `~/.pi/agent/auth.json` | `~/.omp/agent/auth.json` |
 
-- `/automode` —— 显示当前状态:开/关 + 本会话影子缓存统计
+- `/automode` —— 显示当前状态:开/关
 - `/automode on`
 - `/automode off`
 - `ctrl+shift+a` —— 静默切换主开关(footer 始终显示为唯一反馈;键位可经 `toggleShortcut` 重绑或禁用)
@@ -123,7 +123,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - `classifierModel` 指定分类器模型,如 `"zai/glm-5.3-flash:low"`(支持思考后缀;缺省 = 会话模型且显式关思考)
 - `classifierModel: "typesafe/jev-latest"` 启用随包的 **jev 决策适配器**——灰区裁决经 TypeSafe jev 完成(默认 OpenRouter,或 `PI_VERDICT_JEV_TRANSPORT=typesafe` 直连官方 API);实验性质,详见 [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
 - `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件,保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth,确认结束后落盘),protected-path ask 也入审计(#62);规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机;[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注);agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
-- `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解);默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知;shadow 标注仍属 debug;两开关同开时通知只出现一次
+- `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解);默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知;两开关同开时通知只出现一次
 - `classifierMinConfidence`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**:低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`shadow` = 第二层只记录意见、由你裁决;`enforce` = 第二层全权裁决,但降级的 **deny 与 ask** 永不被自动放宽为 allow——fail-closed 未产生任何裁决,其获救裁决照常生效),否则直接问你。不低于地板时第一层自主。天然搭配:jev 打头 + haiku/flash 级兜底
 
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
@@ -197,7 +197,6 @@ tool_call
         ├─ deny  → 拦截,理由回传 agent
         └─ ask   → 人工确认;非交互模式降级为 deny
 
-  [影子缓存] observe-only 遥测,与 2/3 并行,永不改变裁决
 ```
 
 **fail-closed**:分类器异常 / 超时(25s)/ 输出违反契约 → 拦截,绝不静默放行。
@@ -222,7 +221,6 @@ tool_call
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
 - 并行灰区调用串行裁决
 - 自省意味着会话模型亲自裁决 —— 若延迟/成本敏感,用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)
-- 影子缓存按决议仅观察不生效;实测命中率达标后,生效开关是一行改动
 - `denyPaths` 的 bash 提取是 token 级([ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md)):命令替换、base64 内嵌路径、外部脚本内容不产生命中信号——这些调用回落到分类器的存在性话术警戒。MCP 与自定义工具完全绕过提取器(其灰区裁决仍带话术)。路径归一化亦为基础档(ADR-0002):经符号链接目录写入尚不存在的目标不重建真实形、不产生命中——该间接路径同样由话术警戒覆盖(祖先重建档只适用于自保护层与路径敏感度 floor,不适用 denyPaths)。诚实表述,与自保护子串正则同例:确定性层可被混淆——这正是命中交由**你**裁决而非静默决定的原因
 - `denyPaths` 的 bash token 不含空格:**声明路径本身含空格时**,bash 拼写无法被提取器识别——`cat "/path with space/x"` 被拆成两个 token 永不命中(文件类工具仍命中,其路径不经 token 化)。glob 覆盖基名末段(`denyPaths: ["/proj/personal"]` 时 `cat /proj/pers*`)同样漏过——基名自身从未字面出现。经 shell 发起的递归搜索在两种拼写下都漏过——不带路径参数(默认搜 cwd,如裸 `rg foo`)或带父目录参数(`rg foo <声明路径的父目录>`):无参命令根本不产生 token,带参时 bash token 只做单向比较;同一形状经 `grep`/`find`/`ls` 工具发起则由双向子树比较覆盖。三个洞与上述替换/base64 一样回落到分类器的存在性话术
 - 自保护 bash 匹配是子串正则——可被混淆绕过;变更检测兜底覆盖会话内绕过,跨会话基线(启动时哈希比对与变更确认,含升级 UX)按 ADR-0001 为二期
@@ -237,7 +235,7 @@ tool_call
 ```bash
 bun install
 bun run typecheck
-bun test          # 离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 影子缓存 / 命令 / toggle 快捷键
+bun test          # 离线桩测试:自保护 / 变更检测 / deny floor / 用户规则 / denyPaths / 绕过回归 / 分类器重试 / 命令 / toggle 快捷键
 ```
 
 Issue tracker 与决策记录在 GitHub issues(「地图」issue #1 为索引)。

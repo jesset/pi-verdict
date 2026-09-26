@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Removed
 
+- The shadow-cache runtime telemetry (#73): the dual-key LRU probe on every gray-zone adjudication, would-hit accounting, the `/automode` shadow stats line, the debug-notification shadow annotation, and the audit record's `shadow` field (new records omit it; old records keep theirs). Two independent measurements agree the hit rate sits far below any activation threshold (offline cache-sim replay 3.2%, runtime would-hit 41/1249 = 3.3%), so the probe cost code on a product whose pitch is ~2k minimal lines. Future cache re-evaluation belongs to offline replay tooling, not a standing runtime observer.
 - The first-run config template's embedded `_hint` field (#72): it duplicated docs/configuration.md and had drifted twice (the stale `classifierFallbackConfidence` key name and the pre-#67 "escalates strictness only" wording both lived only there). The template is now bare keys + starter lists; the full reference is [docs/configuration.md](docs/configuration.md). Existing configs are untouched.
 
 ### Added

@@ -18,15 +18,15 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 裁决 (verdict)
 
-对单次工具调用的判定结果。由 `tool_call` 钩子产出,放行则不做干预,拦截则返回 `{ block: true, reason }`。运行时载体为 `Verdict` 值对象(verdict / reason / detail / source / degraded / shadow):`detail` 为 UI-only 明文(受保护路径仅入本地确认框,ADR-0002 零泄漏承诺),`source` 区分 rule / protected-path / classifier / fail-closed,`degraded` 标记 ask 降级产物。
+对单次工具调用的判定结果。由 `tool_call` 钩子产出,放行则不做干预,拦截则返回 `{ block: true, reason }`。运行时载体为 `Verdict` 值对象(verdict / reason / detail / source / degraded):`detail` 为 UI-only 明文(受保护路径仅入本地确认框,ADR-0002 零泄漏承诺),`source` 区分 rule / protected-path / classifier / fail-closed,`degraded` 标记 ask 降级产物。
 
 ### 通知 (verdict notification)
 
-门禁对用户的信息呈现通道,只承载**值得注意的判断**:deny/ask 恒通知;classifier 的 allow 经用户规则 `notifyAllows`(默认关)开启;机械放行恒静默——rule allow 是用户自己声明的正则回显,protected-path confirm 的可见性即确认框本身。与「裁决审计」分工:通知负责判断,审计日志负责完整记录。诊断标注(shadow 反事实拼接)属 debug 开关(flag/env),与 `notifyAllows` 正交;两者同开时 classifier allow 通知只呈现一条。
+门禁对用户的信息呈现通道,只承载**值得注意的判断**:deny/ask 恒通知;classifier 的 allow 经用户规则 `notifyAllows`(默认关)开启;机械放行恒静默——rule allow 是用户自己声明的正则回显,protected-path confirm 的可见性即确认框本身。与「裁决审计」分工:通知负责判断,审计日志负责完整记录。debug 开关(flag/env)使每次裁决全量通知(含放行),与 `notifyAllows` 正交;两者同开时 classifier allow 通知只呈现一条。
 
 ### 裁决审计 (verdict audit records)
 
-灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/影子探针/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。#62 起审计面扩至 protected-path ask——其用户应答是对 denyPaths 声明质量的反馈;#71 起 enforce 获救的 fail-closed 行顶层 verdict 落生效裁决(source 仍为 fail-closed),其余行顶层语义不变——且交互式 ask 记录 ground truth(`userAnswer`/`answeredAt` 于确认应答后落盘,`ts` 仍为裁决时间;确认中途会话中断丢该条,已接受的代价);规则层 allow/deny 仍不入审计。observe-only:append-only、永不回流裁决输入(影子缓存同款纪律);全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
+灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。#62 起审计面扩至 protected-path ask——其用户应答是对 denyPaths 声明质量的反馈;#71 起 enforce 获救的 fail-closed 行顶层 verdict 落生效裁决(source 仍为 fail-closed),其余行顶层语义不变——且交互式 ask 记录 ground truth(`userAnswer`/`answeredAt` 于确认应答后落盘,`ts` 仍为裁决时间;确认中途会话中断丢该条,已接受的代价);规则层 allow/deny 仍不入审计。observe-only:append-only、永不回流裁决输入;全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
 
 ### 规则层 (rule layer)
 
@@ -99,10 +99,6 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 ### fail-closed
 
 任何异常路径(分类器报错、超时、输出无法解析)的默认行为:拦截,绝不静默放行。
-
-### 影子缓存 (shadow cache)
-
-为「是否引入生效裁决缓存」积累实测数据的 observe-only 遥测:每次灰区裁决前后同步回放「双键 LRU(128)」的 would-be 命中(命令键 = 工具+输入+cwd,上下文键 = 最近 5 条 user 行),**只记录永不生效** —— 裁决永远来自模型。只回写真实模型 allow/deny,ask 与 fail-closed 不入;会话内存态,`session_start` 重置。观察口:`/automode` 统计行与 `PI_AUTO_MODE_DEBUG=1` 通知标注。
 
 ### 置信降级 (confidence demotion)
 
