@@ -1987,6 +1987,30 @@ describe("confidence floor + cascade (#67)", () => {
 		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
 		expect(r2?.block).toBe(true);
 	});
+	test("no-model fail-closed headless: degraded flags ask-degradation only, return and record agree (#77)", async () => {
+		clearAudit();
+		setConfig({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null), undefined, TMP_AGENT); // agentDir required for the audit sink
+		const script = ["<verdict>deny</verdict> fb rules deny", "<verdict>ask</verdict> fb asks"];
+		let i = 0;
+		const env = {
+			cwd: "/proj",
+			hasUI: false,
+			getModel: () => null,
+			getFallbackModel: () => ({ model: { id: "fb-model" }, thinking: "off" as const }),
+			complete: (async () => ({ content: [{ type: "text", text: script[i++] }], stopReason: "stop" })) as any,
+			host: { getBranch: () => [], getSessionId: () => "s1" },
+		};
+		// bug cell: a fallback deny under headless is NOT an ask-degradation product
+		const v1 = await adjudicate(state, { toolName: "bash", input: { command: "cargo build" } }, env as any);
+		expect(v1).toMatchObject({ verdict: "deny", source: "classifier", degraded: false });
+		// control cell: a fallback ask under headless IS one (denied + degraded)
+		const v2 = await adjudicate(state, { toolName: "bash", input: { command: "cat /etc/hosts" } }, env as any);
+		expect(v2).toMatchObject({ verdict: "deny", degraded: true });
+		const recs = readAudit();
+		expect(recs[0]).toMatchObject({ source: "fail-closed", verdict: "deny", degraded: false });
+		expect(recs[1]).toMatchObject({ source: "fail-closed", verdict: "deny", degraded: true });
+	});
 	test("/automode cascade summary counts a fail-closed rescue distinctly (#71)", async () => {
 		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
