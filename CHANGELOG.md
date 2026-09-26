@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
-### Fixed
+## [0.12.0] - 2026-09-26
 
-- The early fail-closed path (no classifier model available) misflagged the returned verdict's `degraded` on headless fallback denies (#77): `!env.hasUI` marked every headless deny as degraded, but `degraded` is defined as the **ask-degradation product** marker — a fallback that rules `deny` never passed through an ask, so it is not a degradation product regardless of UI state. Now it reuses the audit record's `effAskHeadless` predicate — one named predicate, so return and record cannot drift apart again. No behavior change surfaces: presentation and block reasons read only `source`. Four doc comments claiming presentation maps "by source × degraded" corrected to source-only — the stale wording had drifted from the implementation.
+### Added
+
+- `ignoreTools` user config (PR #45, by @geoyws): a plain list of tool names outside the command/file families (`todo`, `web_search`, MCP/custom tools, …) that skip adjudication entirely — verdict allow with zero model calls. Entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs before the passthrough — the list can never weaken either. Invalid entries join the one-shot config warning channel. The first-run template pre-fills a starter list of side-effect-free tools (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit, [research](research/classifier-cascade-production-audit.md); `memory_forget` deliberately absent: it deletes); a recommendation, not a built-in passthrough — existing configs are never rewritten.
 
 ### Changed
 
@@ -21,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - The shadow-cache runtime telemetry (#73): the dual-key LRU probe on every gray-zone adjudication, would-hit accounting, the `/automode` shadow stats line, the debug-notification shadow annotation, and the audit record's `shadow` field (new records omit it; old records keep theirs). Two independent measurements agree the hit rate sits far below any activation threshold (offline cache-sim replay 3.2%, runtime would-hit 41/1249 = 3.3%), so the probe cost code on a product whose pitch is ~2k minimal lines. Future cache re-evaluation belongs to offline replay tooling, not a standing runtime observer.
 - The first-run config template's embedded `_hint` field (#72): it duplicated docs/configuration.md and had drifted twice (the stale `classifierFallbackConfidence` key name and the pre-#67 "escalates strictness only" wording both lived only there). The template is now bare keys + starter lists; the full reference is [docs/configuration.md](docs/configuration.md). Existing configs are untouched.
 
-### Added
+### Fixed
 
-- `ignoreTools` user config (PR #45, by @geoyws): a plain list of tool names outside the command/file families (`todo`, `web_search`, MCP/custom tools, …) that skip adjudication entirely — verdict allow with zero model calls. Entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs before the passthrough — the list can never weaken either. Invalid entries join the one-shot config warning channel. The first-run template pre-fills a starter list of side-effect-free tools (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit, [research](research/classifier-cascade-production-audit.md); `memory_forget` deliberately absent: it deletes); a recommendation, not a built-in passthrough — existing configs are never rewritten.
+- The early fail-closed path (no classifier model available) misflagged the returned verdict's `degraded` on headless fallback denies (#77): `!env.hasUI` marked every headless deny as degraded, but `degraded` is defined as the **ask-degradation product** marker — a fallback that rules `deny` never passed through an ask, so it is not a degradation product regardless of UI state. Now it reuses the audit record's `effAskHeadless` predicate — one named predicate, so return and record cannot drift apart again. No behavior change surfaces: presentation and block reasons read only `source`. Four doc comments claiming presentation maps "by source × degraded" corrected to source-only — the stale wording had drifted from the implementation.
 
 ## [0.11.0] - 2026-09-21
 
