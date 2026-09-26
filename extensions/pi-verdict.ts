@@ -1058,7 +1058,6 @@ export type PipelineHost = Pick<ExtensionContext["sessionManager"], "getBranch" 
 /**
  * 从会话分支收集精简转录原料:user 消息行与 assistant 工具调用行。
  * 丢弃 assistant 叙述/thinking 与 toolResult(注入面与 token 大头)。
- * 影子缓存的 contextKey 与 buildTranscript 同源(同一批 user 行),保证键与模型输入一致。
  */
 function collectTranscriptParts(host: PipelineHost): { userLines: string[]; toolLines: string[] } {
 	const userLines: string[] = [];
@@ -1297,7 +1296,7 @@ async function classifyWithModel(
 }
 
 // ============================================================================
-// Confidence cascade stats (#63/#67: observe-first, session-memory state; the #7 discipline)
+// Confidence cascade stats (#63/#67: observe-first, session-memory state)
 // ============================================================================
 
 interface FallbackStats {
@@ -1311,7 +1310,7 @@ interface FallbackStats {
 class FallbackCascade {
 	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescuedAllow: 0 };
 
-	/** Session reset (#7 discipline: session-memory state) */
+	/** Session reset (session-memory state) */
 	reset(): void {
 		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescuedAllow: 0 });
 	}
@@ -1481,7 +1480,7 @@ export class SessionState {
 	}
 
 	/** 会话重置:重载用户规则(配置改动新会话生效)+ 按会话 cwd 重锚 denyPaths
-	 *  (ADR-0002: 每会话锚定一次)+ 清影子缓存;返回加载报告供表现层通知 */
+	 *  (ADR-0002: 每会话锚定一次);返回加载报告供表现层通知 */
 	reset(cwd: string): { skipped: string[]; shortcutWarning: string | null } {
 		const loaded = loadUserRules();
 		this.userRules = loaded.rules;
@@ -1676,7 +1675,8 @@ export async function adjudicate(
 		// a ruling. When an enforcing fallback rescues the call, the record's top level
 		// carries the applied verdict; a shadow rescue (no effective) keeps the deny.
 		const effAskHeadless = eff?.verdict === "ask" && !env.hasUI;
-		const fcRecord = buildRecord({ verdict: eff ? (effAskHeadless ? "deny" : eff.verdict) : "deny", reason: eff?.reason ?? reason, source: "fail-closed", degraded: effAskHeadless }, null);		if (cascade.fb) fcRecord.fallback = cascade.fb;
+		const fcRecord = buildRecord({ verdict: eff ? (effAskHeadless ? "deny" : eff.verdict) : "deny", reason: eff?.reason ?? reason, source: "fail-closed", degraded: effAskHeadless }, null);
+		if (cascade.fb) fcRecord.fallback = cascade.fb;
 		if (eff?.verdict === "ask" && env.hasUI) {
 			return { verdict: "ask", reason: eff.reason, source: eff.source, degraded: false, ...(state.audit ? { pendingAudit: fcRecord } : {}) };
 		}
@@ -1707,7 +1707,8 @@ export async function adjudicate(
 	// deny-rate statistics (26 observed rows, 25 actually allowed); shadow rescues keep it.
 	const appliedAskHeadless = !env.hasUI && effVerdict === "ask";
 	const fcRescued = cascade.effective !== undefined && outcome.source === "fail-closed";
-	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : fcRescued ? effVerdict : outcome.verdict, reason: fcRescued ? effReason : outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null);	if (cascade.demoted) grayRecord.demoted = true;
+	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : fcRescued ? effVerdict : outcome.verdict, reason: fcRescued ? effReason : outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null);
+	if (cascade.demoted) grayRecord.demoted = true;
 	if (cascade.fb) grayRecord.fallback = cascade.fb;
 	// #62: an interactive ask defers the append to the handler finalize (ground truth);
 	// every other outcome appends immediately as before
@@ -1762,9 +1763,9 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	async function presentVerdict(v: Verdict, action: string, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
 		if (v.verdict === "allow") {
 			// #60 (CONTEXT.md 通知): classifier allows surface via notifyAllows OR
-			// debug — exactly one notification either way
-			// debug-only; mechanical passes (rule echo, protected-path confirm) stay
-			// debug-only — notifications carry judgment, the audit log carries completeness
+			// debug — exactly one notification either way; mechanical passes
+			// (rule echo, protected-path confirm) stay silent — notifications carry
+			// judgment, the audit log carries completeness
 			if (debug) {
 				if (v.source === "rule") ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 				else if (v.source === "protected-path") ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
@@ -1817,7 +1818,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		refreshStatus(ctx);
 	}
 
-	// session_start:重置影子缓存(会话内存态,#5 定案)+ 重载用户规则(配置改动新会话生效)
+	// session_start:重置级联计数(会话内存态)+ 重载用户规则(配置改动新会话生效)
 	// + 重建自保护基线(ADR-0001:受保护文件的会话启动快照)
 	pi.on("session_start", async (_event, ctx) => {
 		const report = state.reset(ctx.cwd);
@@ -1856,7 +1857,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		description: "Show Auto Mode status, or set it: /automode on|off",
 		handler: async (args, ctx) => {
 			const arg = args.trim().toLowerCase();
-			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
+			// 裸调用:只读状态展示,无副作用
 			if (arg === "") {
 				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${denyPathsHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;

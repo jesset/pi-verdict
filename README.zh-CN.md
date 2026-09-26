@@ -125,6 +125,7 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件,保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth,确认结束后落盘),protected-path ask 也入审计(#62);规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机;[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注);agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 - `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解);默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知;两开关同开时通知只出现一次
 - `classifierMinConfidence`(可选,[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**:低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`shadow` = 第二层只记录意见、由你裁决;`enforce` = 第二层全权裁决,但降级的 **deny 与 ask** 永不被自动放宽为 allow——fail-closed 未产生任何裁决,其获救裁决照常生效),否则直接问你。不低于地板时第一层自主。天然搭配:jev 打头 + haiku/flash 级兜底
+
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考:[docs/configuration.md](docs/configuration.md)。
 
 ### Jev 决策后端(实验性——[ADR-0003](docs/adr/0003-jev-decisions-adapter.md))

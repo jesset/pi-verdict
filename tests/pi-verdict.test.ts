@@ -1,5 +1,5 @@
 /**
- * pi-verdict 扩展桩测试:内置 floor / 用户规则优先级 / 分类器重试 / 影子缓存 / 命令语义
+ * pi-verdict 扩展桩测试:内置 floor / 用户规则优先级 / 分类器重试 / 命令语义
  * 全部离线:mock ExtensionAPI/ExtensionContext,无网络、无真实模型。
  * 用户规则经 PI_CODING_AGENT_DIR 指向临时目录的真实 JSON 配置驱动(非注入 mock)。
  * 会话装配统一走 session(cfg, opts)(配置 → harness → 装载,顺序约束内化);
