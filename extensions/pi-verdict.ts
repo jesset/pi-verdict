@@ -274,12 +274,12 @@ interface UserRules {
 	/** #63/#67: second-layer model spec (provider/id[:thinking]); consulted on demotion
 	 *  and fail-closed only. null = no second layer. */
 	classifierFallbackModel: string | null;
-	/** #67: does the second layer adjudicate cascaded calls ("enforce") or only record its
-	 *  opinion while the human decides ("shadow", default)? */
+	/** #67: does the second layer adjudicate cascaded calls ("enforce", default since
+	 *  0.12.0) or only record its opinion while the human decides ("shadow")? */
 	classifierFallbackMode: "shadow" | "enforce";
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "shadow" };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "enforce" };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -351,7 +351,7 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	notifyAllows: false,
 	classifierMinConfidence: null,
 	classifierFallbackModel: null,
-	classifierFallbackMode: "shadow",
+	classifierFallbackMode: "enforce",
 }, null, 2)}\n`;
 
 /**
@@ -430,7 +430,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				notifyAllows: raw.notifyAllows === true,
 				classifierFallbackModel: typeof raw.classifierFallbackModel === "string" && raw.classifierFallbackModel.trim() ? raw.classifierFallbackModel.trim() : null,
 				classifierMinConfidence: minConfOk ? minConfRaw : null,
-				classifierFallbackMode: fbModeRaw === "enforce" ? "enforce" : "shadow",
+				classifierFallbackMode: fbModeRaw === "shadow" ? "shadow" : "enforce",
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -1857,7 +1857,13 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	/** Status line audit hint (#54): shown only while the sink is active */
 	const auditHint = () => (state.audit ? `\naudit: on → ${state.audit.dir}` : "");
 	/** Status line cascade hint (#63/#67): shown while the floor or the fallback is configured */
-	const fallbackHint = () => (state.userRules.classifierMinConfidence !== null || state.userRules.classifierFallbackModel ? `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}` : "");
+	const fallbackHint = () => {
+		if (state.userRules.classifierMinConfidence === null && !state.userRules.classifierFallbackModel) return "";
+		const shadowNote = state.userRules.classifierFallbackModel && state.userRules.classifierFallbackMode === "shadow"
+			? "\nsecond layer is shadow (records only, never applies) — set classifierFallbackMode to \"enforce\" to activate it"
+			: "";
+		return `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}${shadowNote}`;
+	};
 
 	pi.registerCommand("automode", {
 		description: "Show Auto Mode status, or set it: /automode on|off",

@@ -1768,7 +1768,7 @@ describe("confidence floor + cascade (#67)", () => {
 
 	test("floor off by default: low-confidence verdicts stay autonomous, fallback idle", async () => {
 		clearAudit();
-		const h = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }];
 		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
@@ -1830,7 +1830,7 @@ describe("confidence floor + cascade (#67)", () => {
 
 	test("a high-confidence ask goes straight to the human — no fallback call", async () => {
 		clearAudit();
-		const h = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		const h = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
 		h.confirmAnswer = true;
@@ -1843,7 +1843,7 @@ describe("confidence floor + cascade (#67)", () => {
 
 	test("shadow + demotion: the human is asked, the fallback opinion recorded, verdicts untouched", async () => {
 		clearAudit();
-		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb" });
+		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }];
 		h.confirmAnswer = true;
@@ -1952,7 +1952,7 @@ describe("confidence floor + cascade (#67)", () => {
 
 	test("fail-closed: no fallback denies; shadow records the opinion; enforce adjudicates de novo", async () => {
 		clearAudit();
-		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb" });
+		const h2 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h2.findMap = { "mock/fb": { id: "fb-model" } };
 		h2.responses = [{ text: "" }, new Error("boom"), { text: "<verdict>allow</verdict> fb says fine" }];
 		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
@@ -2011,6 +2011,25 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(recs[0]).toMatchObject({ source: "fail-closed", verdict: "deny", degraded: false });
 		expect(recs[1]).toMatchObject({ source: "fail-closed", verdict: "deny", degraded: true });
 	});
+	test("fallback mode defaults to enforce: a configured second layer adjudicates without an explicit mode", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb" }); // no mode key
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> destructive" }];
+		const r = await toolCall(h, "bash", { command: "cat /etc/hosts" });
+		expect(r?.block).toBe(true); // enforce: the fb deny applies, no confirm
+		expect(h.confirms).toBe(0);
+		expect(readAudit()[0].fallback).toMatchObject({ mode: "enforce", verdict: "deny", effective: "deny" });
+	});
+	test("/automode hints activation when the second layer sits in shadow", async () => {
+		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		await h.commands["automode"].handler("", h.ctx);
+		const line = h.notifies.filter(([m]) => m.includes("confidence cascade")).map(([m]) => m)[0];
+		expect(line).toContain("confidence cascade");
+		expect(line).toContain("set classifierFallbackMode to \"enforce\" to activate");
+	});
+
 	test("/automode cascade summary counts a fail-closed rescue distinctly (#71)", async () => {
 		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
@@ -2038,7 +2057,7 @@ describe("confidence floor + cascade (#67)", () => {
 		await off.handlers.session_start({}, off.ctx);
 		await off.commands["automode"].handler("", off.ctx);
 		expect(off.notifies.some(([m]) => m.includes("confidence cascade"))).toBe(false);
-		const h = session({ classifierMinConfidence: 50, classifierFallbackModel: "mock/fb" });
+		const h = session({ classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }, { text: JEV_ALLOW_80 }];
 		h.confirmAnswer = true;

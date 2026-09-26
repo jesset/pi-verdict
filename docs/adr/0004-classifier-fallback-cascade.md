@@ -96,3 +96,17 @@ status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording
 **3. `/automode` cascade summary counts `rescued-allow`** (fail-closed origin the fallback ruled allow; `would-rescue-allow` in shadow) distinctly from `overruled`.
 
 **Costs:** enforce users gain ≈1 confirmation/day (the relaxed-ask population); cross-version audit analysis must treat fail-closed verdicts as version-dependent (before: always deny; after: the applied ruling).
+
+## Amendment 2026-09-26 (default mode)
+
+status: accepted · date: 2026-09-26 · supersedes: the shadow-by-default decision in this ADR's Decision section · grounding: the [production audit](../../research/classifier-cascade-production-audit.md).
+
+**`classifierFallbackMode` now defaults to `"enforce"`** (0.12.0). `shadow` remains available as an explicit opt-in. Users who configure `classifierFallbackModel` without a mode get an active second layer; `/automode` shows a one-line activation hint whenever a configured second layer sits in shadow.
+
+Rationale:
+
+- The shadow-first default protected an unvalidated enforce semantics. That validation has since happened: the production audit (1265 verdicts, two hosts) exercised every layer boundary, and #71 tightened the exposure surface to its minimum — the fallback can no longer auto-relax any negative first-layer verdict (deny or ask), so the worst-case failure mode shadow was guarding against is structurally closed.
+- The per-user observation period ("flip to enforce after ~2 weeks of shadow data") has diminishing value for new users: the cascade's behavior is now characterized; each user re-walking the shadow phase adds little signal.
+- Known cost, accepted: configurations that set `classifierFallbackModel` but no mode change semantics on upgrade (shadow → enforce, records-only → adjudicating). The population is small (the keys shipped days earlier) and the change is loud in the CHANGELOG.
+
+The flip criteria above are retained for their remaining use: an individual user deciding whether *their* second layer earns trust in their environment.

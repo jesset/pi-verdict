@@ -149,7 +149,10 @@ describe("parseJevConfidence (#63)", () => {
 });
 
 describe("verdict prefix contract (real adjudicate pipeline)", () => {
-	const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+	// constructed in beforeAll: PI_CODING_AGENT_DIR is only set at the file level by then —
+	// a module-load-time construction would read the developer's real ~/.pi/agent config
+	let state: SessionState;
+	beforeAll(() => { state = new SessionState(buildProtectedSet(TMP_AGENT, null)); });
 	const envFor = (text: string) => ({
 		cwd: "/proj",
 		hasUI: true,
