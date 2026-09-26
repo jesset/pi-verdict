@@ -1,4 +1,4 @@
-# 0004 - Classifier fallback cascade: uncertainty-gated second layer, shadow-first
+# 0004 - Classifier fallback cascade: uncertainty-gated second layer (shadow-first until the 2026-09-26 default-mode amendment)
 
 ---
 status: accepted
@@ -51,7 +51,7 @@ The literature's answer to exactly this tradeoff is the LLM cascade (FrugalGPT, 
 
 1. **Uncertainty-gated cascade, opt-in** via three config keys: `classifierFallbackModel` (`provider/id[:thinking]` spec, same format/validation as `classifierModel`; the feature is entirely off unless set), `classifierFallbackConfidence` (0–100, default 50), `classifierFallbackMode` (`"shadow"` | `"enforce"`, default `"shadow"`). Trigger precedence: first-layer **fail-closed → ask → jev confidence strictly below the threshold**. Resolution is config-only (no flag/env precedence) and never falls back to the session model — a second layer silently inheriting the session model would bill the same judgment twice, not add a second opinion.
 2. **Confidence is hard-required in the jev adapter**: the decisions contract guarantees `choice + probabilities + confidence` on choice answers, so a missing or non-numeric confidence in `verdictText` throws, joining the existing malformed → fail-closed discipline. Contract drift therefore fails closed — and the cascade's fail-closed trigger means the second layer still runs on those calls. `parseJevConfidence(reason)` is exported for the gate; it returns null for non-jev reasons, so **LLM first layers gate on ask/fail-closed only** (they carry no numeric confidence).
-3. **Shadow-first rollout**: in shadow (the default) the second layer runs on triggered calls and its outcome is recorded — an optional `fallback` sub-object on the audit record and session-memory counters surfaced via `/automode` — while the effective verdict never changes. This follows the #7 shadow-cache discipline (observe-only, session-memory stats, never an adjudication input).
+3. **Shadow-first rollout** (superseded by the 2026-09-26 default-mode amendment): in shadow (the default then) the second layer runs on triggered calls and its outcome is recorded — an optional `fallback` sub-object on the audit record and session-memory counters surfaced via `/automode` — while the effective verdict never changes. This follows the #7 shadow-cache discipline (observe-only, session-memory stats, never an adjudication input).
 4. **Enforce is a safety ratchet**: `effective = stricter(first, fallback)` with allow < ask < deny — the fallback may only escalate strictness, never relax. An escalation annotates the reason (`… (second-opinion classifier escalated allow to deny)`). The fallback receives the full `CLASSIFIER_SYSTEM + DENY_PATHS_HINT` prompt — unlike jev, it sees the denyPaths existence hint (with an LLM first layer, both layers see it).
 5. **Failure semantics (grill decision, user override)**: once the user configures a second layer, its silent failure must not quietly degrade the gate to single-layer. In enforce, a failed fallback call (timeout/credential/parse — 15s per attempt) or an unresolvable model **denies the triggered call** through the existing fail-closed lane, and the failure row carries `fallback.effective: "deny"` like every other enforce row; untriggered calls never consult the fallback and stay single-layer. In shadow a failure is recorded (`fallback.error`, errored counter) and changes nothing.
 6. **No ratchet exception for first-layer absence**: a no-model fail-closed (first layer never ran) triggers the cascade as well, but the ratchet means the resulting deny can never be relaxed by the fallback — the trigger is observability-only in enforce. An exception would hand adjudication to the second layer whenever the first layer is made to fail, including adversarially.
@@ -96,3 +96,17 @@ status: accepted · date: 2026-09-26 · supersedes: the single-carve-out wording
 **3. `/automode` cascade summary counts `rescued-allow`** (fail-closed origin the fallback ruled allow; `would-rescue-allow` in shadow) distinctly from `overruled`.
 
 **Costs:** enforce users gain ≈1 confirmation/day (the relaxed-ask population); cross-version audit analysis must treat fail-closed verdicts as version-dependent (before: always deny; after: the applied ruling).
+
+## Amendment 2026-09-26 (default mode)
+
+status: accepted · date: 2026-09-26 · supersedes: the shadow-by-default decision in this ADR's Decision section · grounding: the [production audit](../../research/classifier-cascade-production-audit.md).
+
+**`classifierFallbackMode` now defaults to `"enforce"`** (0.12.0). `shadow` remains available as an explicit opt-in. Users who configure `classifierFallbackModel` without a mode get an active second layer; `/automode` shows a one-line activation hint whenever a configured second layer sits in shadow.
+
+Rationale:
+
+- The shadow-first default protected an unvalidated enforce semantics. That validation has since happened: the production audit (1265 verdicts, two hosts) exercised every layer boundary, and #71 tightened the exposure surface to its minimum — the fallback can no longer auto-relax any negative first-layer verdict (deny or ask), so the worst-case failure mode shadow was guarding against is structurally closed.
+- The per-user observation period ("flip to enforce after ~2 weeks of shadow data") has diminishing value for new users: the cascade's behavior is now characterized; each user re-walking the shadow phase adds little signal.
+- Known cost, accepted: configurations that set `classifierFallbackModel` but no mode change semantics on upgrade (shadow → enforce, records-only → adjudicating). The population is small (the keys shipped days earlier) and the change is loud in the CHANGELOG.
+
+The flip criteria above are retained for their remaining use: an individual user deciding whether *their* second layer earns trust in their environment.
