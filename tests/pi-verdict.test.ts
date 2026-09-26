@@ -2022,7 +2022,8 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(readAudit()[0].fallback).toMatchObject({ mode: "enforce", verdict: "deny", effective: "deny" });
 	});
 	test("an invalid classifierFallbackMode lands on the conservative shadow with a warning", async () => {
-		const h = session({ classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforc" as unknown });
+		clearAudit();
+		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforc" as unknown });
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		await h.handlers.session_start({}, h.ctx);
 		const warnings = h.notifies.filter(([, l]) => l === "warning").map(([m]) => m).join("\n");

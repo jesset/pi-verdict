@@ -430,7 +430,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				notifyAllows: raw.notifyAllows === true,
 				classifierFallbackModel: typeof raw.classifierFallbackModel === "string" && raw.classifierFallbackModel.trim() ? raw.classifierFallbackModel.trim() : null,
 				classifierMinConfidence: minConfOk ? minConfRaw : null,
-				classifierFallbackMode: fbModeRaw === "shadow" ? "shadow" : "enforce",
+				classifierFallbackMode: fbModeRaw === undefined ? "enforce" : fbModeRaw === "enforce" ? "enforce" : "shadow", // invalid values land on the conservative shadow (standing invalid-config precedent); the key-less default is enforce
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
