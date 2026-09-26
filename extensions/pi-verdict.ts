@@ -333,7 +333,6 @@ function userConfigPath(): string {
 }
 
 const USER_CONFIG_TEMPLATE = `${JSON.stringify({
-	_hint: "pi-verdict user rules — full reference: https://github.com/jesset/pi-verdict/blob/main/docs/configuration.md. deny beats allow. denyPaths: protected paths, any touch asks for your confirmation (non-interactive degrades to deny); the pre-filled starter list is your declaration, edit or empty freely. ignoreTools: tool names outside the command/file families (e.g. todo, web_search, MCP/custom tools) that skip adjudication entirely — allow with zero model calls; entries naming covered tools (bash/read/write/edit/grep/find/ls/powershell) are inert: those stay governed by the deny floor and your allow/deny rules; the pre-filled starter list is a recommendation (side-effect-free tools observed in production audits), edit or empty freely. builtinDenyFloor=false disables the built-in danger floor at your own risk (the self-protection layer always stays on). classifierModel pins the classifier (provider/id, e.g. zai/glm-5.3-flash; empty = session model). classifierFallbackModel (optional) adds a second-layer classifier consulted only when the first layer is uncertain (ask / fail-closed / jev confidence below classifierFallbackConfidence, default 50); mode shadow (default) observes without changing verdicts, enforce escalates strictness only. toggleShortcut sets the master-switch toggle key (null or empty disables). This file is part of the permission gate: agent-side modification is denied — edit it manually outside pi. Changes apply to new sessions.",
 	allow: ["^ls\\b"],
 	deny: [],
 	denyPaths: [
@@ -361,9 +360,12 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 }, null, 2)}\n`;
 
 /**
- * 加载用户规则。首启生成带注释模板(allow 内示例默认仅 ^ls\b 可用,其余为说明占位);
- * 配置缺失/损坏/字段非法一律回退空规则(安全默认,不失效),非法正则收集回报,
- * 非法 toggleShortcut 收集警告文案(与 skipped 同经 session_start 发出)。
+ * Load user rules. First run generates a template (bare keys + starter lists, no
+ * embedded prose — the full reference is docs/configuration.md; only ^ls\b in the
+ * allow example is live, the rest are placeholders). A missing/malformed/invalid
+ * config falls back to empty rules (safe default — the gate never disables);
+ * invalid regexes are collected and reported, an invalid toggleShortcut collects
+ * a warning text (both surface via session_start alongside `skipped`).
  */
 function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning: string | null } {
 	try {

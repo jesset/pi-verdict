@@ -144,6 +144,8 @@
 
 ## 四、改进建议（按优先级）
 
+> **裁决记录（2026-09-26，与作者共同评估）**：建议 1 已落地（PR #70，`ignoreTools`）；建议 2/3 合并修订为 issue #71（ask 放宽 carve-out + fail-closed 审计语义，ADR-0004 amendment）；建议 2 的文档口径部分由 #72 覆盖（`_hint` 整体移除——口径错误与旧键名残留均仅存在于 `_hint`，docs/configuration.md 本就正确）；建议 4 已裁决**不做**——`ignoreTools` 已物理消除校准污染的最大来源（ask_user_question / memory_write / todo 移出级联），剩余低置信工具（write / Agent / memory_forget）的低置信换来 floor 送审恰是高 floor 策略的正确路由，信号纯度论点不再成立；建议 5 已裁决**现在移除**（issue #73）——离线 sim（3.2%）与运行时 would-hit（3.3%）双证据一致，远低于任何激活门槛，运行时探针与极简定位不符。补充裁决：fail-closed 时第二层的 allow 属 de novo 首裁而非放宽（第一层缺席而非给出否定性判定），维持自动放行；audit 记录的 `shadow` 字段随缓存一并移除。
+
 > 定性修正（2026-09-25，用户决策）：floor 阈值是用户主权参数，「回落阈值以降低触发率」不是目标。高 floor 是有意为之的策略——对第一层判断智能存疑，将需要更高智能的判断交给第二层（2.2 的两例凭据访问是该策略的正面证据）。以下建议均在该策略前提下排序。
 
 1. **无副作用工具豁免：走 `ignoreTools`（PR #45），不做内置集合**：生产数据的结论不变——33% 的触发不含智能判断需求、第二层对这些工具零收紧。但落地机制应复用 PR #45 的 `ignoreTools`（用户声明的工具豁免清单：跳过全部裁决、零模型调用、位于自保护层与 deny floor 之后、对 covered 工具惰性），而非在代码里内置固定集合：内置豁免与项目的 user-sovereignty 立场冲突（no built-in passthrough，每条豁免都是用户自己的声明，与「无内置白名单」同构），且边界决策（是否含 `memory_write` 的跨会话持久化、`memory_forget` 的删除语义）归用户配置而非代码。`todo` / `ask_user_question` / `memory_*` 均为 uncovered 工具，`ignoreTools` 直接生效；豁免位于分类器之前，3.2 中 14 例「第一层判 ask、第二层翻回 allow」的退化场景不复存在（第一层根本不被调用）。前置条件是合并 PR #45——作者对 2026-09-19 评论给出的 a/b 路径尚未响应，可按评论预埋的路径 b 由维护者摘取（squash 保留署名）。合并后在配置中声明（本报告的推荐集合，排除 `memory_forget`——删除操作保留审查）：`"ignoreTools": ["todo", "ask_user_question", "memory_write", "memory_search"]`。
