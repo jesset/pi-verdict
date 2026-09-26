@@ -42,11 +42,6 @@
  * handler maps verdicts to UI (notify/confirm/select) by source × degraded and
  * runs IntegrityWatch (ADR-0001) as a pre-pipeline gate-integrity check.
  *
- * Shadow cache (observe-only, #7): gray-zone verdicts are replayed against a
- * double-key LRU(128) to measure would-be hit rate; recorded, never applied
- * (verdicts always come from the model), accumulating pi field data for the
- * "should a serving cache ship" question (#5 decision).
- *
  * fail-closed: classifier exception/timeout/contract violation → deny; in
  * non-interactive modes (no UI) ask → deny.
  *
@@ -60,8 +55,7 @@
  *                                   suffix (pi-native --model syntax; default off
  *                                   = thinking explicitly disabled)
  *   PI_AUTO_MODE_MODEL             env-var form of the above
- *   --auto-mode-debug              notify on every verdict (incl. allows); shadow
- *                                   cache annotation on
+ *   --auto-mode-debug              notify on every verdict (incl. allows)
  *   PI_AUTO_MODE_DEBUG=1           env-var form of the above (kept for compat)
  *   <agentDir>/config/pi-verdict.json   user rules: { allow: [regex], deny: [regex],
  *                                   denyPaths: [path], builtinDenyFloor,
@@ -74,9 +68,9 @@
  * Known prototype simplifications (see README "Status & limitations"):
  *   - no built-in bash allowlist; danger detection is regex floor (no AST parsing)
  *     — unknown shapes go to the classifier
- *   - serving verdict cache deferred (#5 decision): currently observe-only shadow
- *     telemetry, revisit once measured; no circuit breaker (revisit signals =
- *     deny-storm cost blowup / long non-interactive runs)
+ *   - no serving verdict cache (#5 decision; runtime shadow telemetry removed #73 —
+ *     re-evaluation belongs to offline replay tooling); no circuit breaker (revisit
+ *     signals = deny-storm cost blowup / long non-interactive runs)
  *   - AGENTS.md not passed to the classifier as downweighted intent evidence
  *   - denyPaths bash extraction is token-level: command substitution, base64-
  *     embedded paths and external script contents produce no hit signal — those
@@ -1303,125 +1297,6 @@ async function classifyWithModel(
 }
 
 // ============================================================================
-// 影子缓存:双键命中率遥测(observe-only,#7;设计定案见 #5)
-//
-// 键设计(#5 定案):
-//   commandKey = hash(toolName + JSON.stringify(input) + cwd)  —— 不做命令规范化
-//   contextKey = hash(最近 5 条 sanitized user 行,与 transcript 同源同窗口)
-// 行为:
-//   每次灰区裁决前查 would-be 命中;真实模型 allow/deny 回写(LRU 128,上下文变更覆写);
-//   ask 与 fail-closed 不入缓存;命中时对比缓存裁决与本次模型裁决(反事实一致性)。
-//   永不生效:裁决永远来自模型,此处只记录。
-// ============================================================================
-
-const SHADOW_LRU_MAX = 128;
-
-type ShadowVerdict = "allow" | "deny";
-interface ShadowEntry {
-	ctxKey: string;
-	verdict: ShadowVerdict;
-}
-
-/** FNV-1a 32 位摘要:仅会话内键用,非密码学 */
-function fnv1a(s: string): string {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < s.length; i++) {
-		h ^= s.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return (h >>> 0).toString(16);
-}
-
-interface ShadowStats {
-	gray: number; // 灰区裁决总数(含 ask/fail-closed)
-	hits: number; // 双键命中(would-be)
-	missNoEntry: number;
-	missCtx: number;
-	cmdRepeats: number; // 命令键重复(忽略 context 的上界口径)
-	divergeDangerous: number; // 命中且缓存 allow → 模型 deny(若缓存生效会放过本次拦截)
-	divergeConservative: number; // 命中且缓存 deny → 模型 allow
-}
-
-type ShadowProbe =
-	| { result: "hit"; entry: ShadowEntry }
-	| { result: "no-entry" }
-	| { result: "ctx-changed"; prevVerdict: ShadowVerdict };
-
-class ShadowCache {
-	private lru = new Map<string, ShadowEntry>();
-	private seen = new Set<string>();
-	readonly stats: ShadowStats = { gray: 0, hits: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, divergeDangerous: 0, divergeConservative: 0 };
-
-	/** 会话重置:清空 LRU 与统计(#5 定案:会话内存态) */
-	reset(): void {
-		this.lru.clear();
-		this.seen.clear();
-		Object.assign(this.stats, { gray: 0, hits: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, divergeDangerous: 0, divergeConservative: 0 });
-	}
-
-	/** 灰区裁决前置查询(仅遥测,不影响裁决) */
-	probe(commandKey: string, ctxKey: string): ShadowProbe {
-		this.stats.gray++;
-		if (this.seen.has(commandKey)) this.stats.cmdRepeats++;
-		else this.seen.add(commandKey);
-		const entry = this.lru.get(commandKey);
-		if (!entry) {
-			this.stats.missNoEntry++;
-			return { result: "no-entry" };
-		}
-		if (entry.ctxKey !== ctxKey) {
-			this.stats.missCtx++;
-			return { result: "ctx-changed", prevVerdict: entry.verdict };
-		}
-		this.stats.hits++;
-		// LRU 位置刷新,保留原裁决(命中即重放)
-		this.lru.delete(commandKey);
-		this.lru.set(commandKey, entry);
-		return { result: "hit", entry };
-	}
-
-	/** 真实模型 allow/deny 裁决后回写;ask 与 fail-closed 不入 */
-	record(commandKey: string, ctxKey: string, verdict: ShadowVerdict): void {
-		this.lru.delete(commandKey);
-		this.lru.set(commandKey, { ctxKey, verdict });
-		if (this.lru.size > SHADOW_LRU_MAX) {
-			const oldest = this.lru.keys().next().value;
-			if (oldest !== undefined) this.lru.delete(oldest);
-		}
-	}
-
-	/** 命中后的反事实一致性计数(仅与可缓存裁决对比;ask/fail-closed 不可比) */
-	countDivergence(cached: ShadowVerdict, actual: ShadowVerdict): void {
-		if (cached === actual) return;
-		if (cached === "allow" && actual === "deny") this.stats.divergeDangerous++;
-		else this.stats.divergeConservative++;
-	}
-
-	/** /automode 展示用摘要 */
-	summary(): string {
-		const s = this.stats;
-		if (s.gray === 0) return "shadow cache: no gray-zone verdicts yet this session";
-		const rate = ((100 * s.hits) / s.gray).toFixed(1);
-		return `shadow cache: gray ${s.gray} · two-key hits ${s.hits} (${rate}%) · miss no-entry ${s.missNoEntry}/ctx-changed ${s.missCtx} · cmd repeats ${s.cmdRepeats} · divergence dangerous ${s.divergeDangerous}/conservative ${s.divergeConservative}`;
-	}
-}
-
-function shadowCommandKey(toolName: string, input: Record<string, unknown>, cwd: string): string {
-	return fnv1a(`${toolName}\u0000${JSON.stringify(input)}\u0000${cwd}`);
-}
-
-function shadowContextKey(host: PipelineHost): string {
-	const { userLines } = collectTranscriptParts(host);
-	return fnv1a(userLines.slice(-MAX_USER_MESSAGES).join("\u0000"));
-}
-
-function shadowTag(probe: ShadowProbe): string {
-	if (probe.result === "hit") return `(shadow cache: would-hit ${probe.entry.verdict})`;
-	if (probe.result === "ctx-changed") return `(shadow cache: miss:context-changed, previous ${probe.prevVerdict})`;
-	return `(shadow cache: miss:no-entry)`;
-}
-
-// ============================================================================
 // Confidence cascade stats (#63/#67: observe-first, session-memory state; the #7 discipline)
 // ============================================================================
 
@@ -1507,7 +1382,6 @@ export interface AuditRecord {
 	/** #62: protected-path asks are recorded too — their user answers grade the
 	 *  denyPaths rules; rule allow/deny verdicts remain unaudited. */
 	source: "model" | "fail-closed" | "protected-path";
-	shadow: string;
 	degraded: boolean;
 	/** #62 ground truth: the user's answer to an interactive ask confirm. Present only
 	 *  on records whose confirm actually ran; headless/degraded asks omit it. */
@@ -1588,7 +1462,6 @@ export class AuditLog {
  */
 export class SessionState {
 	readonly prot: ProtectedSet;
-	readonly shadow = new ShadowCache();
 	readonly fallback = new FallbackCascade();
 	userRules: UserRules;
 	audit: AuditLog | null;
@@ -1613,7 +1486,6 @@ export class SessionState {
 		const loaded = loadUserRules();
 		this.userRules = loaded.rules;
 		this.denyPathBases = anchorDenyPaths(loaded.rules.denyPaths, cwd); // anchored to the session cwd, once (ADR-0002)
-		this.shadow.reset();
 		this.fallback.reset();
 		this.audit = this.makeAudit(loaded.rules);
 		return { skipped: loaded.skipped, shortcutWarning: loaded.shortcutWarning };
@@ -1638,14 +1510,13 @@ export type VerdictSource = "rule" | "protected-path" | "classifier" | "fail-clo
 
 /** 判定管线的输出值对象:一次 tool_call 的完整裁决。detail 为 UI-only 明文(受保护
  *  路径仅入本地确认框,ADR-0002 零泄漏承诺——reason 与通知永不携带);degraded 标记
- *  ask 在无 UI 会话的降级产物;shadow 为影子缓存标注(仅 debug 呈现拼接用)。 */
+ *  ask 在无 UI 会话的降级产物。 */
 export interface Verdict {
 	verdict: "allow" | "ask" | "deny";
 	reason: string;
 	detail?: string;
 	source: VerdictSource;
 	degraded: boolean;
-	shadow?: string;
 	/** #62: pending audit record for an interactive ask — adjudicate defers the append so
 	 *  the handler can attach the user's answer after the confirm resolves. The handler
 	 *  owns the single finalize: append with userAnswer/answeredAt, or without them when
@@ -1766,7 +1637,7 @@ export async function adjudicate(
 	// appends immediately. Recording stays observe-only — it never changes a verdict; write
 	// failures stay fail-soft in the sink and surface once via drainWarning.
 	const actionLine = toolCallLine(call.toolName, call.input);
-	const buildRecord = (v: Pick<AuditRecord, "verdict" | "reason" | "source" | "degraded">, raw: ClassifierOutcome["auditRaw"] | null, shadow: string): AuditRecord => ({
+	const buildRecord = (v: Pick<AuditRecord, "verdict" | "reason" | "source" | "degraded">, raw: ClassifierOutcome["auditRaw"] | null): AuditRecord => ({
 		ts: new Date().toISOString(),
 		sessionId: env.host.getSessionId(),
 		cwd: env.cwd,
@@ -1777,18 +1648,17 @@ export async function adjudicate(
 		thinking: raw?.thinking ?? null,
 		transcript: raw?.transcript ?? null,
 		rawResponse: raw?.rawResponse ?? null,
-		shadow,
 		...v,
 	});
 
 	if (rule.verdict === "ask") {
 		// denyPaths 命中 → ask 终局(ADR-0002):声明者本人裁决例外;无 UI 降级为 deny
 		if (env.hasUI) {
-			const ppRecord: AuditRecord = { ...buildRecord({ verdict: "ask", reason: rule.reason ?? "", source: "protected-path", degraded: false }, null, "-"), detail: rule.detail };
+			const ppRecord: AuditRecord = { ...buildRecord({ verdict: "ask", reason: rule.reason ?? "", source: "protected-path", degraded: false }, null), detail: rule.detail };
 			return { verdict: "ask", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: false, ...(state.audit ? { pendingAudit: ppRecord } : {}) };
 		}
 		// headless: the ask degrades to deny — recorded like the gray-zone rule (the effective post-degradation verdict is what lands in the record)
-		state.audit?.append({ ...buildRecord({ verdict: "deny", reason: rule.reason ?? "", source: "protected-path", degraded: true }, null, "-"), detail: rule.detail });
+		state.audit?.append({ ...buildRecord({ verdict: "deny", reason: rule.reason ?? "", source: "protected-path", degraded: true }, null), detail: rule.detail });
 		return { verdict: "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: true };
 	}
 
@@ -1806,8 +1676,7 @@ export async function adjudicate(
 		// a ruling. When an enforcing fallback rescues the call, the record's top level
 		// carries the applied verdict; a shadow rescue (no effective) keeps the deny.
 		const effAskHeadless = eff?.verdict === "ask" && !env.hasUI;
-		const fcRecord = buildRecord({ verdict: eff ? (effAskHeadless ? "deny" : eff.verdict) : "deny", reason: eff?.reason ?? reason, source: "fail-closed", degraded: effAskHeadless }, null, "-");
-		if (cascade.fb) fcRecord.fallback = cascade.fb;
+		const fcRecord = buildRecord({ verdict: eff ? (effAskHeadless ? "deny" : eff.verdict) : "deny", reason: eff?.reason ?? reason, source: "fail-closed", degraded: effAskHeadless }, null);		if (cascade.fb) fcRecord.fallback = cascade.fb;
 		if (eff?.verdict === "ask" && env.hasUI) {
 			return { verdict: "ask", reason: eff.reason, source: eff.source, degraded: false, ...(state.audit ? { pendingAudit: fcRecord } : {}) };
 		}
@@ -1817,21 +1686,7 @@ export async function adjudicate(
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
-	// 影子缓存(observe-only):前置查询 would-be 命中,不改变任何裁决
-	const cmdKey = shadowCommandKey(call.toolName, call.input, env.cwd);
-	const ctxKey = shadowContextKey(env.host);
-	const probe = state.shadow.probe(cmdKey, ctxKey);
-
 	const outcome = await classifyWithModel(env.host, env.signal, env.complete, resolved.model, actionLine, resolved.thinking, state.userRules.denyPaths.length > 0);
-
-	// 影子回记:真实模型 allow/deny 入缓存;ask 与 fail-closed 不入(#5 定案);
-	// 命中且本次为可缓存裁决时,对比反事实一致性
-	if (outcome.source === "model" && outcome.verdict !== "ask") {
-		if (probe.result === "hit") state.shadow.countDivergence(probe.entry.verdict, outcome.verdict);
-		state.shadow.record(cmdKey, ctxKey, outcome.verdict);
-	}
-
-	const shadow = shadowTag(probe);
 
 	// #67 cascade: a confidence-floor demotion, or a classifier fail-closed outcome
 	// (the first layer produced no verdict)
@@ -1852,19 +1707,18 @@ export async function adjudicate(
 	// deny-rate statistics (26 observed rows, 25 actually allowed); shadow rescues keep it.
 	const appliedAskHeadless = !env.hasUI && effVerdict === "ask";
 	const fcRescued = cascade.effective !== undefined && outcome.source === "fail-closed";
-	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : fcRescued ? effVerdict : outcome.verdict, reason: fcRescued ? effReason : outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null, shadow);
-	if (cascade.demoted) grayRecord.demoted = true;
+	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : fcRescued ? effVerdict : outcome.verdict, reason: fcRescued ? effReason : outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null);	if (cascade.demoted) grayRecord.demoted = true;
 	if (cascade.fb) grayRecord.fallback = cascade.fb;
 	// #62: an interactive ask defers the append to the handler finalize (ground truth);
 	// every other outcome appends immediately as before
 	if (effVerdict === "ask" && env.hasUI) {
-		return { verdict: "ask", reason: effReason, source: effSource, degraded: false, shadow, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
+		return { verdict: "ask", reason: effReason, source: effSource, degraded: false, ...(state.audit ? { pendingAudit: grayRecord } : {}) };
 	}
 	state.audit?.append(grayRecord);
-	if (effVerdict === "allow") return { verdict: "allow", reason: effReason, source: effSource, degraded: false, shadow };
-	if (effVerdict === "deny") return { verdict: "deny", reason: effReason, source: effSource, degraded: false, shadow };
+	if (effVerdict === "allow") return { verdict: "allow", reason: effReason, source: effSource, degraded: false };
+	if (effVerdict === "deny") return { verdict: "deny", reason: effReason, source: effSource, degraded: false };
 	// ask:无 UI 降级为 deny(ask 降级,CONTEXT.md 词条)
-	return { verdict: "deny", reason: effReason, source: effSource, degraded: true, shadow };
+	return { verdict: "deny", reason: effReason, source: effSource, degraded: true };
 }
 
 // ============================================================================
@@ -1887,7 +1741,7 @@ export interface AutoModeDeps {
 export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	pi.registerFlag("auto-mode", { description: "Enable Auto Mode (rules + model classifier gating for tool calls)", type: "boolean", default: true });
 	pi.registerFlag("auto-mode-model", { description: "Classifier model as provider/id[:thinking] (pi --model syntax; default: inherit session model)", type: "string" });
-	pi.registerFlag("auto-mode-debug", { description: "Notify every verdict incl. allows, with shadow-cache annotation", type: "boolean", default: false });
+	pi.registerFlag("auto-mode-debug", { description: "Notify every verdict incl. allows", type: "boolean", default: false });
 
 	let enabled = pi.getFlag("auto-mode") !== false;
 	const debug = pi.getFlag("auto-mode-debug") === true || process.env.PI_AUTO_MODE_DEBUG === "1";
@@ -1908,13 +1762,13 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	async function presentVerdict(v: Verdict, action: string, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
 		if (v.verdict === "allow") {
 			// #60 (CONTEXT.md 通知): classifier allows surface via notifyAllows OR
-			// debug — exactly one notification either way; the shadow suffix stays
+			// debug — exactly one notification either way
 			// debug-only; mechanical passes (rule echo, protected-path confirm) stay
 			// debug-only — notifications carry judgment, the audit log carries completeness
 			if (debug) {
 				if (v.source === "rule") ctx.ui.notify(`🛡️ allow (rule): ${action}`, "info");
 				else if (v.source === "protected-path") ctx.ui.notify("🛡️ allow (protected-path confirm)", "info");
-				else ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}${v.shadow ? " " + v.shadow : ""}`, "info");
+				else ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}`, "info");
 			} else if (state.userRules.notifyAllows && v.source === "classifier") {
 				ctx.ui.notify(`🛡️ allow (classifier): ${v.reason}\n  ${action}`, "info");
 			}
@@ -1934,7 +1788,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
 				return { block: true, reason: blockedReason("rule", v.reason) };
 			}
-			ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}${debug && v.shadow ? " " + v.shadow : ""}`, "warning");
+			ctx.ui.notify(`🛡️ Auto Mode blocked: ${v.reason}\n  ${action}`, "warning");
 			return { block: true, reason: blockedReason("classifier", v.reason) };
 		}
 		// ask → 人工确认;非交互已在管线内降级,能走到这里的必有 UI
@@ -1999,12 +1853,12 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	const fallbackHint = () => (state.userRules.classifierMinConfidence !== null || state.userRules.classifierFallbackModel ? `\n${state.fallback.summary(state.userRules.classifierFallbackMode)}` : "");
 
 	pi.registerCommand("automode", {
-		description: "Show Auto Mode status and shadow-cache stats, or set it: /automode on|off",
+		description: "Show Auto Mode status, or set it: /automode on|off",
 		handler: async (args, ctx) => {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用(含影子缓存统计行)
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${state.shadow.summary()}${denyPathsHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${denyPathsHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -2015,7 +1869,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				const head = next
 					? `🛡️ Auto Mode enabled${changed ? "" : " (unchanged)"}: tool calls adjudicated by rules + classifier`
 					: `Auto Mode disabled${changed ? "" : " (unchanged)"}: tool calls execute directly`;
-				ctx.ui.notify(`${head}\n${state.shadow.summary()}${fallbackHint()}`, "info");
+				ctx.ui.notify(`${head}\n${fallbackHint()}`, "info");
 				return;
 			}
 			// 未知参数:严格拒绝并列出用法(大小写已归一化)

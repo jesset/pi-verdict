@@ -674,64 +674,6 @@ describe("classifier", () => {
 	});
 });
 
-// ── 5. 影子缓存(observe-only:行为零变化 + 统计正确) ────
-
-function shadowStats(h: Harness): Record<string, number> {
-	h.notifies.length = 0;
-	h.commands.automode.handler("", h.ctx); // 裸调用 = 只读状态
-	const line = h.notifies[0]?.[0].split("\n")[1] ?? "";
-	const out: Record<string, number> = { gray: 0, hits: 0, rate: 0, missNoEntry: 0, missCtx: 0, cmdRepeats: 0, dangerous: 0, conservative: 0 };
-	const m = line.match(/gray (\d+).*hits (\d+) \(([\d.]+)%\).*no-entry (\d+)\/ctx-changed (\d+).*repeats (\d+).*dangerous (\d+)\/conservative (\d+)/);
-	if (m) [out.gray, out.hits, out.rate, out.missNoEntry, out.missCtx, out.cmdRepeats, out.dangerous, out.conservative] =
-		[+m[1], +m[2], +m[3], +m[4], +m[5], +m[6], +m[7], +m[8]];
-	return out;
-}
-
-describe("shadow cache (observe-only)", () => {
-	test("rule verdicts never enter the shadow stats", async () => {
-		const h = session({});
-		await toolCall(h, "write", { path: "/proj/a.ts", content: "x" }); // 规则 allow(路径层)
-		expect(shadowStats(h).gray).toBe(0);
-	});
-	test("repeat gray call: would-hit counted, model still called (never short-circuits)", async () => {
-		const h = session({}); userMsg(h, "任务");
-		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
-		const r1 = await toolCall(h, "bash", { command: "cargo build" });
-		const r2 = await toolCall(h, "bash", { command: "cargo build" });
-		const s = shadowStats(h);
-		expect(s.gray).toBe(2);
-		expect(s.hits).toBe(1);
-		expect(h.calls.length).toBe(2); // observe-only:模型两次都真实调用
-		expect(r1).toBeUndefined();
-		expect(r2).toBeUndefined();
-	});
-	test("new user message → context-changed miss and overwrite", async () => {
-		const h = session({}); userMsg(h, "任务");
-		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
-		await toolCall(h, "bash", { command: "cargo build" });
-		userMsg(h, "新指令");
-		await toolCall(h, "bash", { command: "cargo build" });
-		expect(shadowStats(h).missCtx).toBe(1);
-	});
-	test("ask and fail-closed never enter the cache", async () => {
-		const h = session({});
-		h.responses = [{ text: "<verdict>ask</verdict> risky" }];
-		await toolCall(h, "mcp__x__y", { a: 1 });
-		await toolCall(h, "mcp__x__y", { a: 1 });
-		expect(shadowStats(h).missNoEntry).toBe(2);
-	});
-	test("LRU(128) evicts the oldest entry", async () => {
-		const h = session({}); userMsg(h, "任务");
-		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
-		for (let i = 0; i < 129; i++) await toolCall(h, "mcp__e__t", { i });
-		await toolCall(h, "mcp__e__t", { i: 0 });   // evicted → no-entry
-		await toolCall(h, "mcp__e__t", { i: 128 }); // recent → hit
-		const s = shadowStats(h);
-		expect(s.missNoEntry).toBeGreaterThanOrEqual(130);
-		expect(s.hits).toBe(1);
-	});
-});
-
 // ── 6. /automode 命令语义(显式 on/off + 只读状态) ───────
 
 describe("/automode command", () => {
@@ -739,7 +681,6 @@ describe("/automode command", () => {
 		const h = session({});
 		h.commands.automode.handler("", h.ctx);
 		expect(h.notifies[0][0]).toContain("Auto Mode: on");
-		expect(h.notifies[0][0]).toContain("shadow cache");
 		expect(h.notifies[0][0]).toContain("Usage");
 	});
 	test("on/off are idempotent, annotated (未变化) when same", async () => {
@@ -834,14 +775,14 @@ describe("toggle shortcut", () => {
 // ── 7. debug 通知标注 ───────────────────────────────────
 
 describe("debug annotations", () => {
-	test("--auto-mode-debug: allows notify with shadow would-hit tag", async () => {
+	test("--auto-mode-debug: every allow notifies with reason and action", async () => {
 		const h = session({}, { debug: true });
 		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
 		await toolCall(h, "bash", { command: "cargo build" });
 		await toolCall(h, "bash", { command: "cargo build" });
 		const allowNotifies = h.notifies.filter(([m]) => m.includes("allow (classifier)"));
 		expect(allowNotifies.length).toBe(2);
-		expect(allowNotifies[1][0]).toContain("would-hit");
+		expect(allowNotifies[1][0]).toContain("cargo build");
 	});
 });
 
@@ -1592,7 +1533,6 @@ describe("audit verdict records (#54)", () => {
 		expect(rec.transcript).toContain("ls -la /tmp");
 		expect(rec.rawResponse).toBe("<verdict>allow</verdict> ok");
 		expect(rec.degraded).toBe(false);
-		expect(rec.shadow).toContain("shadow cache");
 		expect(typeof rec.ts).toBe("string");
 		expect(new Date(rec.ts).toString()).not.toBe("Invalid Date");
 	});
@@ -1644,7 +1584,7 @@ describe("audit verdict records (#54)", () => {
 		expect(r2).toBeUndefined(); // confirm defaults to allow
 		const recs = readAudit();
 		expect(recs.length).toBe(1);
-		expect(recs[0]).toMatchObject({ verdict: "ask", source: "protected-path", degraded: false, userAnswer: "allowed", model: null, shadow: "-" });
+		expect(recs[0]).toMatchObject({ verdict: "ask", source: "protected-path", degraded: false, userAnswer: "allowed", model: null });
 		expect(recs[0].detail).toContain("sensitive-53");
 		expect(typeof recs[0].answeredAt).toBe("string");
 	});
@@ -2129,7 +2069,7 @@ describe("notifyAllows (#60)", () => {
 		expect(allowNotifies(h).length).toBe(0);
 	});
 
-	test("notifyAllows: one classifier-allow notification with reason and action, no shadow suffix", async () => {
+	test("notifyAllows: one classifier-allow notification with reason and action", async () => {
 		const h = session({ notifyAllows: true });
 		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 66% (confidence 49%; ask 33%, deny 1%)" }];
 		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
@@ -2139,7 +2079,6 @@ describe("notifyAllows (#60)", () => {
 		expect(infos[0][0]).toContain("allow (classifier)");
 		expect(infos[0][0]).toContain("jev: allow 66%");
 		expect(infos[0][0]).toContain("ls -la /tmp");
-		expect(infos[0][0]).not.toContain("shadow cache");
 	});
 
 	test("mechanical passes never notify under notifyAllows", async () => {
@@ -2154,24 +2093,24 @@ describe("notifyAllows (#60)", () => {
 		expect(allowNotifies(h2).length).toBe(0);
 	});
 
-	test("debug alone keeps today's behavior (incl. shadow suffix)", async () => {
+	test("debug alone notifies on classifier allows", async () => {
 		const h = session({}, { debug: true });
 		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
 		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
 		expect(r).toBeUndefined();
 		const infos = allowNotifies(h);
 		expect(infos.length).toBe(1);
-		expect(infos[0][0]).toContain("shadow cache");
+		expect(infos[0][0]).toContain("allow (classifier)");
 	});
 
-	test("both switches on: exactly one notification, shadow suffix present", async () => {
+	test("both switches on: exactly one notification", async () => {
 		const h = session({ notifyAllows: true }, { debug: true });
 		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
 		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
 		expect(r).toBeUndefined();
 		const infos = allowNotifies(h);
 		expect(infos.length).toBe(1);
-		expect(infos[0][0]).toContain("shadow cache");
+		expect(infos[0][0]).toContain("allow (classifier)");
 	});
 
 	test("deny notifications are unaffected by the preference", async () => {
