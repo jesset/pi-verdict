@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Fixed
 
-- The early fail-closed path (no classifier model available) misflagged the returned verdict's `degraded` on headless fallback denies (#77): `!env.hasUI` marked every headless deny as degraded, but `degraded` is defined as the **ask-degradation product** marker — a fallback that rules `deny` never passed through an ask, so it is not a degradation product regardless of UI state. Now `eff.verdict === "ask"` (matching the audit record's `effAskHeadless`, so return and record agree). No behavior change surfaces: presentation and block reasons read only `source`. Two doc comments claiming presentation maps "by source × degraded" corrected to source-only — the drift was the soil the bug grew in.
+- The early fail-closed path (no classifier model available) misflagged the returned verdict's `degraded` on headless fallback denies (#77): `!env.hasUI` marked every headless deny as degraded, but `degraded` is defined as the **ask-degradation product** marker — a fallback that rules `deny` never passed through an ask, so it is not a degradation product regardless of UI state. Now it reuses the audit record's `effAskHeadless` predicate — one named predicate, so return and record cannot drift apart again. No behavior change surfaces: presentation and block reasons read only `source`. Four doc comments claiming presentation maps "by source × degraded" corrected to source-only — the stale wording had drifted from the implementation.
 
 ### Changed
 
