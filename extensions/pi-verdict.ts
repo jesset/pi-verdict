@@ -1430,14 +1430,15 @@ interface FallbackStats {
 	agreed: number; // fallback verdict equals the first layer's (fail-closed defaults to deny)
 	overruled: number; // fallback verdict differs (enforce applies it; shadow observes the would-be)
 	errored: number; // fallback unresolvable or its call failed
+	rescued: number; // #71: fail-closed origin the fallback ruled allow (enforce: actually allowed; shadow: would)
 }
 
 class FallbackCascade {
-	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0 };
+	readonly stats: FallbackStats = { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescued: 0 };
 
 	/** Session reset (#7 discipline: session-memory state) */
 	reset(): void {
-		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0 });
+		Object.assign(this.stats, { triggered: 0, agreed: 0, overruled: 0, errored: 0, rescued: 0 });
 	}
 
 	note(first: "allow" | "ask" | "deny" | null, fb: "allow" | "ask" | "deny" | null): void {
@@ -1447,6 +1448,7 @@ class FallbackCascade {
 			return;
 		}
 		// A fail-closed origin produced no first-layer verdict; its default outcome is deny
+		if (first === null && fb === "allow") this.stats.rescued++;
 		if ((first ?? "deny") !== fb) this.stats.overruled++;
 		else this.stats.agreed++;
 	}
@@ -1455,7 +1457,7 @@ class FallbackCascade {
 	summary(mode: "shadow" | "enforce"): string {
 		const s = this.stats;
 		if (s.triggered === 0) return "confidence cascade: not triggered this session";
-		return `confidence cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "overruled" : "would-overrule"} ${s.overruled} · errored ${s.errored}`;
+		return `confidence cascade (${mode}): triggered ${s.triggered} · agreed ${s.agreed} · ${mode === "enforce" ? "overruled" : "would-overrule"} ${s.overruled} · ${mode === "enforce" ? "rescued-allow" : "would-rescue-allow"} ${s.rescued} · errored ${s.errored}`;
 	}
 }
 
@@ -1689,8 +1691,9 @@ interface CascadeResult {
  *  - demotion with no fallback → ask the human
  *  - shadow → the fallback records its opinion; a demotion still asks the human, a
  *    fail-closed deny stands
- *  - enforce → the fallback adjudicates de novo, with one carve-out: a demoted first-layer
- *    deny may not be flipped to an automatic allow — the human decides
+ *  - enforce → the fallback adjudicates de novo, with one carve-out family (#71): a demoted
+ *    first-layer deny or ask may not be auto-relaxed to an allow — the human decides; a
+ *    fail-closed origin has no first-layer verdict, so any fallback ruling applies
  *  - fallback failure/unresolvable on a cascaded call → ask the human (the tier that was
  *    to adjudicate is down); headless degrades downstream */
 async function runConfidenceCascade(
@@ -1730,10 +1733,12 @@ async function runConfidenceCascade(
 	state.fallback.note(first?.verdict ?? null, outcome.verdict);
 	const fb: FallbackAudit = { ...base, model: resolved.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs: Date.now() - start, error: null };
 	if (mode === "shadow") return { ...demotedMark, fb, ...shadowApplied };
-	// The one carve-out on second-layer authority: a demoted first-layer deny may not
-	// become an automatic allow — the human decides (headless degrades to deny downstream)
-	if (trigger.kind === "demotion" && first?.verdict === "deny" && outcome.verdict === "allow") {
-		return { demoted: true, fb: { ...fb, effective: "ask" }, effective: { verdict: "ask", reason: `${outcome.reason} (first layer said deny at confidence ${trigger.confidence}%; second opinion allows — your call)`, source: "classifier" } };
+	// The carve-outs on second-layer authority (#71): it may not auto-relax a negative
+	// first-layer verdict — a demoted deny OR ask that the fallback would allow goes to
+	// the human (headless degrades to deny downstream). A fail-closed origin has no
+	// first-layer verdict to relax; its fallback allow is a de novo ruling and stands.
+	if (trigger.kind === "demotion" && (first?.verdict === "deny" || first?.verdict === "ask") && outcome.verdict === "allow") {
+		return { demoted: true, fb: { ...fb, effective: "ask" }, effective: { verdict: "ask", reason: `${outcome.reason} (first layer said ${first!.verdict} at confidence ${trigger.confidence}%; second opinion allows — your call)`, source: "classifier" } };
 	}
 	return { ...demotedMark, fb: { ...fb, effective: outcome.verdict }, effective: { verdict: outcome.verdict, reason: outcome.reason, source: "classifier" } };
 }
@@ -1797,7 +1802,11 @@ export async function adjudicate(
 		// shadow records its opinion and the deny stands
 		const cascade = await runConfidenceCascade(state, env, null, { kind: "fail-closed" }, state.userRules.denyPaths.length > 0, actionLine);
 		const eff = cascade.effective;
-		const fcRecord = buildRecord({ verdict: "deny", reason, source: "fail-closed", degraded: false }, null, "-");
+		// #71: a fail-closed layer emits no negative verdict — its deny is a default, not
+		// a ruling. When an enforcing fallback rescues the call, the record's top level
+		// carries the applied verdict; a shadow rescue (no effective) keeps the deny.
+		const effAskHeadless = eff?.verdict === "ask" && !env.hasUI;
+		const fcRecord = buildRecord({ verdict: eff ? (effAskHeadless ? "deny" : eff.verdict) : "deny", reason: eff?.reason ?? reason, source: "fail-closed", degraded: effAskHeadless }, null, "-");
 		if (cascade.fb) fcRecord.fallback = cascade.fb;
 		if (eff?.verdict === "ask" && env.hasUI) {
 			return { verdict: "ask", reason: eff.reason, source: eff.source, degraded: false, ...(state.audit ? { pendingAudit: fcRecord } : {}) };
@@ -1837,9 +1846,13 @@ export async function adjudicate(
 	// #62/#67: top-level keeps first-layer semantics (corpus comparability); the applied
 	// verdict lives in fallback.effective (enforce rows). Non-interactive asks of any
 	// origin — native, demoted, escalated — record as their effective deny, the
-	// pre-existing ask-degradation convention.
+	// pre-existing ask-degradation convention. #71 exception: a fail-closed first layer
+	// rescued by an enforcing fallback records the applied verdict at the top level —
+	// a fail-closed layer emits no negative verdict, so its default deny would distort
+	// deny-rate statistics (26 observed rows, 25 actually allowed); shadow rescues keep it.
 	const appliedAskHeadless = !env.hasUI && effVerdict === "ask";
-	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : outcome.verdict, reason: outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null, shadow);
+	const fcRescued = cascade.effective !== undefined && outcome.source === "fail-closed";
+	const grayRecord = buildRecord({ verdict: appliedAskHeadless ? "deny" : fcRescued ? effVerdict : outcome.verdict, reason: fcRescued ? effReason : outcome.reason, source: outcome.source, degraded: appliedAskHeadless }, outcome.auditRaw ?? null, shadow);
 	if (cascade.demoted) grayRecord.demoted = true;
 	if (cascade.fb) grayRecord.fallback = cascade.fb;
 	// #62: an interactive ask defers the append to the handler finalize (ground truth);

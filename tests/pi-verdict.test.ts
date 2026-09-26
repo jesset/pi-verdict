@@ -1821,6 +1821,7 @@ describe("confidence floor + cascade (#67)", () => {
 	const JEV_ALLOW_50 = "<verdict>allow</verdict> jev: allow 92% (confidence 50%; ask 7%, deny 1%)";
 	const JEV_ALLOW_80 = "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)";
 	const JEV_DENY_29 = "<verdict>deny</verdict> jev: deny 64% (confidence 29%; allow 36%)";
+	const JEV_ASK_49 = "<verdict>ask</verdict> jev: ask 51% (confidence 49%; allow 40%, deny 10%)";
 
 	beforeAll(clearAudit);
 	afterAll(clearAudit);
@@ -1966,6 +1967,27 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(r2?.block).toBe(true);
 		expect(readAudit()[1]).toMatchObject({ verdict: "deny", degraded: true, demoted: true });
 	});
+	test("carve-out (#71): a demoted ask + fallback allow asks the human; headless degrades to deny", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.responses = [{ text: JEV_ASK_49 }, { text: "<verdict>allow</verdict> safe to run" }];
+		h.confirmAnswer = true;
+		const r = await toolCall(h, "bash", { command: "cargo build" });
+		expect(r).toBeUndefined(); // the human allows — never an automatic allow
+		expect(h.confirms).toBe(1);
+		expect(h.confirmMsgs[0]).toContain("first layer said ask");
+		const recs = readAudit();
+		expect(recs[0]).toMatchObject({ verdict: "ask", demoted: true, userAnswer: "allowed" });
+		expect(recs[0].fallback).toMatchObject({ verdict: "allow", effective: "ask" });
+		const h2 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h2.findMap = { "mock/fb": { id: "fb-model" } };
+		h2.ctx.hasUI = false;
+		h2.responses = [{ text: JEV_ASK_49 }, { text: "<verdict>allow</verdict> safe to run" }];
+		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
+		expect(r2?.block).toBe(true);
+		expect(readAudit()[1]).toMatchObject({ verdict: "deny", degraded: true, demoted: true });
+	});
 
 	test("enforce fallback failure/unresolvable on a demotion falls to the human (headless → deny)", async () => {
 		clearAudit();
@@ -1995,14 +2017,16 @@ describe("confidence floor + cascade (#67)", () => {
 		h2.responses = [{ text: "" }, new Error("boom"), { text: "<verdict>allow</verdict> fb says fine" }];
 		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
 		expect(r2?.block).toBe(true); // shadow: the deny stands
-		expect(readAudit()[0]).toMatchObject({ source: "fail-closed" });
+		expect(readAudit()[0]).toMatchObject({ source: "fail-closed", verdict: "deny" }); // #71: no enforce rescue → the deny is real
 		expect(readAudit()[0].fallback).toMatchObject({ triggeredBy: "fail-closed", verdict: "allow" });
 		const h3 = session({ audit: true, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
 		h3.findMap = { "mock/fb": { id: "fb-model" } };
 		h3.responses = [{ text: "" }, new Error("boom"), { text: "<verdict>allow</verdict> fb says fine" }];
 		const r3 = await toolCall(h3, "bash", { command: "cargo build" });
 		expect(r3).toBeUndefined(); // rescued by the second layer
-		expect(readAudit()[1]).toMatchObject({ source: "fail-closed" });
+		// #71: an enforced rescue records the applied verdict at the top level — a
+		// fail-closed layer emits no negative verdict, its deny was only the default
+		expect(readAudit()[1]).toMatchObject({ source: "fail-closed", verdict: "allow" });
 		expect(readAudit()[1].fallback).toMatchObject({ verdict: "allow", effective: "allow" });
 	});
 
@@ -2016,12 +2040,24 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(r).toBeUndefined();
 		const recs = readAudit();
 		expect(recs.length).toBe(1);
-		expect(recs[0]).toMatchObject({ source: "fail-closed" });
+		expect(recs[0]).toMatchObject({ source: "fail-closed", verdict: "allow" }); // #71: applied verdict at the top level
 		expect(recs[0].fallback).toMatchObject({ triggeredBy: "fail-closed", verdict: "allow", effective: "allow" });
 		const h2 = session({ audit: true });
 		h2.ctx.model = null;
 		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
 		expect(r2?.block).toBe(true);
+	});
+	test("/automode cascade summary counts a fail-closed rescue distinctly (#71)", async () => {
+		const h = session({ classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		h.findMap = { "mock/fb": { id: "fb-model" } };
+		h.ctx.model = null;
+		h.responses = [{ text: "<verdict>allow</verdict> fb says fine" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		await h.commands["automode"].handler("", h.ctx);
+		const line = h.notifies.filter(([m]) => m.includes("confidence cascade")).map(([m]) => m)[0];
+		expect(line).toContain("(enforce)");
+		expect(line).toContain("triggered 1");
+		expect(line).toContain("rescued-allow 1");
 	});
 
 	test("invalid classifierMinConfidence warns; the old key reports the rename", async () => {
