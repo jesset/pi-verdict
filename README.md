@@ -170,6 +170,10 @@ Honest framing: pi-automode and pi-verdict have **converged on the same architec
 
 ## Pipeline
 
+![pi-verdict security gate — tool-call adjudication pipeline](docs/diagrams/security-pipeline.en.svg)
+
+*Diagram source & regeneration: [docs/diagrams/](docs/diagrams/README.md). Pipeline as of v0.12 — the ASCII version below is the text-faithful equivalent.*
+
 ```
 tool_call
   │

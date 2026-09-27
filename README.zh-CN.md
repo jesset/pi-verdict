@@ -170,6 +170,10 @@ jev 的校准 confidence 正是置信地板的判定依据——搭配第二层�
 
 ## 判定管线
 
+![pi-verdict 安全门禁——工具调用判定管线](docs/diagrams/security-pipeline.zh.svg)
+
+*图源与再生成：[docs/diagrams/](docs/diagrams/README.md)。管线基准：v0.12——下方 ASCII 为文本等价版。*
+
 ```
 tool_call
   │

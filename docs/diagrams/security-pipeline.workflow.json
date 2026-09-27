@@ -1,0 +1,374 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "pi-verdict Security Gate Pipeline",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "output": "security-pipeline.en.html",
+    "views": [
+      {
+        "id": "main",
+        "label": "Main path",
+        "focus": [
+          "call",
+          "master",
+          "tamper",
+          "selfprot",
+          "floor",
+          "userrules",
+          "classifier",
+          "verdict",
+          "run"
+        ],
+        "note": "From tool_call interception to execution — one full adjudication."
+      },
+      {
+        "id": "deny-sources",
+        "label": "Denial sources",
+        "focus": [
+          "tamper",
+          "selfprot",
+          "floor",
+          "userrules",
+          "verdict",
+          "block"
+        ],
+        "note": "Tamper detection, self-protection, the deny floor, user deny, and fail-closed all end in block."
+      },
+      {
+        "id": "human-loop",
+        "label": "Human in the loop",
+        "focus": [
+          "userrules",
+          "classifier",
+          "verdict",
+          "block"
+        ],
+        "note": "denyPaths terminal asks and classifier asks converge at the verdict hub; headless degrades to deny."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "agent",
+      "label": "Agent Runtime (pi)"
+    },
+    {
+      "id": "preflight",
+      "label": "Session Preflight"
+    },
+    {
+      "id": "rules",
+      "label": "Deterministic Rule Layer"
+    },
+    {
+      "id": "semantic",
+      "label": "Semantic Adjudication"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intercept",
+      "label": "Intercept · Integrity",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "pipeline",
+      "label": "Adjudication Pipeline (rules → classifier → exits)",
+      "fromCol": 2,
+      "toCol": 5,
+      "variant": "security"
+    }
+  ],
+  "groups": [
+    {
+      "id": "pre_pipeline",
+      "label": "Pre-pipeline",
+      "lane": "preflight",
+      "fromCol": 1,
+      "toCol": 2
+    },
+    {
+      "id": "rule_pipeline",
+      "label": "Pipeline · Rule Layer",
+      "lane": "rules",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "security"
+    },
+    {
+      "id": "semantic_layer",
+      "label": "Semantic Adjudication",
+      "lane": "semantic",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "call",
+    "master",
+    "tamper",
+    "selfprot",
+    "floor",
+    "userrules",
+    "classifier",
+    "verdict",
+    "run"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "call"
+    ],
+    "allowedTerminals": [
+      "run",
+      "block"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "call",
+      "lane": "agent",
+      "col": 0,
+      "type": "external",
+      "label": "Tool Call",
+      "sublabel": "tool_call hook · reviewed first",
+      "width": 170
+    },
+    {
+      "id": "block",
+      "lane": "agent",
+      "col": 3,
+      "type": "security",
+      "label": "Block",
+      "sublabel": "block + reason back to agent",
+      "width": 170
+    },
+    {
+      "id": "run",
+      "lane": "agent",
+      "col": 5,
+      "type": "backend",
+      "label": "Execute Tool",
+      "sublabel": "handed back to pi",
+      "width": 170
+    },
+    {
+      "id": "master",
+      "lane": "preflight",
+      "col": 1,
+      "type": "security",
+      "label": "Master Switch",
+      "sublabel": "off = everything passes",
+      "width": 170
+    },
+    {
+      "id": "tamper",
+      "lane": "preflight",
+      "col": 2,
+      "type": "security",
+      "label": "Tamper Detection",
+      "sublabel": "watched files re-verified",
+      "tag": "ADR-0001",
+      "width": 170
+    },
+    {
+      "id": "selfprot",
+      "lane": "rules",
+      "col": 2,
+      "type": "security",
+      "label": "Self-Protection",
+      "sublabel": "gate's own files → hard deny",
+      "tag": "no exemption",
+      "width": 170
+    },
+    {
+      "id": "floor",
+      "lane": "rules",
+      "col": 3,
+      "type": "security",
+      "label": "Built-in Deny Floor",
+      "sublabel": "danger regexes + S0–S5 paths",
+      "width": 170
+    },
+    {
+      "id": "userrules",
+      "lane": "rules",
+      "col": 4,
+      "type": "backend",
+      "label": "User Rules",
+      "sublabel": "deny → denyPaths·ask → allow",
+      "tag": "pi-verdict.json",
+      "width": 170
+    },
+    {
+      "id": "classifier",
+      "lane": "semantic",
+      "col": 4,
+      "type": "cloud",
+      "label": "Model Classifier",
+      "sublabel": "transcript + hint · contract",
+      "tag": "fail-closed",
+      "width": 170
+    },
+    {
+      "id": "verdict",
+      "lane": "semantic",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Verdict · Human Confirm",
+      "sublabel": "ask → confirm · headless → deny",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "call-master",
+      "from": "call",
+      "to": "master",
+      "role": "main"
+    },
+    {
+      "id": "master-bypass",
+      "from": "master",
+      "to": "call",
+      "label": "off = pass through, gate skipped",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "master-tamper",
+      "from": "master",
+      "to": "tamper",
+      "label": "on",
+      "role": "main"
+    },
+    {
+      "id": "tamper-selfprot",
+      "from": "tamper",
+      "to": "selfprot",
+      "label": "baseline intact",
+      "role": "main"
+    },
+    {
+      "id": "tamper-call",
+      "from": "tamper",
+      "to": "call",
+      "label": "tamper · fail-closed",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "selfprot-block",
+      "from": "selfprot",
+      "to": "block",
+      "label": "hit · hard deny",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "selfprot-floor",
+      "from": "selfprot",
+      "to": "floor",
+      "label": "no hit",
+      "role": "main"
+    },
+    {
+      "id": "floor-block",
+      "from": "floor",
+      "to": "block",
+      "label": "deny",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "floor-userrules",
+      "from": "floor",
+      "to": "userrules",
+      "label": "pass",
+      "role": "main"
+    },
+    {
+      "id": "userrules-block",
+      "from": "userrules",
+      "to": "block",
+      "label": "deny",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "userrules-verdict",
+      "from": "userrules",
+      "to": "verdict",
+      "label": "denyPaths hit → terminal ask",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "userrules-run",
+      "from": "userrules",
+      "to": "run",
+      "label": "allow / ignoreTools",
+      "role": "branch"
+    },
+    {
+      "id": "userrules-classifier",
+      "from": "userrules",
+      "to": "classifier",
+      "label": "gray zone",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "classifier-verdict",
+      "from": "classifier",
+      "to": "verdict",
+      "role": "main"
+    },
+    {
+      "id": "verdict-run",
+      "from": "verdict",
+      "to": "run",
+      "label": "allow · confirmed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verdict-block",
+      "from": "verdict",
+      "to": "block",
+      "label": "deny · declined / headless",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Fail-closed by default",
+      "items": [
+        "error / timeout / bad contract → deny",
+        "demoted deny/ask can't relax (#71)",
+        "headless asks degrade to deny"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Minimal input (ADR-0002)",
+      "items": [
+        "no tool results in transcripts (#22)",
+        "path names never reach the model",
+        "audit dir: agent read+write denied"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Exemption boundaries",
+      "items": [
+        "master switch = only exemption",
+        "self-protection survives any config",
+        "allowlists are always user-claimed"
+      ]
+    }
+  ]
+}
