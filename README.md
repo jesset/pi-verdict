@@ -6,9 +6,9 @@
 [![npm](https://img.shields.io/npm/v/pi-verdict)](https://www.npmjs.com/package/pi-verdict)
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://pi.dev)
 
-**pi-verdict is a minimal permission gate for [pi](https://pi.dev) in the style of Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
+**pi-verdict is a minimal permission gate for [pi](https://pi.dev), inspired by Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
 
-- Minimal — just 2k lines of code
+- Minimal — a ~2k-line single-file core (plus a small bundled jev adapter)
 - Built-in danger rules and your own allow/deny rules settle the clear cases first, at zero latency
 - Everything else goes to a model classifier that sees the conversation context
 - Any uncertainty or failure fails closed; nothing ever runs silently
@@ -58,6 +58,8 @@ pi --extension ./extensions/pi-verdict.ts
 
 ```
 
+Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
+
 ### Hosts
 
 pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — it self-anchors to whichever agent tree it is installed in, and follows the extension copy's own location on dual-install machines. On omp 18 the classifier's completion call falls back to the pi-ai compat API (still fail-closed). Details: [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi).
@@ -94,6 +96,7 @@ pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi]
     "~/.profile",
     "~/.gnupg",
     "~/.mc",
+    "~/.kube",
     "~/.zshrc",
     "~/.bashrc"
   ],
@@ -122,7 +125,7 @@ pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi]
 - `classifierModel: "typesafe/jev-latest"` opts into the bundled **jev decisions adapter** — gray-zone verdicts via TypeSafe's jev (OpenRouter by default, or TypeSafe's official API directly with `PI_VERDICT_JEV_TRANSPORT=typesafe`); experimental, see [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
 - `audit: true` records every **gray-zone adjudication** (the full transcript sent to the classifier, its raw response, the parsed verdict) as JSONL under `~/.pi/agent/verdicts/<sessionId>.jsonl` — one file per session, the 20 most recent kept. Interactive asks also record your answer (`userAnswer` ground truth, written after the confirm resolves), and protected-path asks are recorded too (#62); rule allow/deny stays unaudited. Local-only and full-fidelity (protected-path plaintext may appear — it never leaves your machine; [ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) boundary note); the agent can neither read nor write the directory. `/automode` shows the audit state and path while on
 - `notifyAllows: true` notifies on every **classifier allow** (reason + action line — e.g. jev's probability breakdown); default `false` keeps passes silent. Mechanical passes (your own allow rules, protected-path confirms) never notify; with both switches on the notification appears once
-- `classifierMinConfidence` (optional, [ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)) sets the **confidence floor**: a jev verdict below it is demoted — cascaded to `classifierFallbackModel` if set (`enforce`, the default = the second layer adjudicates, except a demoted **deny or ask** can never be auto-relaxed to an allow — a fail-closed layer emitted no verdict, so its rescue stands; `shadow` = records its opinion only and you are asked — `/automode` hints the activation switch), otherwise asked of you directly. At/above the floor the first layer is autonomous. A natural pairing: jev first + a haiku/flash-class fallback
+- `classifierMinConfidence` (optional, [ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)) sets the **confidence floor**: a jev verdict below it is demoted — cascaded to `classifierFallbackModel` if set (`enforce`, the default = the second layer adjudicates; a demoted **deny or ask** can never be auto-relaxed to an allow; a fail-closed layer emitted no verdict, so its rescue stands; `shadow` = records its opinion only and you are asked — `/automode` hints the activation switch), otherwise asked of you directly. At/above the floor the first layer is autonomous. A natural pairing: jev first + a haiku/flash-class fallback
 
 No built-in allowlist — every "always allow" claim is yours ([why](docs/configuration.md#why-no-built-in-allowlist)). Full reference: [docs/configuration.md](docs/configuration.md).
 
@@ -148,9 +151,7 @@ jev's calibrated confidence is exactly what the confidence floor keys on — pai
 The gate's own files — the config and the installed extension copy — are **user-editable only**: writes from inside the gate hard-deny (reads pass); your editor never passes through the gate, the sudoers/visudo precedent.
 
 - **Not disableable by any config** — `builtinDenyFloor: false` and user `allow` rules cannot touch this layer
-- **Tamper detection** as the backstop: watched files are snapshotted at `session_start` and re-verified before every verdict — a changed extension copy is auto-restored and the session goes fail-closed; a changed config gets one explicit keep/restore confirm ([ADR-0001](docs/adr/0001-self-protection-layer.md) for the differential-disposal rationale)
-
-Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
+- **Tamper detection** as the backstop: watched files are snapshotted at `session_start` and re-verified before every verdict — a changed extension copy is auto-restored and the session goes fail-closed; a changed config gets one explicit keep/restore confirm when a UI is available (headless auto-restores, same as the extension copy; [ADR-0001](docs/adr/0001-self-protection-layer.md) for the differential-disposal rationale)
 
 ---
 
