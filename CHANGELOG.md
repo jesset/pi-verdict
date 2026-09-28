@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [0.13.0] - 2026-09-28
+## [0.12.1] - 2026-09-28
 
 ### Added
 
@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Changed
 
-- Confidence-floor demotion criterion (#81): demotion now requires the first-layer model to **be a decisions model** (protocol identity) **and** a parseable confidence segment — numeric confidence is a decisions-contract property, not a vendor trait, so an LLM whose free-text reason happens to match the `jev: … (confidence N%…)` shape no longer demotes (0.12.0 would mis-demotion it). Normal paths are byte-identical; only the pathological path changes, from mis-demotion to correct no-demotion. ⚠️ Corpus comparability: pre-0.13.0 corpora may contain demoted rows with LLM first layers emitting jev-shaped reasons; such rows cannot exist from 0.13.0 — cross-version analysis must treat the demoted population as criterion-dependent.
+- Confidence-floor demotion criterion (#81): demotion now requires the first-layer model to **be a decisions model** (protocol identity) **and** a parseable confidence segment — numeric confidence is a decisions-contract property, not a vendor trait, so an LLM whose free-text reason happens to match the `jev: … (confidence N%…)` shape no longer demotes (0.12.0 would mis-demotion it). Normal paths are byte-identical; only the pathological path changes, from mis-demotion to correct no-demotion. ⚠️ Corpus comparability: pre-0.12.1 corpora may contain demoted rows with LLM first layers emitting jev-shaped reasons; such rows cannot exist from 0.12.1 — cross-version analysis must treat the demoted population as criterion-dependent.
 
 ### Fixed
 
