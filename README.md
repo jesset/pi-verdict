@@ -39,10 +39,10 @@ Full statement in [docs/security-principles.md](docs/security-principles.md).
 
 ## Screenshots
 
-![Demo: protected-path ask declined](docs/demo.gif)
+![Demo: protected-path ask declined](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/demo.gif)
 
-![Automode Status](docs/images/status.png)
-![Ask Permission](docs/images/asked.png)
+![Automode Status](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/images/status.png)
+![Ask Permission](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/images/asked.png)
 
 ## Quick start
 
@@ -170,7 +170,7 @@ Honest framing: pi-automode and pi-verdict have **converged on the same architec
 
 ## Pipeline
 
-![pi-verdict security gate — tool-call adjudication pipeline](docs/diagrams/security-pipeline.en.svg)
+![pi-verdict security gate — tool-call adjudication pipeline](https://cdn.jsdelivr.net/gh/jesset/pi-verdict@main/docs/diagrams/security-pipeline.en.svg)
 
 *Diagram source & regeneration: [docs/diagrams/](docs/diagrams/README.md). Pipeline as of v0.12 — the ASCII version below is the text-faithful equivalent.*
 

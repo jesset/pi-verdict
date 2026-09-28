@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Fixed
 
 - README: add `~/.kube` to the example `denyPaths` in both languages; sync README.zh-CN.md with README.md (cache-sim outcome incl. #73, omp-18 completion **fallback** wording, master-switch / self-protection terminology per CONTEXT.md, Jev section wording) and repair a broken in-page anchor; both READMEs now state the headless branch of config-tamper disposal (no UI → auto-restore, same as the extension copy), move the `pi ≥ 0.84` requirement to Quick start, clarify the ADR-0004 `enforce` carve-outs as parallel rules, and soften the Claude Code auto-mode attribution to "inspired by" (mechanism-inverse framing stays in maintainer docs); zh punctuation unified to full-width sentence punctuation.
+- README asset references (demo GIF, status/ask screenshots, pipeline SVGs) switched from repo-relative paths to absolute URLs — raw.githubusercontent.com for bitmaps, jsDelivr's /gh endpoint for SVGs (raw serves SVG as `text/plain` + `nosniff`, which breaks direct `<img>` embedding). Root cause: pi.dev renders the tarball README against jsDelivr's npm endpoint, and the intentionally-minimal `files` whitelist ships no `docs/`, so relative asset paths 404'd there (npmjs.com rewrites them to the GitHub repo HEAD and was unaffected). The tarball stays minimal — a security gate's publish artifact is part of its trust surface. CI gains a step asserting every README asset URL resolves against the SHA under test.
 
 ## [0.12.0] - 2026-09-26
 

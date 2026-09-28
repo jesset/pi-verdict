@@ -29,4 +29,23 @@ jobs:
       - name: Test
         run: bun test
 
+      # README image assets live outside the npm tarball (minimal `files`
+      # whitelist) and are referenced by absolute URL (raw.githubusercontent
+      # for bitmaps, jsDelivr /gh for SVGs). Rewrite @main to the SHA under
+      # test so PRs validate their own state, then assert each URL resolves.
+      - name: README asset URLs resolve
+        run: |
+          set -euo pipefail
+          grep -hoE 'https://(raw\.githubusercontent\.com|cdn\.jsdelivr\.net/gh)/[^) ]+' README.md README.zh-CN.md \
+          | sort -u \
+          | sed -E \
+              -e "s#(raw\.githubusercontent\.com/jesset/pi-verdict)/main#\1/${GITHUB_SHA}#" \
+              -e "s#(cdn\.jsdelivr\.net/gh/jesset/pi-verdict)@main#\1@${GITHUB_SHA}#" \
+          | while read -r url; do
+              if ! curl -fsSI --max-time 30 "$url" >/dev/null; then
+                echo "::error::broken README asset: $url"
+                exit 1
+              fi
+            done
+
 # trigger re-registration: touch v2
