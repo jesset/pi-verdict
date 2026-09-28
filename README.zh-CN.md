@@ -39,10 +39,10 @@ pi-verdict 补上这道缺失的门禁，由模型基于上下文和你的意图
 
 ## 截图
 
-![演示：受保护路径 ask 被拒绝](docs/demo.gif)
+![演示：受保护路径 ask 被拒绝](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/demo.gif)
 
-![Automode Status](docs/images/status.png)
-![Ask Permission](docs/images/asked.png)
+![Automode Status](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/images/status.png)
+![Ask Permission](https://raw.githubusercontent.com/jesset/pi-verdict/main/docs/images/asked.png)
 
 ## 快速开始
 
@@ -170,7 +170,7 @@ jev 的校准 confidence 正是置信地板的判定依据——搭配第二层�
 
 ## 判定管线
 
-![pi-verdict 安全门禁——工具调用判定管线](docs/diagrams/security-pipeline.zh.svg)
+![pi-verdict 安全门禁——工具调用判定管线](https://cdn.jsdelivr.net/gh/jesset/pi-verdict@main/docs/diagrams/security-pipeline.zh.svg)
 
 *图源与再生成：[docs/diagrams/](docs/diagrams/README.md)。管线基准：v0.12——下方 ASCII 为文本等价版。*
 
