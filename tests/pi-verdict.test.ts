@@ -626,6 +626,112 @@ describe("classifier model resolution", () => {
 	});
 });
 
+// ── 3b. classifier mode feedback (#81: jev vs LLM differences surface as runtime feedback) ──
+
+describe("classifier mode feedback (#81)", () => {
+	test("floor + LLM: one neutral warning at the first gray-zone resolution (explicit and self-reflection paths), never a demotion", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierMinConfidence: 50 }); // no classifierModel → self-reflection session model (LLM)
+		const w = await toolCall(h, "write", { path: "src/new.ts" }); // rule allow: lazy resolution — no warning yet
+		expect(w).toBeUndefined();
+		expect(h.notifies.some(([m, l]) => l === "warning" && m.includes("classifierMinConfidence has no effect"))).toBe(false);
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 66% (confidence 49%; ask 33%, deny 1%)" }]; // LLM free text happens to embed the jev format
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined(); // no demotion — the floor is inert for an LLM layer
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("classifierMinConfidence has no effect"));
+		expect(warns.length).toBe(1);
+		expect(warns[0][0]).toContain("non-decisions classifier");
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" }); // warn-once latch
+		expect(h.notifies.filter(([m, l]) => l === "warning" && m.includes("classifierMinConfidence has no effect")).length).toBe(1);
+		expect(readAudit().every((rec: any) => rec.demoted === undefined)).toBe(true);
+		const h2 = session({ classifierModel: "mock/glm", classifierMinConfidence: 50 }); // explicit LLM model
+		h2.findMap = { "mock/glm": { id: "glm" } };
+		h2.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		await toolCall(h2, "bash", { command: "ls -la /tmp" });
+		expect(h2.notifies.some(([m, l]) => l === "warning" && m.includes("classifierMinConfidence has no effect"))).toBe(true);
+	});
+
+	test("typesafe/jev-latest unresolvable → specialized wording (registerProvider / keys), not the generic miss — on both layers", async () => {
+		const h = session({ classifierModel: "typesafe/jev-latest" });
+		h.findMap = {}; // registry miss → falls back to the session model with one warning
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		const warn = h.notifies.find(([m, l]) => l === "warning" && m.includes("unavailable"))?.[0] ?? "";
+		expect(warn).toContain("typesafe/jev-latest");
+		expect(warn).toContain("registerProvider");
+		expect(warn).toContain("OPENROUTER_API_KEY");
+		expect(warn).toContain("TYPESAFE_API_KEY");
+		expect(warn).not.toContain("not found or no configured auth");
+		const h2 = session({ classifierModel: "prov/ghost" }); // generic wording survives for other models
+		h2.findMap = {};
+		h2.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h2, "bash", { command: "cargo build" });
+		const warn2 = h2.notifies.find(([m, l]) => l === "warning" && m.includes("unavailable"))?.[0] ?? "";
+		expect(warn2).toContain("not found or no configured auth");
+		const h3 = session({ classifierMinConfidence: 100, classifierFallbackModel: "typesafe/jev-latest" }); // fallback layer, same treatment
+		h3.ctx.model = { id: "mock/jev", api: "jev-decisions" };
+		h3.findMap = {};
+		h3.confirmAnswer = true; // below-floor demotion → asked of the human
+		h3.responses = [{ text: "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)" }];
+		await toolCall(h3, "bash", { command: "ls -la /tmp" });
+		const warn3 = h3.notifies.find(([m, l]) => l === "warning" && m.includes("fallback model"))?.[0] ?? "";
+		expect(warn3).toContain("registerProvider");
+		expect(warn3).toContain("OPENROUTER_API_KEY");
+	});
+
+	test("typesafe/jev-latest:low → suffix warning once; the call still runs on jev; audit thinking is null (#81)", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierModel: "typesafe/jev-latest:low" });
+		h.findMap = { "typesafe/jev-latest": { id: "jev-latest", api: "jev-decisions" } };
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)" }, { text: "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.calls[0].model).toBe("jev-latest");
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("thinking suffix"));
+		expect(warns.length).toBe(1);
+		expect(warns[0][0]).toContain('"low"');
+		await toolCall(h, "bash", { command: "ls -la /tmp" }); // warn-once latch
+		expect(h.notifies.filter(([m, l]) => l === "warning" && m.includes("thinking suffix")).length).toBe(1);
+		const recs = readAudit();
+		expect(recs.length).toBe(2);
+		expect(recs[0].thinking).toBeNull(); // decisions models: parsed, sent, dropped → recorded as null
+		expect(recs[0].model).toBe("jev-latest");
+		// LLM contrast: a suffix on an LLM spec stays meaningful — the audit keeps it
+		const h2 = session({ audit: true, classifierModel: "mock/glm:low" });
+		h2.findMap = { "mock/glm": { id: "glm" } };
+		h2.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		await toolCall(h2, "bash", { command: "ls -la /tmp" });
+		const lrec = readAudit().find((rec: any) => rec.model === "glm");
+		expect(lrec.thinking).toBe("low");
+	});
+
+	test("unresolvable jev spec with a suffix: specialized unavailable wording (specPart match), no suffix warning — the suffix stays effective on the LLM fallback", async () => {
+		const h = session({ classifierModel: "typesafe/jev-latest:low" });
+		h.findMap = {}; // jev not registered (omp-like) → unavailable → session-model fallback
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h, "bash", { command: "cargo build" });
+		const warn = h.notifies.find(([m, l]) => l === "warning" && m.includes("unavailable"))?.[0] ?? "";
+		expect(warn).toContain("registerProvider"); // the suffix no longer hides the specialized wording
+		expect(h.notifies.some(([m, l]) => l === "warning" && m.includes("thinking suffix"))).toBe(false); // "ignored" would be false on this path
+		expect(h.calls[0].model).toBe("mock/glm");
+		expect(h.calls[0].thinkingEnabled).toBe(true); // the explicit suffix survives the fallback (standing semantics)
+		expect(h.calls[0].effort).toBe("low");
+	});
+
+	test("fallback layer: a thinking suffix on the jev spec warns once when the fallback resolves", async () => {
+		const h = session({ classifierMinConfidence: 100, classifierFallbackModel: "typesafe/jev-latest:low" });
+		h.ctx.model = { id: "mock/jev", api: "jev-decisions" }; // jev first layer below the floor → cascade
+		h.findMap = { "typesafe/jev-latest": { id: "jev-latest", api: "jev-decisions" } };
+		h.confirmAnswer = true; // demotion ask → allowed
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 90% (confidence 80%; ask 9%, deny 1%)" }];
+		await toolCall(h, "bash", { command: "ls -la /tmp" });
+		const warns = h.notifies.filter(([m, l]) => l === "warning" && m.includes("thinking suffix"));
+		expect(warns.length).toBe(1);
+		expect(h.calls[1].model).toBe("jev-latest"); // the second call is the fallback
+	});
+});
+
 // ── 4. 分类器(重试矩阵 + 参数形态) ─────────────────────
 
 describe("classifier", () => {
@@ -1763,6 +1869,13 @@ describe("confidence floor + cascade (#67)", () => {
 	const JEV_DENY_29 = "<verdict>deny</verdict> jev: deny 64% (confidence 29%; allow 36%)";
 	const JEV_ASK_49 = "<verdict>ask</verdict> jev: ask 51% (confidence 49%; allow 40%, deny 10%)";
 
+	/** #81: the floor gates on protocol identity — demotion tests must make the first
+	 *  layer BE a decisions model (api: jev-decisions), not merely emit a jev-shaped
+	 *  reason from an LLM. */
+	const jevLayer = (h: Harness): void => {
+		h.ctx.model = { id: "mock/jev", api: "jev-decisions" };
+	};
+
 	beforeAll(clearAudit);
 	afterAll(clearAudit);
 
@@ -1784,6 +1897,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("min set, no fallback: below-floor demotes to ask with ground truth; at the floor stays autonomous", async () => {
 		clearAudit();
 		const h1 = session({ audit: true, classifierMinConfidence: 50 });
+		jevLayer(h1);
 		h1.responses = [{ text: JEV_ALLOW_49 }];
 		h1.confirmAnswer = false;
 		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
@@ -1797,6 +1911,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(recs[0].fallback).toBeUndefined();
 		expect(h1.confirmMsgs[0]).toContain("below your classifierMinConfidence of 50%");
 		const h2 = session({ audit: true, classifierMinConfidence: 50 });
+		jevLayer(h2);
 		h2.responses = [{ text: JEV_ALLOW_50 }];
 		const r2 = await toolCall(h2, "bash", { command: "cat /etc/hosts" });
 		expect(r2).toBeUndefined();
@@ -1807,12 +1922,14 @@ describe("confidence floor + cascade (#67)", () => {
 	test("demotion headless degrades to deny; a demoted deny also asks (any verdict demotes)", async () => {
 		clearAudit();
 		const h1 = session({ audit: true, classifierMinConfidence: 50 });
+		jevLayer(h1);
 		h1.responses = [{ text: JEV_ALLOW_49 }];
 		h1.ctx.hasUI = false;
 		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
 		expect(r1?.block).toBe(true);
 		expect(readAudit()[0]).toMatchObject({ verdict: "deny", degraded: true, demoted: true });
 		const h2 = session({ audit: true, classifierMinConfidence: 50 });
+		jevLayer(h2);
 		h2.responses = [{ text: JEV_DENY_29 }];
 		h2.confirmAnswer = true;
 		const r2 = await toolCall(h2, "bash", { command: "cargo build" });
@@ -1826,6 +1943,18 @@ describe("confidence floor + cascade (#67)", () => {
 		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
 		expect(r).toBeUndefined();
 		expect(h.confirms).toBe(0);
+	});
+
+	test("protocol identity, not output format (#81): an LLM reason embedding a jev-format string no longer demotes — inverted vs 0.12.0", async () => {
+		clearAudit();
+		const h = session({ audit: true, classifierMinConfidence: 50 }); // LLM session model — not a decisions model
+		h.responses = [{ text: JEV_ALLOW_49 }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.confirms).toBe(0);
+		const recs = readAudit();
+		expect(recs[0].demoted).toBeUndefined();
+		expect(recs[0].fallback).toBeUndefined();
 	});
 
 	test("a high-confidence ask goes straight to the human — no fallback call", async () => {
@@ -1844,6 +1973,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("shadow + demotion: the human is asked, the fallback opinion recorded, verdicts untouched", async () => {
 		clearAudit();
 		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }];
 		h.confirmAnswer = true;
@@ -1860,6 +1990,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("enforce + demotion: the fallback adjudicates — allow absorbs, deny blocks, ask confirms", async () => {
 		clearAudit();
 		const h1 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h1);
 		h1.findMap = { "mock/fb": { id: "fb-model" } };
 		h1.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>allow</verdict> clearly fine" }];
 		const r1 = await toolCall(h1, "bash", { command: "ls -la /tmp" });
@@ -1868,6 +1999,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(readAudit()[0]).toMatchObject({ verdict: "allow", demoted: true });
 		expect(readAudit()[0].fallback).toMatchObject({ verdict: "allow", effective: "allow" });
 		const h2 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h2);
 		h2.findMap = { "mock/fb": { id: "fb-model" } };
 		h2.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> destructive" }];
 		const r2 = await toolCall(h2, "bash", { command: "cat /etc/hosts" });
@@ -1876,6 +2008,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(readAudit()[1]).toMatchObject({ verdict: "allow" });
 		expect(readAudit()[1].fallback).toMatchObject({ verdict: "deny", effective: "deny" });
 		const h3 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h3);
 		h3.findMap = { "mock/fb": { id: "fb-model" } };
 		h3.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>ask</verdict> borderline" }];
 		h3.confirmAnswer = true;
@@ -1889,6 +2022,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("carve-out: a demoted deny + fallback allow asks the human; headless degrades to deny", async () => {
 		clearAudit();
 		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_DENY_29 }, { text: "<verdict>allow</verdict> fine actually" }];
 		h.confirmAnswer = false;
@@ -1900,6 +2034,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(recs[0]).toMatchObject({ verdict: "deny", demoted: true, userAnswer: "declined" });
 		expect(recs[0].fallback).toMatchObject({ verdict: "allow", effective: "ask" });
 		const h2 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h2);
 		h2.findMap = { "mock/fb": { id: "fb-model" } };
 		h2.ctx.hasUI = false;
 		h2.responses = [{ text: JEV_DENY_29 }, { text: "<verdict>allow</verdict> fine actually" }];
@@ -1910,6 +2045,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("carve-out (#71): a demoted ask + fallback allow asks the human; headless degrades to deny", async () => {
 		clearAudit();
 		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ASK_49 }, { text: "<verdict>allow</verdict> safe to run" }];
 		h.confirmAnswer = true;
@@ -1921,6 +2057,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(recs[0]).toMatchObject({ verdict: "ask", demoted: true, userAnswer: "allowed" });
 		expect(recs[0].fallback).toMatchObject({ verdict: "allow", effective: "ask" });
 		const h2 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h2);
 		h2.findMap = { "mock/fb": { id: "fb-model" } };
 		h2.ctx.hasUI = false;
 		h2.responses = [{ text: JEV_ASK_49 }, { text: "<verdict>allow</verdict> safe to run" }];
@@ -1932,6 +2069,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("enforce fallback failure/unresolvable on a demotion falls to the human (headless → deny)", async () => {
 		clearAudit();
 		const h1 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforce" });
+		jevLayer(h1);
 		h1.findMap = { "mock/fb": { id: "fb-model" } };
 		h1.responses = [{ text: JEV_ALLOW_49 }, { text: "" }, new Error("fb boom")];
 		h1.confirmAnswer = true;
@@ -1941,6 +2079,7 @@ describe("confidence floor + cascade (#67)", () => {
 		expect(readAudit()[0]).toMatchObject({ verdict: "allow", demoted: true, userAnswer: "allowed" });
 		expect(readAudit()[0].fallback).toMatchObject({ verdict: null, effective: "ask", error: expect.stringContaining("fail-closed") });
 		const h2 = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/ghost", classifierFallbackMode: "enforce" });
+		jevLayer(h2);
 		h2.findMap = {};
 		h2.responses = [{ text: JEV_ALLOW_49 }, { text: JEV_ALLOW_80 }];
 		await toolCall(h2, "bash", { command: "ls -la /tmp" }); // below floor → asked
@@ -2014,6 +2153,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("fallback mode defaults to enforce: a configured second layer adjudicates without an explicit mode", async () => {
 		clearAudit();
 		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb" }); // no mode key
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> destructive" }];
 		const r = await toolCall(h, "bash", { command: "cat /etc/hosts" });
@@ -2024,6 +2164,7 @@ describe("confidence floor + cascade (#67)", () => {
 	test("an invalid classifierFallbackMode lands on the conservative shadow with a warning", async () => {
 		clearAudit();
 		const h = session({ audit: true, classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "enforc" as unknown });
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		await h.handlers.session_start({}, h.ctx);
 		const warnings = h.notifies.filter(([, l]) => l === "warning").map(([m]) => m).join("\n");
@@ -2078,6 +2219,7 @@ describe("confidence floor + cascade (#67)", () => {
 		await off.commands["automode"].handler("", off.ctx);
 		expect(off.notifies.some(([m]) => m.includes("confidence cascade"))).toBe(false);
 		const h = session({ classifierMinConfidence: 50, classifierFallbackModel: "mock/fb", classifierFallbackMode: "shadow" });
+		jevLayer(h);
 		h.findMap = { "mock/fb": { id: "fb-model" } };
 		h.responses = [{ text: JEV_ALLOW_49 }, { text: "<verdict>deny</verdict> unsafe" }, { text: JEV_ALLOW_80 }];
 		h.confirmAnswer = true;
@@ -2102,7 +2244,7 @@ describe("confidence floor + cascade (#67)", () => {
 			const env = {
 				cwd: "/proj",
 				hasUI: true,
-				getModel: () => ({ model: { id: "glm" }, thinking: "off" as const }),
+				getModel: () => ({ model: { id: "glm", api: "jev-decisions" }, thinking: "off" as const }),
 				getFallbackModel: () => ({ model: { id: "fb-model" }, thinking: "off" as const }),
 				signal: ctrl.signal,
 				complete: (async () => {

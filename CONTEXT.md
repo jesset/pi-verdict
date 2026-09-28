@@ -84,6 +84,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 非生成式模型的输出形态:预定义选项上的取值 + 概率分布 + 置信度,构造上不可能产出约定 schema 之外的形态。jev 属此类,与 LLM 自由文本相对;适配器合成 reason 时透传概率与置信度。
 
+### decisions 模型 (decisions model)
+
+经类型化决策协议接入分类器层的模型,协议身份由宿主模型注册表的 api 标识承载(`jev-decisions`;当前唯一注册项 `typesafe/jev-latest`,经 `isJevSpec` 精确匹配)。是一切能力判定的锚点:数值置信度、思考级别不适用性等能力命题以**协议身份**为准,不以输出文本形态或厂商前缀为准——LLM 的自由文本恰好模仿 jev reason 格式不改变其身份。与「类型化决策」互为表里:一者定义协议身份,一者定义输出形态。升级路径:更多 decisions 供应商出现时扩展协议族枚举(ADR-0004 #81 修订),不引入配置开关。
+
 ### 裁决前缀契约 (verdict prefix contract)
 
 分类器响应的文本形态约定:必须以 `<verdict>allow|ask|deny</verdict>` 开头、后随一行理由;违反即解析失败,按 fail-closed 处理。后端无论是生成式还是类型化决策,最终都归一到该形态。
@@ -102,7 +106,11 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 置信降级 (confidence demotion)
 
-置信地板(`classifierMinConfidence`,ADR-0004 amendment)触发时第一层裁决被降级的机制:jev 裁决的 confidence 严格低于地板时,**无论 allow/ask/deny 一律降级**——级联到回退分类器(若配置),否则转人工 ask(非交互降级 deny)。不低于地板时第一层完全自主。地板可独立采用(无需第二层);LLM 第一层无数值置信度,地板对其惰性。
+置信地板(`classifierMinConfidence`,ADR-0004)触发时第一层裁决被降级的机制:decisions 模型的裁决 confidence 严格低于地板时,**无论 allow/ask/deny 一律降级**——级联到回退分类器(若配置),否则转人工 ask(非交互降级 deny)。不低于地板时第一层完全自主。地板可独立采用(无需第二层);判据为「decisions 模型身份 + 可解析置信段」双条件(#81,ADR-0004 修订):非 decisions 分类器不触发降级,即便其 reason 恰好匹配 jev 格式——且不静默,首次灰区解析呈现一次中性警告(显式与自省路径皆然)。
+
+### 无效配置须呈现 (inert configuration must surface)
+
+配置纪律(#81):配置键声明的意图在生效模型的能力无法兑现时,必须产生运行时反馈——通常为每会话一次的**中性**警告(陈述事实,不评判配置:用户可能为将来的 jev 切换预设地板),不得静默失效。惰性边界:纯规则裁决的会话不触发任何此类警告(反馈随首次灰区解析产生)。实例:置信地板对非 decisions 分类器、jev spec 上的思考后缀、不可解析的 jev spec(特化文案指向真实成因:宿主无 `registerProvider` 或缺密钥)。
 
 ### 回退分类器 (fallback classifier)
 

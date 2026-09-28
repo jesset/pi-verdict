@@ -195,6 +195,22 @@ export function parseJevConfidence(reason: string): number | null {
 	return m ? Number(m[1]) : null;
 }
 
+/** #81: protocol identity — `api === API_ID` names the decisions protocol, the
+ *  capability axis the extension actually gates on (numeric confidence is a
+ *  decisions-contract property, not a vendor trait). Structural type so callers
+ *  can pass any model-shaped object. */
+export function isDecisionsModel(model: { api?: string }): boolean {
+	return model.api === API_ID;
+}
+
+/** #81: exact match for the one decisions spec pi-verdict registers
+ *  ("typesafe/jev-latest"). The registry only ever holds that one slug, so prefix
+ *  tolerance would only ever catch typos — and would mislead with the jev-specific
+ *  wording keyed on this predicate. */
+export function isJevSpec(spec: string): boolean {
+	return spec === `${PROVIDER_ID}/${MODEL_ID}`;
+}
+
 function mapUsage(u: unknown): AssistantMessage["usage"] {
 	const usage = (u ?? {}) as { input_tokens?: unknown; output_tokens?: unknown; cost?: unknown };
 	const input = Number(usage.input_tokens) || 0;

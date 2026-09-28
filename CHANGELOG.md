@@ -5,11 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased]
+## [0.12.1] - 2026-09-28
 
 ### Added
 
+- Runtime feedback for implicit jev vs LLM classifier differences (#81, [ADR-0004 amendment](docs/adr/0004-classifier-fallback-cascade.md)): four silent gaps now surface instead of staying implicit — (a) `classifierMinConfidence` set while the effective classifier (configured or self-reflected) is not a decisions model: one neutral warning at the first gray-zone resolution (a purely rule-adjudicated session never sees it); (b) an unresolvable `typesafe/jev-latest` warns with wording naming the two real causes — a host without `registerProvider` (omp), or a missing key (`OPENROUTER_API_KEY`/OpenRouter login, or `TYPESAFE_API_KEY` on the typesafe transport) — instead of the generic "not found or no configured auth", on both the classifier and fallback layers; (c) a thinking suffix on the jev spec warns once and is ignored; (d) the audit `thinking` field records `null` for decisions models (the suffix was parsed, sent, and dropped). No new config keys: the provider prefix stays the single source of truth — a `classifierBackend`/`classifierType` switch was reviewed and rejected (second source of truth with contradiction states; would freeze ADR-0003's "any model registered through pi" direction). docs/configuration.md's claim that jev thinking suffixes "are ignored" corrected to warn-and-ignore.
 - docs/diagrams: security-gate pipeline diagram authored as maintainable specs (en/zh workflow JSON, showcase-validated) with dual-theme SVG exports embedded in both READMEs' pipeline sections; regeneration instructions in docs/diagrams/README.md. Interactive viewer HTML stays untracked; pipeline baseline v0.12.
+
+### Changed
+
+- Confidence-floor demotion criterion (#81): demotion now requires the first-layer model to **be a decisions model** (protocol identity) **and** a parseable confidence segment — numeric confidence is a decisions-contract property, not a vendor trait, so an LLM whose free-text reason happens to match the `jev: … (confidence N%…)` shape no longer demotes (0.12.0 would mis-demotion it). Normal paths are byte-identical; only the pathological path changes, from mis-demotion to correct no-demotion. ⚠️ Corpus comparability: pre-0.12.1 corpora may contain demoted rows with LLM first layers emitting jev-shaped reasons; such rows cannot exist from 0.12.1 — cross-version analysis must treat the demoted population as criterion-dependent.
 
 ### Fixed
 

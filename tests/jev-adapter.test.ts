@@ -19,6 +19,8 @@ import jevAdapter, {
 	PROVIDER_ID,
 	TRANSPORT_DEFAULTS,
 	VERDICT_QUESTIONS,
+	isDecisionsModel,
+	isJevSpec,
 	parseJevConfidence,
 	verdictText,
 	wireModel,
@@ -145,6 +147,26 @@ describe("parseJevConfidence (#63)", () => {
 	test("boundary values 0 and 100 parse", () => {
 		expect(parseJevConfidence("jev: allow 100% (confidence 0%; ask 0%, deny 0%)")).toBe(0);
 		expect(parseJevConfidence("jev: allow 100% (confidence 100%; ask 0%, deny 0%)")).toBe(100);
+	});
+});
+
+describe("decisions-model predicates (#81)", () => {
+	test("isDecisionsModel judges the protocol api, not the vendor", () => {
+		expect(isDecisionsModel({ api: API_ID })).toBe(true);
+		expect(isDecisionsModel({ id: MODEL_ID, provider: PROVIDER_ID, api: "anthropic" })).toBe(false);
+		expect(isDecisionsModel({})).toBe(false);
+	});
+	test("the adapter's own registered model satisfies the predicate", () => {
+		const provider = createJevProvider(undefined);
+		expect(isDecisionsModel(provider.getModels()[0])).toBe(true);
+	});
+	test("isJevSpec exact-matches the registered slug only", () => {
+		expect(isJevSpec("typesafe/jev-latest")).toBe(true);
+		expect(isJevSpec("typesafe/jev-latest:low")).toBe(false); // a thinking suffix is not part of the spec
+		expect(isJevSpec("typesafe/jev")).toBe(false);
+		expect(isJevSpec("typeSafe/jev-latest")).toBe(false);
+		expect(isJevSpec("openai/gpt-5")).toBe(false);
+		expect(isJevSpec("")).toBe(false);
 	});
 });
 
