@@ -86,7 +86,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { parseJevConfidence } from "./jev-adapter";
+import { isDecisionsModel, isJevSpec, parseJevConfidence } from "./jev-adapter";
 
 // ============================================================================
 // 规则层:bash
@@ -1097,8 +1097,8 @@ interface ClassifierOutcome {
 	verdict: "allow" | "ask" | "deny";
 	reason: string;
 	source: "model" | "fail-closed";
-	/** #54 audit material: the transcript actually sent and the last attempt's raw output (attached on both model and fail-closed outcomes) */
-	auditRaw?: { transcript: string; rawResponse: string; modelId: string; thinking: ThinkingLevel };
+	/** #54 audit material: the transcript actually sent and the last attempt's raw output (attached on both model and fail-closed outcomes); thinking is null for decisions models (#81) */
+	auditRaw?: { transcript: string; rawResponse: string; modelId: string; thinking: ThinkingLevel | null };
 }
 
 const CLASSIFIER_TIMEOUT_MS = 25_000; // 本网关 CC 分类器分布 p90=19.8s(15s 会误杀 ~15%),research/cache-sim 数据
@@ -1273,6 +1273,9 @@ async function classifyWithModel(
 	const transcript = buildTranscript(host, actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
 	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
+	// #81: decisions models parse-then-drop the thinking suffix — the audit records
+	// null, never the configured-but-inert level (LLM classifiers keep theirs)
+	const auditThinking = isDecisionsModel(model) ? null : thinking;
 	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
 	const failures: string[] = [];
 	let rawResponse = ""; // #54: raw output of the last attempt ("" for exception attempts — diagnostics already live in failures)
@@ -1284,7 +1287,7 @@ async function classifyWithModel(
 			const diag = `stopReason=${r.stopReason}, model=${model.id}, errorMessage=${JSON.stringify(r.errorMessage ?? null)}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
 			if (r.stopReason !== "error" && r.stopReason !== "aborted") {
 				const parsed = parseVerdict(r.text);
-				if (parsed) return { ...parsed, source: "model", auditRaw: { transcript, rawResponse, modelId: model.id, thinking } };
+				if (parsed) return { ...parsed, source: "model", auditRaw: { transcript, rawResponse, modelId: model.id, thinking: auditThinking } };
 				failures.push(`attempt ${n} (${maxTokens}t) contract violation: ${diag}`);
 			} else {
 				failures.push(`attempt ${n} (${maxTokens}t) aborted/errored: ${diag}`);
@@ -1293,7 +1296,7 @@ async function classifyWithModel(
 			failures.push(`attempt ${n} (${maxTokens}t) exception: ${r.error}`);
 		}
 	}
-	return { verdict: "deny", reason: `classifier failure (fail-closed): ${failures.join("; ")}`, source: "fail-closed", auditRaw: { transcript, rawResponse, modelId: model.id, thinking } };
+	return { verdict: "deny", reason: `classifier failure (fail-closed): ${failures.join("; ")}`, source: "fail-closed", auditRaw: { transcript, rawResponse, modelId: model.id, thinking: auditThinking } };
 }
 
 // ============================================================================
@@ -1539,9 +1542,12 @@ export interface AdjudicateEnv {
 
 /** #67: the confidence floor. Below it the first layer abstains and the call cascades —
  *  to the fallback if configured, else to the human (headless degrades to deny). Numeric
- *  confidence exists only on jev-formatted reasons; LLM first layers never demote. */
-function confidenceDemotion(outcome: ClassifierOutcome, rules: UserRules): { confidence: number } | null {
-	if (rules.classifierMinConfidence === null || outcome.source === "fail-closed") return null;
+ *  confidence is a decisions-protocol contract property (#81): demotion requires the
+ *  protocol identity (isDecisionsModel) AND a parseable segment — an LLM whose free-text
+ *  reason happens to match the jev format no longer demotes. LLM first layers gate on
+ *  ask/fail-closed only. */
+function confidenceDemotion(outcome: ClassifierOutcome, rules: UserRules, model: NonNullable<ExtensionContext["model"]>): { confidence: number } | null {
+	if (rules.classifierMinConfidence === null || outcome.source === "fail-closed" || !isDecisionsModel(model)) return null;
 	const conf = parseJevConfidence(outcome.reason);
 	if (conf !== null && conf < rules.classifierMinConfidence) return { confidence: conf };
 	return null;
@@ -1694,7 +1700,7 @@ export async function adjudicate(
 
 	// #67 cascade: a confidence-floor demotion, or a classifier fail-closed outcome
 	// (the first layer produced no verdict)
-	const demotion = confidenceDemotion(outcome, state.userRules);
+	const demotion = confidenceDemotion(outcome, state.userRules, resolved.model);
 	const cascade = demotion || outcome.source === "fail-closed"
 		? await runConfidenceCascade(state, env, demotion ? { verdict: outcome.verdict, reason: outcome.reason } : null, demotion ? { kind: "demotion", confidence: demotion.confidence } : { kind: "fail-closed" }, state.userRules.denyPaths.length > 0, actionLine)
 		: {};
@@ -1891,6 +1897,9 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	});
 
 	let warnedClassifierModel = false;
+	let warnedFloorInert = false;
+	/** #81: per-layer one-shot for the jev thinking-suffix warning */
+	const jevSuffixWarned = { classifier: false, fallback: false };
 	/** 思考级别集(pi 原生 EXTENDED_THINKING_LEVELS;后缀语法对齐 pi --model provider/id:thinking) */
 	const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -1905,6 +1914,42 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		}
 		if (colon > slash + 1) warnOnce(`pi-verdict: invalid thinking-level suffix "${raw.slice(colon + 1)}" (valid: ${[...THINKING_LEVELS].join("/")}), ignored`);
 		return { specPart: raw, level: null };
+	}
+
+	/** #81: jev-specialized unavailable wording — the two real causes, instead of the
+	 *  generic "not found or no configured auth", which points nowhere for jev. */
+	const JEV_UNAVAILABLE_HINT =
+		"jev needs a pi host with registerProvider (omp is not supported) and a key: OPENROUTER_API_KEY / OpenRouter login (default transport), or TYPESAFE_API_KEY (PI_VERDICT_JEV_TRANSPORT=typesafe)";
+
+	/** #81: shared spec→model resolution for both classifier layers — registry
+	 *  lookup + auth check, plus the jev thinking-suffix warning fired only on the
+	 *  resolved path: decisions models parse-then-drop the suffix, so "ignored" is
+	 *  factually true exactly here. On the session-model fallback (unresolvable
+	 *  spec) the suffix stays effective for the LLM and must not be called ignored.
+	 *  Returns null when the spec does not resolve; the layer's fallback semantics
+	 *  stay with the caller. */
+	function findSpecModel(ctx: ExtensionContext, specPart: string, level: string | null, layer: "classifier" | "fallback"): NonNullable<ExtensionContext["model"]> | null {
+		const slash = specPart.indexOf("/");
+		if (slash <= 0) return null;
+		const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
+		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return null;
+		if (level !== null && isJevSpec(specPart) && !jevSuffixWarned[layer]) {
+			jevSuffixWarned[layer] = true;
+			ctx.ui.notify(`pi-verdict: thinking suffix "${level}" has no effect on a decisions model (${specPart} has no reasoning to configure) — ignored`, "warning");
+		}
+		return model;
+	}
+
+	/** #81: floor-inert — the confidence floor binds to decisions models, so a
+	 *  non-decisions classifier silently ignores it. Surfaces once per session at the
+	 *  first resolution (explicit model and self-reflection fallback alike; a purely
+	 *  rule-adjudicated session never sees it — lazy via getModel). Neutral wording:
+	 *  the fact, never a judgment on the config (users may pre-set the floor for a
+	 *  future jev switch). */
+	function warnFloorInert(ctx: ExtensionContext, model: NonNullable<ExtensionContext["model"]>): void {
+		if (warnedFloorInert || state.userRules.classifierMinConfidence === null || isDecisionsModel(model)) return;
+		warnedFloorInert = true;
+		ctx.ui.notify("pi-verdict: classifierMinConfidence has no effect on a non-decisions classifier (the floor applies to decisions models like typesafe/jev-latest)", "warning");
 	}
 
 	/** 解析分类器模型与思考级别:CLI flag > 环境变量 > 配置文件(classifierModel) >
@@ -1922,18 +1967,27 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				ctx.ui.notify(msg, "warning");
 			});
 			thinking = (level ?? "off") as ThinkingLevel;
-			const slash = specPart.indexOf("/");
-			if (slash > 0) {
-				const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
-				if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return { model, thinking };
+			const model = findSpecModel(ctx, specPart, level, "classifier");
+			if (model) {
+				warnFloorInert(ctx, model);
+				return { model, thinking };
 			}
 			if (!warnedClassifierModel) {
 				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
-				ctx.ui.notify(`pi-verdict: classifier model "${raw}" unavailable (not found or no configured auth), falling back to session model (self-reflection)`, "warning");
+				ctx.ui.notify(
+					isJevSpec(specPart)
+						? `pi-verdict: classifier model "${raw}" unavailable — ${JEV_UNAVAILABLE_HINT}; falling back to session model (self-reflection)`
+						: `pi-verdict: classifier model "${raw}" unavailable (not found or no configured auth), falling back to session model (self-reflection)`,
+					"warning",
+				);
 			}
 		}
 		// 自省:继承当前会话模型;显式指定的思考级别在回退时仍生效(原语义)
-		return ctx.model ? { model: ctx.model, thinking } : null;
+		if (ctx.model) {
+			warnFloorInert(ctx, ctx.model);
+			return { model: ctx.model, thinking };
+		}
+		return null;
 	}
 
 	let warnedFallbackSuffix = false;
@@ -1952,14 +2006,16 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			ctx.ui.notify(msg, "warning");
 		});
 		const thinking = (level ?? "off") as ThinkingLevel;
-		const slash = specPart.indexOf("/");
-		if (slash > 0) {
-			const model = ctx.modelRegistry.find(specPart.slice(0, slash), specPart.slice(slash + 1));
-			if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return { model, thinking };
-		}
+		const model = findSpecModel(ctx, specPart, level, "fallback");
+		if (model) return { model, thinking };
 		if (!warnedFallbackModel) {
 			warnedFallbackModel = true; // one warning per session
-			ctx.ui.notify(`pi-verdict: fallback model "${raw}" unavailable (not found or no configured auth) — classifierFallbackModel inactive this session`, "warning");
+			ctx.ui.notify(
+				isJevSpec(specPart)
+					? `pi-verdict: fallback model "${raw}" unavailable — ${JEV_UNAVAILABLE_HINT} — classifierFallbackModel inactive this session`
+					: `pi-verdict: fallback model "${raw}" unavailable (not found or no configured auth) — classifierFallbackModel inactive this session`,
+				"warning",
+			);
 		}
 		return null;
 	}
