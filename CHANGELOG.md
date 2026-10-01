@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased]
+## [0.13.0] - 2026-10-01
 
 ### Breaking Changes
 
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Internal
 
-- devDependencies `@earendil-works/pi-coding-agent` 0.84.3 → 0.99.2 (typecheck zero errors; 231/231 tests green; clean-agent-dir headless load smoke on 0.99.2). `files` no longer ships jev-adapter.ts. The jev-adapter test suite is replaced by `tests/native-classifier.test.ts` (verdict-line composition both prefixes, structured-confidence floor, classifyFor binding, classifyNative fail-closed matrix).
+- devDependencies `@earendil-works/pi-coding-agent` 0.84.3 → 0.99.2 (typecheck zero errors; 232/232 tests green; clean-agent-dir headless load smoke on 0.99.2). `files` no longer ships jev-adapter.ts. The jev-adapter test suite is replaced by `tests/native-classifier.test.ts` (verdict-line composition both prefixes, structured-confidence floor, classifyFor binding, classifyNative fail-closed matrix).
 
 ## [0.12.1] - 2026-09-28
 
