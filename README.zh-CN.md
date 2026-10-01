@@ -8,7 +8,7 @@
 
 **pi-verdict 是 [pi](https://pi.dev) 的极简权限门禁，灵感来自 Claude Code 的 auto mode：每次工具调用执行前先过检查——放行、拦截，或先问你。**
 
-- 极简——核心单文件约 2k 行(另含一个小型 jev 适配器)
+- 极简——核心单文件约 2k 行(0.13 起分类器走 pi 原生 `classify()`)
 - 内置危险规则与你的 allow/deny 规则以零延迟先行裁决明确情形
 - 其余交给携带会话上下文的模型分类器
 - 任何不确定或失败一律 fail-closed，绝不静默放行
@@ -58,13 +58,13 @@ pi --extension ./extensions/pi-verdict.ts
 
 ```
 
-需要 pi ≥ 0.84。交互与非交互(`-p`/json/rpc)会话均支持；非交互模式下 `ask` 降级为 `deny`。
+需要 pi ≥ 0.99。交互与非交互(`-p`/json/rpc)会话均支持；非交互模式下 `ask` 降级为 `deny`。
 
 ### 宿主
 
-pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)(omp)——扩展按自身安装位置自锚定到所在宿主的目录树，双宿主并存的机器上跟随扩展副本自身的位置。omp 18 下分类器的模型调用回退到 pi-ai compat API(仍然 fail-closed)。细节见 [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi)。
+pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-0005](docs/adr/0005-native-classifier-migration.md))。老宿主——pi < 0.99 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)(omp)——继续使用 npm 上的 **0.12.x** 线(老宿主配老版本扩展)。0.12 线仍按自身安装位置自锚定到所在宿主的目录树,双宿主并存的机器上跟随扩展副本自身的位置;其在 omp 18 下的分类器模型调用回退 pi-ai compat API(仍然 fail-closed)。细节见 [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi)。
 
-| | pi | omp |
+| | pi | omp(0.12.x 线) |
 |---|---|---|
 | 安装 | `pi install npm:pi-verdict` | `omp plugin install npm:pi-verdict` |
 | 扩展副本 | `~/.pi/agent/extensions/` | `~/.omp/plugins/node_modules/pi-verdict/`(omp 18.1+；≤18.0 在 `agent/` 下) |
@@ -122,27 +122,29 @@ pi-verdict 同时支持 [pi](https://github.com/badlogic/pi-mono) 与 [oh-my-pi]
 - `ignoreTools` 列出规则未覆盖的工具(`todo`、`web_search`、MCP/自定义工具)：**直接放行、零模型调用**；列出已覆盖工具(`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`)的条目无效：它们仍受 deny floor 与你的 allow/deny 规则约束，自保护层也永远先行。全新安装会预填一份**入门列表**(`todo`、`ask_user_question`、`memory_write`、`memory_search`——来自项目 1265 条生产审计的观察)。注意：被豁免的工具失去分类器对 `denyPaths` 的存在性话术警戒(未覆盖工具本就不进路径提取器)
 - `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担；下方自保护层永远开启)
 - `classifierModel` 指定分类器模型，如 `"zai/glm-5.3-flash:low"`(支持思考后缀；缺省 = 会话模型且显式关思考)
-- `classifierModel: "typesafe/jev-latest"` 启用随包的 **jev 决策适配器**——灰区裁决经 TypeSafe jev 完成(默认 OpenRouter，或 `PI_VERDICT_JEV_TRANSPORT=typesafe` 直连官方 API)；实验性质，详见 [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
+- `classifierModel: "typesafe/jev-latest"` 启用**原生 jev 分类器**——每次灰区裁决经 pi 内置分类器目录发一次结构化 `classify()` 调用(TypeSafe 直连,或 OpenRouter/OpenCode/Cloudflare/Vercel 上的 Jev);详见 [ADR-0005](docs/adr/0005-native-classifier-migration.md)
 - `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件，保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth，确认结束后落盘)，protected-path ask 也入审计(#62)；规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机；[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注)；agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 - `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解)；默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知；两开关同开时通知只出现一次
-- `classifierMinConfidence`(可选，[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**：低于它的 jev 裁决被降级——配置了 `classifierFallbackModel` 则级联(`enforce`，默认 = 第二层全权裁决；例外：降级的 **deny 与 ask** 永不被自动放宽为 allow；fail-closed 未产生裁决，其获救裁决照常生效；`shadow` = 只记录意见、由你裁决——`/automode` 会提示激活开关)，否则直接问你。不低于地板时第一层自主。地板仅作用于 decisions 模型——LLM 分类器下不生效，会有一次中性警告提示。天然搭配：jev 在前 + haiku/flash 级回退
+- `classifierMinConfidence`(可选，[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**：低于它的原生分类器裁决被降级——配置了 `classifierFallbackModel` 则级联(`enforce`，默认 = 第二层全权裁决；例外：降级的 **deny 与 ask** 永不被自动放宽为 allow；fail-closed 未产生裁决，其获救裁决照常生效；`shadow` = 只记录意见、由你裁决——`/automode` 会提示激活开关)，否则直接问你。不低于地板时第一层自主。地板仅作用于原生分类器模型(协议原生置信度)——chat/LLM 分类器下不生效，会有一次中性警告提示。天然搭配：jev 在前 + haiku/flash 级回退
 
 没有内置白名单——每一条「永远放行」声明都归你([为什么](docs/configuration.md#why-no-built-in-allowlist))。完整参考：[docs/configuration.md](docs/configuration.md)。
 
-### Jev 决策后端(实验性——[ADR-0003](docs/adr/0003-jev-decisions-adapter.md))
+### 原生 jev 分类器([ADR-0005](docs/adr/0005-native-classifier-migration.md))
 
-1. 安装含适配器的版本(v0.8 及以上)：`pi install npm:pi-verdict`
-2. 选一条 transport(两条走同一 decisions wire 契约)：
-  - **OpenRouter(默认)**：pi 内执行 `/login openrouter`，或 shell 里 `export OPENROUTER_API_KEY=sk-or-v1...`
-  - **TypeSafe 直连(官方 v1 API)**：在 console.typesafe.ai 自助发 key，然后 `export TYPESAFE_API_KEY=apikey_...` 并 `export PI_VERDICT_JEV_TRANSPORT=typesafe`
+1. 安装:`pi install npm:pi-verdict`(v0.13+;需 pi ≥ 0.99——老宿主继续用 0.12.x)
+2. 为任一内置 Jev transport 准备好凭证:
+  - **TypeSafe 直连**(`typesafe/jev-latest`):`export TYPESAFE_API_KEY=apikey_...`(console.typesafe.ai 自助发 key)
+  - **OpenRouter**(`openrouter/~typesafe/jev-latest`、`openrouter/typesafe/jev-1.13`):pi 内 `/login openrouter`,或 `export OPENROUTER_API_KEY=sk-or-v1...`
+  - 亦经 OpenCode Zen、Cloudflare Workers AI、Vercel AI Gateway 提供(各自登录);llama.cpp chat 模型自带免费本地分类器形态(同 id 的 `model.type: "classifier"` 孪生条目)
 3. 将分类器指向 jev(新会话生效)
   - 持久：在 pi 之外编辑 `~/.pi/agent/config/pi-verdict.json` 并设置 `{ "classifierModel": "typesafe/jev-latest" }`
-  - 或者临时试用一次：`PI_AUTO_MODE_MODEL=typesafe/jev-latest pi`
+  - 或者临时试用一次:`PI_AUTO_MODE_MODEL=typesafe/jev-latest pi`
 
-**限制**：
-- **Transport**：OpenRouter decisions(默认)或 TypeSafe 直连——TypeSafe 侧单次成本显示 $0(其 API 不返回 cost)
-- **宿主**：仅支持 pi。omp 上该设置会警告并回退会话模型。也绝不能选作会话主模型(不生成文本，选中即警告)
-- **逃生口**：`PI_VERDICT_JEV_URL` 可覆盖当前 transport 的端点(OpenRouter 侧为 alpha 接口)
+**说明**:
+- 裁决为结构化 `classify()` 应答(choice + probabilities + confidence);reason 行保留历史 `jev:` 形态,其余分类器 API 渲染 `classifier:`
+- 分类器 spec 先经 pi 分类器目录解析(`findOfType`)、chat 注册表兜底;同 id 双型并存(llama.cpp)时原生条目优先;分类器 spec 上的思考后缀警告一次后丢弃(审计 `thinking` 记为 `null`)
+- 自定义端点:在 models.json 覆盖 provider 的 `baseUrl`(0.12 的 `PI_VERDICT_JEV_URL` 逃生口与 `PI_VERDICT_JEV_TRANSPORT` 均已移除——transport 选择即 spec 本身)
+- 沿袭限制:denyPaths 存在性话术仍不达分类器形态模型([ADR-0005](docs/adr/0005-native-classifier-migration.md));TypeSafe 直连的单次成本显示 $0(其 API 不返回 cost)
 
 jev 的校准 confidence 正是置信地板的判定依据——搭配第二层使用(`"classifierMinConfidence", "classifierFallbackModel"`)，让低置信调用交由更深的模型复裁，而非就地生效([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
 

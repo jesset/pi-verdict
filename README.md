@@ -8,7 +8,7 @@
 
 **pi-verdict is a minimal permission gate for [pi](https://pi.dev), inspired by Claude Code's auto mode: every tool call gets checked before it runs — allow, deny, or ask you first.**
 
-- Minimal — a ~2k-line single-file core (plus a small bundled jev adapter)
+- Minimal — a ~2k-line single-file core (the classifier rides pi's native `classify()` since 0.13)
 - Built-in danger rules and your own allow/deny rules settle the clear cases first, at zero latency
 - Everything else goes to a model classifier that sees the conversation context
 - Any uncertainty or failure fails closed; nothing ever runs silently
@@ -58,13 +58,13 @@ pi --extension ./extensions/pi-verdict.ts
 
 ```
 
-Requires pi ≥ 0.84. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
+Requires pi ≥ 0.99. Works in interactive and non-interactive (`-p`/json/rpc) sessions; in non-interactive modes `ask` degrades to `deny`.
 
 ### Hosts
 
-pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — it self-anchors to whichever agent tree it is installed in, and follows the extension copy's own location on dual-install machines. On omp 18 the classifier's completion call falls back to the pi-ai compat API (still fail-closed). Details: [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi).
+pi-verdict 0.13+ requires **pi ≥ 0.99** and runs on pi only (native classifier support, [ADR-0005](docs/adr/0005-native-classifier-migration.md)). Older hosts — pi < 0.99 and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) — keep using the **0.12.x** line from npm (old hosts run old extensions). The 0.12 line still self-anchors to whichever agent tree it is installed in and follows the extension copy's own location on dual-install machines; its classifier completion falls back to the pi-ai compat API on omp 18 (still fail-closed). Details: [docs/configuration.md](docs/configuration.md#host-notes-pi-and-oh-my-pi).
 
-| | pi | omp |
+| | pi | omp (0.12.x line) |
 |---|---|---|
 | install | `pi install npm:pi-verdict` | `omp plugin install npm:pi-verdict` |
 | extension copy | `~/.pi/agent/extensions/` | `~/.omp/plugins/node_modules/pi-verdict/` (omp 18.1+; ≤18.0: under `agent/`) |
@@ -122,27 +122,29 @@ pi-verdict runs on both [pi](https://github.com/badlogic/pi-mono) and [oh-my-pi]
 - `ignoreTools` names uncovered tools (`todo`, `web_search`, MCP/custom tools) that skip adjudication — **allow with zero model calls**; entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs first. A fresh install pre-fills a **starter list** (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit). Caveat: an exempted tool loses the classifier's `denyPaths` existence-hint vigilance (uncovered tools never hit the path extractor anyway)
 - `builtinDenyFloor: false` turns off the built-in danger/path floor (your risk; the self-protection layer below always stays on)
 - `classifierModel` pins the classifier model, e.g. `"zai/glm-5.3-flash:low"` (thinking suffix supported; default: session model with thinking off)
-- `classifierModel: "typesafe/jev-latest"` opts into the bundled **jev decisions adapter** — gray-zone verdicts via TypeSafe's jev (OpenRouter by default, or TypeSafe's official API directly with `PI_VERDICT_JEV_TRANSPORT=typesafe`); experimental, see [ADR-0003](docs/adr/0003-jev-decisions-adapter.md)
+- `classifierModel: "typesafe/jev-latest"` opts into the **native jev classifier** — one structured `classify()` call per gray-zone verdict via pi's built-in classifier catalog (TypeSafe direct, or Jev on OpenRouter/OpenCode/Cloudflare/Vercel); see [ADR-0005](docs/adr/0005-native-classifier-migration.md)
 - `audit: true` records every **gray-zone adjudication** (the full transcript sent to the classifier, its raw response, the parsed verdict) as JSONL under `~/.pi/agent/verdicts/<sessionId>.jsonl` — one file per session, the 20 most recent kept. Interactive asks also record your answer (`userAnswer` ground truth, written after the confirm resolves), and protected-path asks are recorded too (#62); rule allow/deny stays unaudited. Local-only and full-fidelity (protected-path plaintext may appear — it never leaves your machine; [ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) boundary note); the agent can neither read nor write the directory. `/automode` shows the audit state and path while on
 - `notifyAllows: true` notifies on every **classifier allow** (reason + action line — e.g. jev's probability breakdown); default `false` keeps passes silent. Mechanical passes (your own allow rules, protected-path confirms) never notify; with both switches on the notification appears once
-- `classifierMinConfidence` (optional, [ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)) sets the **confidence floor**: a jev verdict below it is demoted — cascaded to `classifierFallbackModel` if set (`enforce`, the default = the second layer adjudicates; a demoted **deny or ask** can never be auto-relaxed to an allow; a fail-closed layer emitted no verdict, so its rescue stands; `shadow` = records its opinion only and you are asked — `/automode` hints the activation switch), otherwise asked of you directly. At/above the floor the first layer is autonomous. The floor applies to decisions models only — with an LLM classifier it is inert, and a one-time warning says so. A natural pairing: jev first + a haiku/flash-class fallback
+- `classifierMinConfidence` (optional, [ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)) sets the **confidence floor**: a native-classifier verdict below it is demoted — cascaded to `classifierFallbackModel` if set (`enforce`, the default = the second layer adjudicates; a demoted **deny or ask** can never be auto-relaxed to an allow; a fail-closed layer emitted no verdict, so its rescue stands; `shadow` = records its opinion only and you are asked — `/automode` hints the activation switch), otherwise asked of you directly. At/above the floor the first layer is autonomous. The floor applies to native classifier models only (protocol-native confidence) — with a chat/LLM classifier it is inert, and a one-time warning says so. A natural pairing: jev first + a haiku/flash-class fallback
 
 No built-in allowlist — every "always allow" claim is yours ([why](docs/configuration.md#why-no-built-in-allowlist)). Full reference: [docs/configuration.md](docs/configuration.md).
 
-### Jev decisions backend (experimental — [ADR-0003](docs/adr/0003-jev-decisions-adapter.md))
+### Native jev classifier ([ADR-0005](docs/adr/0005-native-classifier-migration.md))
 
-1. Install a version that ships the adapter (v0.8+): `pi install npm:pi-verdict`
-2. Pick a transport (both serve the same decisions wire contract):
-   - **OpenRouter (default)**: run `/login openrouter` inside pi, or `export OPENROUTER_API_KEY=sk-or-v1...` in your shell
-   - **TypeSafe direct (official v1 API)**: grab a self-service key at console.typesafe.ai, then `export TYPESAFE_API_KEY=apikey_...` and `export PI_VERDICT_JEV_TRANSPORT=typesafe`
+1. Install: `pi install npm:pi-verdict` (v0.13+; pi ≥ 0.99 required — older hosts keep 0.12.x)
+2. Ensure a credential for one of the built-in Jev transports:
+   - **TypeSafe direct** (`typesafe/jev-latest`): `export TYPESAFE_API_KEY=apikey_...` (self-service at console.typesafe.ai)
+   - **OpenRouter** (`openrouter/~typesafe/jev-latest`, `openrouter/typesafe/jev-1.13`): `/login openrouter` inside pi, or `export OPENROUTER_API_KEY=sk-or-v1...`
+   - also served on OpenCode Zen, Cloudflare Workers AI, and Vercel AI Gateway with each provider's login; llama.cpp chat models double as free local classifiers (`model.type: "classifier"` siblings)
 3. Point the classifier at jev (applies to new sessions)
    - persistent: edit `~/.pi/agent/config/pi-verdict.json` outside pi and set `{ "classifierModel": "typesafe/jev-latest" }`
    - or try it once: `PI_AUTO_MODE_MODEL=typesafe/jev-latest pi`
 
-**Limits**:
-- **Transports**: OpenRouter decisions (default) or TypeSafe direct — on the TypeSafe transport per-call cost shows $0 (its API does not report it)
-- **Hosts**: pi only. On omp the setting warns and falls back to the session model; and it must never be selected as the session model (no text generation — selecting it warns)
-- **Escape hatch**: `PI_VERDICT_JEV_URL` overrides the active transport's endpoint (OpenRouter's is an alpha API)
+**Notes**:
+- Verdicts are structured `classify()` answers (choice + probabilities + confidence); the reason line keeps the historical `jev:` shape, other classifier APIs render `classifier:`
+- Classifier specs resolve through pi's classifier catalog first (`findOfType`), chat registry second; on same-id dual listings (llama.cpp) the native entry wins; thinking suffixes on a classifier spec warn once and drop (recorded `thinking: null`)
+- Custom endpoints: override the provider's `baseUrl` in models.json (the 0.12 `PI_VERDICT_JEV_URL` escape hatch is gone, as is `PI_VERDICT_JEV_TRANSPORT` — transport choice is now the spec itself)
+- Carried-over limit: the denyPaths existence hint still does not reach classifier-typed models ([ADR-0005](docs/adr/0005-native-classifier-migration.md)); on the TypeSafe direct transport per-call cost shows $0 (its API does not report it)
 
 jev's calibrated confidence is exactly what the confidence floor keys on — pair it with a second layer (`"classifierMinConfidence", "classifierFallbackModel"`) so its low-confidence calls go to a deeper model instead of standing ([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)).
 
