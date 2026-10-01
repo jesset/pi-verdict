@@ -58,7 +58,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 自保护层 (self-protection layer)
 
-判定管线中**不可经任何配置豁免**的内置 deny 规则集,保护对象是门禁自身的完整性(用户规则配置文件、扩展安装副本与随包分发的 jev 适配器副本)。与用户规则相对:后者可自由增删,前者连 `builtinDenyFloor: false` 也不能关闭。语义依据:门禁之内一切写入按定义均由 agent 发起,故受保护路径对工具调用恒 deny;用户在门禁之外(编辑器等)修改不受影响。_Avoid_: 黑名单(该词保留给用户规则的 deny 正则)。
+判定管线中**不可经任何配置豁免**的内置 deny 规则集,保护对象是门禁自身的完整性(用户规则配置文件与扩展安装副本;0.12 及以前另含随包分发的 jev 适配器副本,该文件已随适配器退役消失)。与用户规则相对:后者可自由增删,前者连 `builtinDenyFloor: false` 也不能关闭。语义依据:门禁之内一切写入按定义均由 agent 发起,故受保护路径对工具调用恒 deny;用户在门禁之外(编辑器等)修改不受影响。_Avoid_: 黑名单(该词保留给用户规则的 deny 正则)。
 
 ### 变更检测 (tamper detection)
 
@@ -70,23 +70,27 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 分类器 (classifier)
 
-对灰区工具调用做风险判定的模型调用。模型**可配置**,默认**自省**;后端形态不限生成式——类型化决策模型经 jev 适配器以同一调用接口接入。
+对灰区工具调用做风险判定的模型调用。模型**可配置**,默认**自省**;后端形态不限生成式——原生分类器(分类器型模型)经 pi 的 `classify()` 协议通道接入(ADR-0005)。
 
 ### 自省 (self-reflection)
 
 分类器的默认模型来源:继承当前会话正在使用的 provider/model 发起裁决调用(而非固定外部模型)。
 
-### jev 适配器 (jev adapter)
+### 伴生适配器 (bundled adapter)
 
-随包分发的伴生扩展:在 pi 模型注册表中把 typesafe 的 jev 呈现为一个模型(`typesafe/jev-latest`),将分类器的模型调用翻译为 decisions 请求(默认 OpenRouter 端点,或 `PI_VERDICT_JEV_TRANSPORT=typesafe` 直连官方 v1 API)、把类型化决策合成为裁决前缀契约文本。仅在 `classifierModel` 指向它且凭证可解析时参与判定,否则惰性无效(分类器按既有逻辑回退)。凭证均经 provider 凭证管道:openrouter transport 沿用 pi 的 OpenRouter 登录态,typesafe transport 读 `TYPESAFE_API_KEY`(pi 无 typesafe 登录可复用);不经扩展自带通道。
+**已退役(0.13,ADR-0005)**:0.12 及之前随包分发的 `extensions/jev-adapter.ts`,在 pi 模型注册表中把 typesafe 的 jev 呈现为 chat 形模型(`typesafe/jev-latest`),将分类器的模型调用翻译为 decisions 请求。pi 0.99 内置 classify() 后运输层价值被官方吸收,文件删除;老宿主(pi < 0.99 / omp)继续用 0.12.x。_Avoid_: 继续把 jev 接入称为「适配器」——现称呼为原生分类器路径。
 
 ### 类型化决策 (typed decision)
 
-非生成式模型的输出形态:预定义选项上的取值 + 概率分布 + 置信度,构造上不可能产出约定 schema 之外的形态。jev 属此类,与 LLM 自由文本相对;适配器合成 reason 时透传概率与置信度。
+非生成式模型的输出形态:预定义选项上的取值 + 概率分布 + 置信度,构造上不可能产出约定 schema 之外的形态。jev 属此类,与 LLM 自由文本相对;reason 合成时透传概率与置信度。
 
-### decisions 模型 (decisions model)
+### 原生分类器 (native classifier / classifier model)
 
-经类型化决策协议接入分类器层的模型,协议身份由宿主模型注册表的 api 标识承载(`jev-decisions`;当前唯一注册项 `typesafe/jev-latest`,经 `isJevSpec` 精确匹配)。是一切能力判定的锚点:数值置信度、思考级别不适用性等能力命题以**协议身份**为准,不以输出文本形态或厂商前缀为准——LLM 的自由文本恰好模仿 jev reason 格式不改变其身份。与「类型化决策」互为表里:一者定义协议身份,一者定义输出形态。升级路径:更多 decisions 供应商出现时扩展协议族枚举(ADR-0004 #81 修订),不引入配置开关。
+经 pi ≥ 0.99 的 `classify()` 协议通道接入分类器层的模型,由宿主模型注册表的 `findOfType("classifier", …)` 解析、以 `model.type === "classifier"` 为类型身份(System One(jev 全 transport)/ llama.cpp 标签概率分类器)。是一切能力判定的锚点:数值置信度、思考级别不适用性等能力命题以**类型身份**为准——LLM 的自由文本恰好模仿 jev reason 格式不改变其身份(其裁决不携带置信度,floor 按构造不触发)。_Avoid_: decisions 模型(0.12 术语,已退役——见下)。
+
+### decisions 模型 (decisions model) — 已退役术语
+
+0.12 及之前的判定轴术语:经类型化决策协议接入、协议身份由 api 标识(`jev-decisions`)承载的模型。0.13 起被「原生分类器」取代(ADR-0005):判定轴从扩展自注册的协议身份改为宿主原生的模型类型。「decisions protocol / System One」保留为 jev 网络协议的史实名,reason 前缀 `jev:` 亦因此保留(审计语料连续性)。
 
 ### 裁决前缀契约 (verdict prefix contract)
 
@@ -106,11 +110,11 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 置信降级 (confidence demotion)
 
-置信地板(`classifierMinConfidence`,ADR-0004)触发时第一层裁决被降级的机制:decisions 模型的裁决 confidence 严格低于地板时,**无论 allow/ask/deny 一律降级**——级联到回退分类器(若配置),否则转人工 ask(非交互降级 deny)。不低于地板时第一层完全自主。地板可独立采用(无需第二层);判据为「decisions 模型身份 + 可解析置信段」双条件(#81,ADR-0004 修订):非 decisions 分类器不触发降级,即便其 reason 恰好匹配 jev 格式——且不静默,首次灰区解析呈现一次中性警告(显式与自省路径皆然)。
+置信地板(`classifierMinConfidence`,ADR-0004)触发时第一层裁决被降级的机制:**原生分类器**的裁决 confidence 严格低于地板时,无论 allow/ask/deny 一律降级——级联到回退分类器(若配置),否则转人工 ask(非交互降级 deny)。不低于地板时第一层完全自主。地板可独立采用(无需第二层);判据为「协议原生置信度的存在」(ADR-0005):分类器路径的结构化 confidence 是唯一触发源,chat/LLM 路径不携带 confidence、按构造不触发——且不静默,首次灰区解析呈现一次中性警告(显式与自省路径皆然)。
 
 ### 无效配置须呈现 (inert configuration must surface)
 
-配置纪律(#81):配置键声明的意图在生效模型的能力无法兑现时,必须产生运行时反馈——通常为每会话一次的**中性**警告(陈述事实,不评判配置:用户可能为将来的 jev 切换预设地板),不得静默失效。惰性边界:纯规则裁决的会话不触发任何此类警告(反馈随首次灰区解析产生)。实例:置信地板对非 decisions 分类器、jev spec 上的思考后缀、不可解析的 jev spec(特化文案指向真实成因:宿主无 `registerProvider` 或缺密钥)。
+配置纪律(#81):配置键声明的意图在生效模型的能力无法兑现时,必须产生运行时反馈——通常为每会话一次的**中性**警告(陈述事实,不评判配置:用户可能为将来的分类器切换预设地板),不得静默失效。惰性边界:纯规则裁决的会话不触发任何此类警告(反馈随首次灰区解析产生)。实例:置信地板对 chat 模型分类器、原生分类器 spec 上的思考后缀、不可解析的 jev spec(特化文案指向真实成因:宿主无原生分类器支持,或缺该 transport 的凭证)。
 
 ### 回退分类器 (fallback classifier)
 

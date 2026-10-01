@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Breaking Changes
+
+- **Requires pi ≥ 0.99** (`peerDependencies >=0.99.0`): 0.13 adopts pi's native classifier support and drops the dual-version compat layer. Older hosts (pi < 0.99, omp) keep using 0.12.x from npm — old hosts run old extensions (ADR-0005).
+- **Removed `extensions/jev-adapter.ts`** (ADR-0005, superseding ADR-0003's transport): classifier-typed models now resolve through pi's `findOfType("classifier", …)` and adjudicate via `ModelRegistry.classify()` with request-time auth. The adapter's provider registration also shadowed pi's built-in `typesafe/jev-latest` classifier for the whole session; retiring it restores the built-in entry (research/pi-0.87-to-0.99-upgrade-assessment.md §2.2).
+- Removed the `PI_VERDICT_JEV_TRANSPORT` / `PI_VERDICT_JEV_URL` environment variables — the native catalog covers the transports (`typesafe/jev-latest` direct with `TYPESAFE_API_KEY`; `openrouter/~typesafe/jev-latest`, `opencode/jev-1.13`, Cloudflare Workers AI, Vercel AI Gateway with each provider's login); custom endpoints move to models.json provider `baseUrl` overrides.
+
+### Changed
+
+- Confidence-floor criterion (ADR-0005): demotion now keys on protocol-native confidence — `ClassifierOutcome.confidence`, set only by the classify() path — instead of "decisions-model identity + a parseable reason segment". An LLM whose free-text reason matches the historical `jev:` shape still cannot demote (by construction now, not by regex); a chat-model classifier with `classifierMinConfidence` set warns once, neutrally, as before. llama.cpp label-probability classifiers (free, local, same-id with their chat twins — the native entry wins on dual listings) become floor-capable classifier options. ⚠️ Corpus comparability: pre-0.13 corpora contain demoted rows gated by the 0.12 criterion; cross-version analysis must treat the demoted population as criterion-dependent (same caveat class as 0.12.1).
+- Reason-line rendering: System One answers keep the exact 0.12 `jev:` line (audit tooling continuity; the family covers both catalog apis — `typesafe-system-one` and the Cloudflare Workers AI transport `cloudflare-workers-ai-system-one`); other classifier APIs render the same template with a `classifier:` prefix.
+- Unresolvable jev spec wording now names the real causes on the native path: a host without native classifier support (pi < 0.99), or a missing credential for the transport.
+- Known limitation carried over unchanged (recorded in ADR-0005): the denyPaths existence hint still does not reach classifier-typed models (the adapter never saw it either); a criteria variant is future work.
+
+### Internal
+
+- devDependencies `@earendil-works/pi-coding-agent` 0.84.3 → 0.99.2 (typecheck zero errors; 231/231 tests green; clean-agent-dir headless load smoke on 0.99.2). `files` no longer ships jev-adapter.ts. The jev-adapter test suite is replaced by `tests/native-classifier.test.ts` (verdict-line composition both prefixes, structured-confidence floor, classifyFor binding, classifyNative fail-closed matrix).
+
 ## [0.12.1] - 2026-09-28
 
 ### Added

@@ -1,7 +1,7 @@
 # 0003 - Jev decisions adapter: a non-generative model as the classifier backend
 
 ---
-status: accepted
+status: superseded by ADR-0005 (the adapter mechanism; the research basis, criteria, and failure discipline carry over)
 date: 2026-09-19
 ---
 

@@ -7,7 +7,6 @@
 	"main": "extensions/pi-verdict.ts",
 	"files": [
 		"extensions/pi-verdict.ts",
-		"extensions/jev-adapter.ts",
 		"README.md",
 		"README.zh-CN.md",
 		"LICENSE"
@@ -48,7 +47,7 @@
 		"test": "bun test"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": ">=0.84.0"
+		"@earendil-works/pi-coding-agent": ">=0.99.0"
 	},
 	"peerDependenciesMeta": {
 		"@earendil-works/pi-coding-agent": {
@@ -56,7 +55,7 @@
 		}
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "0.84.3",
+		"@earendil-works/pi-coding-agent": "0.99.2",
 		"@types/node": "^26.3.0",
 		"typescript": "^7.0.2"
 	}
