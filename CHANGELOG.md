@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Added
+
+- README (both languages): a "pi 0.99 codemode & MCP" section — nested codemode calls are gated exactly like direct ones (`parentToolCallId`), MCP tools adjudicate in the gray zone, the `ignoreTools` name-normalization trap (`mcp__dev-radius__x` → `mcp__dev_radius__x`), the 256-nested-calls cost amplification, and the `--no-extensions -e builtin:*` exposure boundary; `docs/security-principles.md` principle 10 records the same parity discipline.
+
+### Changed
+
+- Internal refactor (the 0.13 review's judgement calls, zero behavior change): `classifyWithModel` takes `(env, resolved, call)` instead of nine positional params; the resolved-layer type is flattened to `{kind, model, thinking}` removing the `resolved.model.model.id` double hop; the two spec-unavailable warnings share one formatter (the generic classifier-layer wording normalizes `, falling back` to `; falling back`, matching the jev branch).
+
+### Internal
+
+- CI: `actions/checkout` and `actions/setup-node` bumped v4 → v5 (run logs showed Node 20 deprecation warnings).
+
 ## [0.13.0] - 2026-10-01
 
 ### Breaking Changes

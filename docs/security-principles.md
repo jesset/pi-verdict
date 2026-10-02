@@ -50,7 +50,7 @@ User rules are the user's own security declarations (deny beats allow; denyPaths
 
 ### 10. Platform differences are documented, not silently weaker
 
-Security semantics must not silently degrade just because an action is expressed differently. Where full parity is not shipped, the gap is documented instead: on Windows the built-in floor covers bash-shaped patterns only — PowerShell-native dangerous commands rely on the classifier, which fails closed (see [Status & limitations](../README.md#status--limitations)).
+Security semantics must not silently degrade just because an action is expressed differently. Where full parity is not shipped, the gap is documented instead: on Windows the built-in floor covers bash-shaped patterns only — PowerShell-native dangerous commands rely on the classifier, which fails closed (see [Status & limitations](../README.md#status--limitations)). The same discipline governs pi 0.99's indirect surfaces: codemode nested calls pass through the identical `tool_call` pipeline as direct calls, and MCP tools (`mcp__*`) adjudicate in the gray zone with the classifier backstop — documented in the README's [codemode & MCP](../README.md#pi-099-codemode--mcp-indirect-calls-are-still-gated) section, including the `ignoreTools` name-normalization trap. The one hard boundary, stated rather than papered over: `--no-extensions` (with or without `-e builtin:*`) runs pi with no extensions loaded — the gate is itself an extension, so it cannot be active in a session that loads none.
 
 ### 11. Optimize for safe automation, not maximum automation
 

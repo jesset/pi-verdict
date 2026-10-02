@@ -119,7 +119,7 @@ pi-verdict 0.13+ requires **pi ≥ 0.99** and runs on pi only (native classifier
 
 - `allow`/`deny` are JS regex arrays; **`deny` wins over `allow`**, both beat the classifier
 - `denyPaths` are plain paths you declare **protected** — touches trigger a terminal ask you adjudicate (non-interactive → deny); the classifier never learns the paths themselves, only that they exist. `grep`/`find`/`ls` compare their whole **search scope**: an omitted `path` (pi's default: the current directory) or a parent directory of a declared path triggers the ask as well. A fresh install pre-fills a **starter list** (`~/.ssh/`, `~/.gnupg`, `~/.mc`, shell rc/profile files)
-- `ignoreTools` names uncovered tools (`todo`, `web_search`, MCP/custom tools) that skip adjudication — **allow with zero model calls**; entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs first. A fresh install pre-fills a **starter list** (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit). Caveat: an exempted tool loses the classifier's `denyPaths` existence-hint vigilance (uncovered tools never hit the path extractor anyway)
+- `ignoreTools` names uncovered tools (`todo`, `web_search`, MCP/custom tools) that skip adjudication — **allow with zero model calls**; entries naming covered tools (`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`) are inert: those stay governed by the deny floor and your allow/deny rules, and the self-protection layer always runs first. A fresh install pre-fills a **starter list** (`todo`, `ask_user_question`, `memory_write`, `memory_search` — observed harmless across the 1265-verdict production audit). Caveat: an exempted tool loses the classifier's `denyPaths` existence-hint vigilance (uncovered tools never hit the path extractor anyway); MCP tool names are normalized before matching — see [codemode & MCP](#pi-099-codemode--mcp-indirect-calls-are-still-gated)
 - `builtinDenyFloor: false` turns off the built-in danger/path floor (your risk; the self-protection layer below always stays on)
 - `classifierModel` pins the classifier model, e.g. `"zai/glm-5.3-flash:low"` (thinking suffix supported; default: session model with thinking off)
 - `classifierModel: "typesafe/jev-latest"` opts into the **native jev classifier** — one structured `classify()` call per gray-zone verdict via pi's built-in classifier catalog (TypeSafe direct, or Jev on OpenRouter/OpenCode/Cloudflare/Vercel); see [ADR-0005](docs/adr/0005-native-classifier-migration.md)
@@ -147,6 +147,16 @@ No built-in allowlist — every "always allow" claim is yours ([why](docs/config
 - Carried-over limit: the denyPaths existence hint still does not reach classifier-typed models ([ADR-0005](docs/adr/0005-native-classifier-migration.md)); on the TypeSafe direct transport per-call cost shows $0 (its API does not report it)
 
 jev's calibrated confidence is exactly what the confidence floor keys on — pair it with a second layer (`"classifierMinConfidence", "classifierFallbackModel"`) so its low-confidence calls go to a deeper model instead of standing ([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md)).
+
+### pi 0.99 codemode & MCP: indirect calls are still gated
+
+pi 0.99 can run model-written JavaScript in a QuickJS sandbox (`codemode`) that calls pi's tools, and MCP servers register tools as `mcp__<server>__<tool>`. Neither surface bypasses this gate:
+
+- **Nested calls are gated exactly like direct ones** — pi routes every tool call a codemode script makes through the same `tool_call` pipeline (tagged `parentToolCallId`, ids `<parent>/<n>`); a blocked call returns as an error to the script, which the model sees
+- **MCP tools land in the gray zone** — the rule layer covers the built-in command/file tools only; each `mcp__*` call is classified, fail-closed included
+- **`ignoreTools` and MCP names**: tool names are normalized — every character outside `[A-Za-z0-9_]` becomes `_` (`mcp__dev-radius__x` → `mcp__dev_radius__x`); exemption entries must use the normalized form
+- **Cost amplification**: one script may issue up to 256 nested calls; gray-zone calls classify one by one, so a slow LLM classifier multiplies per-call latency
+- **Exposure boundary**: adding an MCP server auto-enables codemode, and `pi --no-extensions -e builtin:mcp` runs MCP tools with no extensions loaded — i.e. without this gate. The gate is itself an extension, so it cannot be active in a session that loads none; the boundary is inherent to pi's extension model, stated here rather than papered over
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 
