@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Internal
+
+- devDependencies `@earendil-works/pi-coding-agent` 0.99.2 → 1.0.0 (typecheck zero errors; 241/241 tests green; fullscreen `ask`/`notify` smoke-verified interactively on 1.0.0). `peerDependencies` stays `>=0.99.0` — pi 1.0.0 leaves the extension API surface unchanged, so no code migration.
+
 ## [0.13.1] - 2026-10-02
 
 ### Added
