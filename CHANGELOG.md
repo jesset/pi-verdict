@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 - Native-path reasons are tag-free: the vestigial `<verdict>…</verdict>` prefix is dropped from the reason composed by `composeVerdictLine` — it existed to satisfy the LLM path's `parseVerdict` contract, which the native classify() path never needed (the verdict comes from the structured answer; the floor reads structured confidence). Notifications and ask dialogs now read e.g. `🛡️ allow (classifier): jev: allow 95% (confidence 93%; ask 4%, deny 1%)`. The audit record's `rawResponse` keeps the full contract line (tag included), mirroring the chat path's rawResponse (the model's full output). ⚠️ Corpus comparability: native-path audit `reason` fields lose the leading tag; tooling anchored on `^<verdict>` over `reason` must switch to `rawResponse` (ADR-0005 amendment).
 
+### Fixed
+
+- denyPaths bash token extraction is linear now (#32): `BASH_PATH_TOKENS`' regex backtracked quadratically on long failure searches — a 200k separator-free command took ~28s of token extraction whenever denyPaths were configured (uncapped, unlike the #25 danger-regex cap, because truncation would let a protected-path spelling beyond the cap silently escape the deterministic ask). Replaced with `bashPathTokens`, a one-pass deterministic tokenizer that reproduces the regex's matchAll semantics exactly (alternation priority included; equivalence pinned by a 3000-case fuzz test against the regex, which stays in the codebase as the semantic oracle) — 200k adversarial shapes now extract in single-digit milliseconds.
+
 ### Internal
 
 - CI: `actions/checkout` and `actions/setup-node` bumped v4 → v5 (run logs showed Node 20 deprecation warnings).

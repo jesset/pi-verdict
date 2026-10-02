@@ -9,7 +9,7 @@ import { describe, test, expect, beforeAll, beforeEach, afterAll } from "bun:tes
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { adjudicate, BASH_MAX_MATCH_LEN, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
+import autoMode, { adjudicate, bashPathTokens, BASH_MAX_MATCH_LEN, BASH_PATH_TOKENS, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -1552,7 +1552,74 @@ describe("denyPaths (ADR-0002)", () => {
 	});
 });
 
+// ── 10.4b bash 路径 token 提取(#32:线性分词器,正则为 oracle)──
+
+describe("bash path-token extraction (#32: linear tokenizer, regex as oracle)", () => {
+	const oracle = (s: string) => [...s.matchAll(BASH_PATH_TOKENS)].map((m) => m[0]);
+
+	test("#32 acceptance: 200k-char adversarial shapes extract in well under a second (each)", () => {
+		const shapes: Array<[string, string]> = [
+			["pure word run, no slash", "a".repeat(200_000)],
+			["word run + single trailing slash (the measured ~28s shape)", "a".repeat(199_999) + "/"],
+			["absolute, no closing segment", "/" + "a".repeat(199_999)],
+			["slash-terminated segment flood", ("ab" + "/").repeat(66_666)],
+			["alt1 prefix flood, no slash", "~".repeat(200_000)],
+		];
+		for (const [name, cmd] of shapes) {
+			const t0 = performance.now();
+			const tokens = bashPathTokens(cmd);
+			const ms = performance.now() - t0;
+			expect(ms, `#32 perf: ${name} took ${ms.toFixed(1)}ms`).toBeLessThan(250); // acceptance: <1s at 200k; headroom for CI
+			expect(Array.isArray(tokens)).toBe(true); // shape sanity; equivalence is pinned separately
+		}
+	});
+
+	test("#32 acceptance (configured chain): denyPaths-configured adjudication of a 200k flood stays fast", async () => {
+		setConfig({ denyPaths: [path.join(TMP_AGENT, "sensitive")] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = {
+			cwd: "/proj",
+			hasUI: false,
+			getModel: () => null, // no model: the call lands in fail-closed AFTER token extraction + denyPaths comparison
+			complete: (async () => {
+				throw new Error("unreachable");
+			}) as any,
+			host: { getBranch: () => [], getSessionId: () => "s1" },
+		};
+		const cmd = ("ab" + "/").repeat(66_666);
+		const t0 = performance.now();
+		const v = await adjudicate(state, { toolName: "bash", input: { command: cmd } }, env as any);
+		const ms = performance.now() - t0;
+		expect(ms, `#32 configured-chain perf: ${ms.toFixed(1)}ms`).toBeLessThan(250);
+		expect(v).toMatchObject({ verdict: "deny", source: "fail-closed" }); // extraction ran, nothing matched, no model
+	});
+
+	test("equivalence: the linear tokenizer reproduces the regex oracle exactly (fuzz + edge corpus)", () => {
+		// Deterministic Lehmer RNG — the same fuzz set on every run (seed * 48271 stays
+		// below 2^47, so no float precision loss; the naive LCG overflowed 2^53 and
+		// collapsed its effective state)
+		let seed = 0x2f6e2b1 % 2147483647;
+		const rnd = () => ((seed = (seed * 48271) % 2147483647) / 2147483647);
+		const alphabet = [..."ab/.-~$HOMEx_ *@\t"];
+		const corpus: string[] = [
+			"", "~", "$HOME", "~/", "$HOME/", "~/.ssh/id_ed25519", "/a//b", "a//b", "//", "///x",
+			"..", "...", ".", "./", "../x", "a/./b", "-/-", "a-", "a.b/c.d", "*/*", "@/",
+			"$HOME$HOME", "~~/a", "cat ~/.ssh/key && /etc/passwd", "echo a/b c//d ./x ../y",
+			"$HOME/x", "$HOME//x", "$HOMEx/y", "a $HOME/b c", "~$HOME/x", "$HOME$HOME/x",
+			"./", "../", ".//x", "..//x", "a/", "a//", "ab/.", "ab/..", "x/.hidden/y", "--/a",
+		];
+		for (let i = 0; i < 3000; i++) {
+			const len = Math.floor(rnd() * 40);
+			let s = "";
+			for (let j = 0; j < len; j++) s += alphabet[Math.floor(rnd() * alphabet.length)];
+			corpus.push(s);
+		}
+		for (const s of corpus) expect(bashPathTokens(s)).toEqual(oracle(s));
+	});
+});
+
 // ── 10.5 agent-facing block reason(#53:每个 block 站点的 canonical 形态)──
+
 
 describe("agent-facing block reason form (#53)", () => {
 	const HEAD = "BLOCKED — this action did NOT run. Reason: ";

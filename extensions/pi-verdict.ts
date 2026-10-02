@@ -556,9 +556,125 @@ function userRuleTarget(toolName: string, input: Record<string, unknown>, cwd: s
 // only ever sees a fixed existence hint — zero path plaintext.
 // ============================================================================
 
-/** Path-like tokens in a shell command string: ~/…, $HOME/…, absolute /…, ./… / ../…, and word/word relative forms. URL path segments can match the absolute branch — harmless: resolution against denyPaths prefixes is what decides, false positives ask (safe direction) */
-const BASH_PATH_TOKENS =
+/** Path-like tokens in a shell command string: ~/…, $HOME/…, absolute /…, ./… / ../…, and word/word relative forms. URL path segments can match the absolute branch — harmless: resolution against denyPaths prefixes is what decides, false positives ask (safe direction).
+ *
+ * Exported as the SEMANTIC ORACLE for #32's linear tokenizer (bashPathTokens) — the
+ * production path never runs this regex: its four alternatives backtrack
+ * quadratically on long failure searches (a 200k separator-free run takes ~28s,
+ * issue #32), and unlike the danger regexes (#25's 8192 cap) it cannot be capped —
+ * truncation would let a protected-path spelling beyond the cap silently escape
+ * the deterministic ask (ADR-0002's never-silently-passed contract). */
+export const BASH_PATH_TOKENS =
 	/(?:~|\$HOME)(?:\/[\w.@*-]+)*|\/(?:[\w.@*-]+\/)*[\w.@*-]*|\.{1,2}(?:\/[\w.@*-]+)+|[\w.-]+(?:\/[\w.-]+)+/g;
+
+/** ASCII class membership for the tokenizer (JS \w is ASCII-only; non-ASCII code
+ *  points simply fall outside the classes, matching the regex). */
+const TOKEN_W2 = new Uint8Array(128); // [\w.@*-]
+const TOKEN_W4 = new Uint8Array(128); // [\w.-]
+for (let c = 0; c < 128; c++) {
+	const ch = String.fromCharCode(c);
+	if (/[a-zA-Z0-9_]/.test(ch) || ".@*-".includes(ch)) TOKEN_W2[c] = 1;
+	if (/[a-zA-Z0-9_]/.test(ch) || ".-".includes(ch)) TOKEN_W4[c] = 1;
+}
+
+const isW2 = (s: string, i: number): boolean => i < s.length && s.charCodeAt(i) < 128 && TOKEN_W2[s.charCodeAt(i)] === 1;
+const isW4 = (s: string, i: number): boolean => i < s.length && s.charCodeAt(i) < 128 && TOKEN_W4[s.charCodeAt(i)] === 1;
+
+/** #32: linear tokenizer for BASH_PATH_TOKENS — one deterministic pass, provably
+ *  O(n): each alternative parses greedily with at most a bounded (≤ 2) retry, and
+ *  the scan position only advances. The regex oracle's matchAll semantics are
+ *  reproduced exactly (alternation priority included; equivalence pinned by a
+ *  fuzz test against the oracle). Derivation per alternative:
+ *  - alt1 `(~|$HOME)(\/W2+)*`: the star never fails — prefix + maximal (/ + W2-run)
+ *    repetitions; a bare ~ / $HOME is a legal zero-iteration match.
+ *  - alt2 `\/(W2+\/)*W2*`: pairs stop at the first word-run not followed by a slash;
+ *    the trailing star always succeeds, so the greedy parse is THE match (a lone
+ *    "/" is a legal zero-pair, empty-tail match).
+ *  - alt3 `\.{1,2}(\/W2+)+`: dots are tried greedily (2 then 1 — the regex's DFS
+ *    order); the plus needs one '/'-then-W2 continuation, else the alternative fails.
+ *  - alt4 `W4+(\/W4+)+`: the leading run is maximal [p, e); a continuation is viable
+ *    ONLY at a '/' (a literal) immediately followed by a W4 char, and once viable
+ *    the greedy inner always completes — so the DFS-first match takes the LARGEST
+ *    viable '/' at or before e and extends greedily. This is exactly where the
+ *    regex paid O(n) per start position on failure; the scan computes it in O(1)
+ *    amortized. */
+export function bashPathTokens(command: string): string[] {
+	const s = command;
+	const n = s.length;
+	// Right-to-left precompute of maximal-run ends — the single pass that makes every
+	// position O(1): runEndX[i] = first index >= i not in class X (i when s[i] itself
+	// is out of class; n at the end of string).
+	const runEnd2 = new Int32Array(n + 1);
+	const runEnd4 = new Int32Array(n + 1);
+	runEnd2[n] = n;
+	runEnd4[n] = n;
+	for (let i = n - 1; i >= 0; i--) {
+		runEnd2[i] = isW2(s, i) ? runEnd2[i + 1] : i;
+		runEnd4[i] = isW4(s, i) ? runEnd4[i + 1] : i;
+	}
+	const out: string[] = [];
+	let p = 0;
+	while (p < n) {
+		const c = s[p];
+		let m = 0; // match end (exclusive); 0 = no match at p
+		if (c === "~" || s.startsWith("$HOME", p)) {
+			// alt1: deterministic greedy (/ + W2-run) repetitions
+			let q = c === "~" ? p + 1 : p + 5;
+			for (;;) {
+				if (s[q] === "/" && isW2(s, q + 1)) q = runEnd2[q + 1];
+				else break;
+			}
+			m = q;
+		} else if (c === "/") {
+			// alt2: (W2-run + /) pairs while possible, then the trailing W2-run
+			let q = p + 1;
+			for (;;) {
+				if (!isW2(s, q)) break; // empty tail — the match is the consumed prefix
+				const r = runEnd2[q];
+				if (s[r] !== "/") {
+					q = r; // tail run consumes through r
+					break;
+				}
+				q = r + 1; // pair complete — another may follow
+			}
+			m = q;
+		} else if (c === ".") {
+			// alt3: dots greedy 2 then 1; inner = maximal (/ + W2-run) repetitions, >= 1 required
+			const innerEnd = (q: number): number | null => {
+				if (s[q] !== "/" || !isW2(s, q + 1)) return null;
+				let r = q;
+				for (;;) {
+					if (s[r] === "/" && isW2(s, r + 1)) r = runEnd2[r + 1];
+					else break;
+				}
+				return r;
+			};
+			if (s[p + 1] === ".") m = innerEnd(p + 2) ?? 0;
+			if (m === 0) m = innerEnd(p + 1) ?? 0;
+		}
+		if (m === 0 && isW4(s, p)) {
+			// alt4: the maximal leading run is [p, e). '/' is not in W4, so the run
+			// itself contains no slash and the ONLY viable continuation split is at e
+			// — the O(1) step that replaces the regex's O(n)-per-position backtrack.
+			const e = runEnd4[p];
+			if (s[e] === "/" && isW4(s, e + 1)) {
+				let q = e;
+				for (;;) {
+					if (s[q] === "/" && isW4(s, q + 1)) q = runEnd4[q + 1];
+					else break;
+				}
+				m = q;
+			}
+		}
+		if (m > p) {
+			out.push(s.slice(p, m));
+			p = m; // matchAll semantics: continue after the match
+		} else {
+			p++;
+		}
+	}
+	return out;
+}
 
 /** Normalized forms of one path for denyPaths comparison: base tier only (ADR-0002) —
  *  no ancestor rebuild; a nonexistent target under a symlinked dir falls to the
@@ -578,7 +694,7 @@ const anchorDenyPaths = (paths: string[], cwd: string): string[] => paths.flatMa
  *  IS the cwd subtree (#48). */
 function denyPathCandidates(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
 	const kind = toolKind(toolName);
-	if (kind === "command") return [...String(input.command ?? "").matchAll(BASH_PATH_TOKENS)].map((m) => m[0]);
+	if (kind === "command") return bashPathTokens(String(input.command ?? "")); // #32: linear — the regex stays as the test oracle
 	if (kind === "file") {
 		const p = typeof input.path === "string" && input.path ? input.path : null;
 		if (!p) return isScopeTool(toolName) ? [cwd] : [];
