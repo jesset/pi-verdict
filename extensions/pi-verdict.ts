@@ -461,7 +461,62 @@ const S0_SECRET = [
 ];
 // /private prefixes: macOS firmlinks — /etc, /var are really /private/etc,
 // /private/var, and realpath'd toolchain output uses the real spelling (#21)
-const S1_SYSTEM = [/^\/etc(\/|$)/i, /^\/private\/(etc|var)(\/|$)/i, /^\/usr(\/|$)/i, /^\/var(\/|$)/i, /^\/System(\/|$)/i, /(^|\/)authorized_keys$/i];
+// Split into two families (#83): the directory-prefix family (what the per-user
+// temp exemption may lift on macOS) and the basename family (authorized_keys —
+// staging it in a temp dir must stay denied; defense in depth for the
+// stage-then-copy chain).
+const S1_SYSTEM_DIRS = [/^\/etc(\/|$)/i, /^\/private\/(etc|var)(\/|$)/i, /^\/usr(\/|$)/i, /^\/var(\/|$)/i, /^\/System(\/|$)/i];
+const S1_SYSTEM_FILES = [/(^|\/)authorized_keys$/i];
+const S1_SYSTEM = [...S1_SYSTEM_DIRS, ...S1_SYSTEM_FILES];
+
+/** #83: the per-user temp exemption bases — macOS confstr family only, at the
+ *  confstr DEPTH (two segments below the family root: /var/folders/<xx>/<yy>/…),
+ *  so the family root itself or a stray one-level child can never widen the
+ *  exemption. The guard is deliberate: os.tmpdir() reads the process env, so
+ *  trusting it verbatim would let a hand-set TMPDIR (e.g. TMPDIR=/etc, or the
+ *  family root) lift the floor over S1 trees — narrowing the never-config-exemptible
+ *  floor must go through code review, not an env accident. Another user's confstr
+ *  subtree technically passes the depth check but is macOS-permission-guarded
+ *  (same-user threat only). /var/tmp (POSIX shared temp) intentionally stays S1.
+ *  Returns [] (inert) on every other platform — their tmpdirs never match S1. */
+export function computeTmpdirBases(
+	platform: NodeJS.Platform,
+	tmp: string,
+	realpath: (p: string) => string | null,
+): string[] {
+	if (platform !== "darwin" || !tmp) return [];
+	const lexical = path.resolve(tmp);
+	const real = realpath(lexical);
+	const bases = real === null ? [lexical] : [lexical, real];
+	const confstrFamily = /^(?:\/private)?\/var\/folders\/[^/]+\/[^/]+(?:\/|$)/;
+	return bases.every((b) => confstrFamily.test(b)) ? bases : [];
+}
+
+/** The session-constant exemption bases (os.tmpdir() is stable for a process
+ *  lifetime); test-overridable via the exported seam below. */
+function defaultTmpdirBases(): string[] {
+	return computeTmpdirBases(process.platform, os.tmpdir(), (p) => {
+		try {
+			return fs.realpathSync(p);
+		} catch {
+			return null;
+		}
+	});
+}
+
+let tmpdirExemptBases = defaultTmpdirBases();
+
+/** Test seam for tmpdirExemptBases — exported for tests only (the internal-seam
+ *  surface, the standing #35 pattern); null restores the production bases. */
+export function setTmpdirBasesForTests(bases: string[] | null): void {
+	tmpdirExemptBases = bases ?? defaultTmpdirBases();
+}
+
+/** #83: is EVERY canonical form of the target under the per-user temp tree?
+ *  Intersection semantics (#20 discipline): a lexical temp spelling whose real
+ *  form escapes (symlink to /etc) is NOT exempt — the S1 grading still applies. */
+const tmpdirExempt = (forms: string[]): boolean =>
+	tmpdirExemptBases.length > 0 && forms.every((f) => tmpdirExemptBases.some((b) => f === b || f.startsWith(b + path.sep)));
 const S2_USER_RC = [/\.(bashrc|zshrc|profile|bash_profile|gitconfig)$/i, /crontab/i, /Library\/LaunchAgents(\/|$)/i, /\.config\/systemd(\/|$)/i];
 const S3_GIT_META = [/(^|\/)\.git\/(hooks|config|modules)(\/|$)/i, /(^|\/)\.gitmodules$/i];
 
@@ -479,11 +534,17 @@ function classifyPath(toolName: string, rawPath: string, cwd: string, isWrite: b
 		: (reason: string): RuleResult => ({ verdict: "gray", reason });
 
 	if (hit(S0_SECRET)) return D(`S0 secrets/credential path: ${rawPath}`);
+	// #83: under the per-user temp tree the DIRECTORY-prefix family of S1 lifts (a
+	// macOS confstr temp dir is per-user scratch, not a system directory); the
+	// basename family (authorized_keys) still applies, and the fall-through keeps the
+	// deny-only floor philosophy — reads regain the ordinary read allow, writes grade
+	// as ordinary outside-project writes (gray, classifier-adjudicated).
+	const s1Rules = tmpdirExempt(forms) ? S1_SYSTEM_FILES : S1_SYSTEM;
 	if (!isWrite) {
-		if (hit(S1_SYSTEM)) return { verdict: "gray", reason: `read system config path: ${rawPath}` };
+		if (hit(s1Rules)) return { verdict: "gray", reason: `read system config path: ${rawPath}` };
 		return { verdict: "allow" };
 	}
-	if (hit(S1_SYSTEM)) return D(`write to system directory: ${rawPath}`);
+	if (hit(s1Rules)) return D(`write to system directory: ${rawPath}`);
 	if (hit(S3_GIT_META)) return D(`write to .git metadata (executable code entry point): ${rawPath}` );
 	if (hit(S2_USER_RC)) return { verdict: "gray", reason: `write to user config/persistence entry point: ${rawPath}` };
 	// In-cwd write allowance (#20): every canonical form must sit inside the cwd

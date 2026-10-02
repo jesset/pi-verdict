@@ -233,6 +233,7 @@ tool_call
 - 设计上无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户自定义规则](#用户自定义规则pi-verdictjson))；allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - 路径敏感度 floor 只作用于文件类工具：bash 命令串仅匹配危险正则——`cat ~/.ssh/id_rsa` 走分类器而非确定性 S0 拦截(文件工具拼写 `read ~/.ssh/id_rsa` 会拦截)
 - Windows 下内置 floor 仅覆盖 bash 形态模式——PowerShell 原生危险命令(`Remove-Item -Recurse -Force`、`Invoke-Expression`、`Set-ExecutionPolicy` 等)依赖分类器兜底(fail-closed)
+- macOS 下 per-user 临时目录(`$TMPDIR`,`/var/folders/…/T` confstr 目录)豁免于系统目录 floor:读零成本放行,写按普通项目外写交分类器裁决。豁免锚定运行时解析的 confstr 族——手工设置 `TMPDIR` 不会解除任何保护;`/var/tmp`(POSIX 共享临时目录)维持拦截;真实形态逃逸临时树的符号链接拼写仍命中 S1
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
 - 并行灰区调用串行裁决
 - 自省意味着会话模型自身裁决 —— 若延迟/成本敏感，用 `--auto-mode-model` 指向轻量模型(开放问题见 issue tracker)

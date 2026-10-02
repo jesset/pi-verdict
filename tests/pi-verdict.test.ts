@@ -5,11 +5,11 @@
  * 会话装配统一走 session(cfg, opts)(配置 → harness → 装载,顺序约束内化);
  * 临时目录夹具走 withTempDir(建 → fn → 清理)。
  */
-import { describe, test, expect, beforeAll, beforeEach, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, beforeEach, afterEach, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { adjudicate, bashPathTokens, BASH_MAX_MATCH_LEN, BASH_PATH_TOKENS, bindCompletion, buildProtectedSet, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
+import autoMode, { setTmpdirBasesForTests, adjudicate, bashPathTokens, BASH_MAX_MATCH_LEN, BASH_PATH_TOKENS, bindCompletion, buildProtectedSet, computeTmpdirBases, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -1618,8 +1618,106 @@ describe("bash path-token extraction (#32: linear tokenizer, regex as oracle)", 
 	});
 });
 
-// ── 10.5 agent-facing block reason(#53:每个 block 站点的 canonical 形态)──
+// ── 10.4c macOS tmpdir S1 exemption (#83: confstr-family guard + intersection forms + basename family survives)──
 
+describe("macOS tmpdir S1 exemption (#83)", () => {
+	const fixtureDirs: string[] = [];
+	const mkBase = (prefix: string): string => {
+		const d = fs.mkdtempSync(path.join(TMP_AGENT, prefix));
+		fixtureDirs.push(d);
+		return d;
+	};
+	const mkEnv = (hasUI = false) => ({
+		cwd: "/proj",
+		hasUI,
+		getModel: () => null,
+		complete: (async () => {
+			throw new Error("unreachable");
+		}) as any,
+		host: { getBranch: () => [] as any[], getSessionId: () => "s1" },
+	});
+	/** Fake realpath: maps /var → /private/var (the firmlink), null for paths containing GONE. */
+	const realpathMap = (p: string) => (p.includes("GONE") ? null : p.replace(/^\/var\//, "/private/var/"));
+
+	test("computeTmpdirBases: darwin confstr family yields both forms; everything else is inert", () => {
+		// darwin confstr: lexical + firmlink realpath, both under the family
+		expect(computeTmpdirBases("darwin", "/var/folders/ab/cd/T/", realpathMap)).toEqual([
+			"/var/folders/ab/cd/T",
+			"/private/var/folders/ab/cd/T",
+		]);
+		// realpath unavailable: the lexical form alone, still in-family
+		expect(computeTmpdirBases("darwin", "/var/folders/ab/GONE/T/", realpathMap)).toEqual(["/var/folders/ab/GONE/T"]);
+		// non-darwin: inert everywhere (their tmpdirs never match S1)
+		expect(computeTmpdirBases("linux", "/var/folders/ab/cd/T/", realpathMap)).toEqual([]);
+		expect(computeTmpdirBases("win32", "C:\\Temp", realpathMap)).toEqual([]);
+		// the guard: a hand-set TMPDIR must not lift S1 over arbitrary trees, and the
+		// confstr DEPTH is required — the family root or a one-level child widens nothing
+		expect(computeTmpdirBases("darwin", "/etc", realpathMap)).toEqual([]);
+		expect(computeTmpdirBases("darwin", "/var", realpathMap)).toEqual([]);
+		expect(computeTmpdirBases("darwin", "/var/tmp", realpathMap)).toEqual([]); // POSIX shared temp stays S1 (rejected alternative)
+		expect(computeTmpdirBases("darwin", "/var/folders", realpathMap)).toEqual([]); // family root itself
+		expect(computeTmpdirBases("darwin", "/var/folders/ab", realpathMap)).toEqual([]); // one level below the root
+		expect(computeTmpdirBases("darwin", "", realpathMap)).toEqual([]);
+	});
+
+	test("integration via the test seam: reads allow at zero cost, writes grade as ordinary outside-project (classifier), on any platform", async () => {
+		const base = mkBase("s1-exempt");
+		setTmpdirBasesForTests([base, fs.realpathSync(base)]); // both forms, mirroring production
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = mkEnv();
+		const r = await adjudicate(state, { toolName: "read", input: { path: path.join(base, "x.log") } }, env as any);
+		expect(r).toMatchObject({ verdict: "allow", source: "rule" }); // was: gray "read system config path" → classifier every call
+		const w = await adjudicate(state, { toolName: "write", input: { path: path.join(base, "x.txt"), content: "x" } }, env as any);
+		expect(w).toMatchObject({ verdict: "deny", source: "fail-closed" }); // NOT rule/S1: gray fell through to the no-model fail-closed
+		expect(w.reason).not.toContain("system directory");
+	});
+
+	test("symlink escape: a temp-lexical spelling whose real form escapes stays S1-denied (intersection, #20 discipline)", async () => {
+		const base = mkBase("s1-escape");
+		setTmpdirBasesForTests([base, fs.realpathSync(base)]); // both forms, mirroring production
+		const link = path.join(base, "evil");
+		fs.symlinkSync("/etc/passwd", link);
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = mkEnv();
+		const w = await adjudicate(state, { toolName: "write", input: { path: link, content: "x" } }, env as any);
+		expect(w).toMatchObject({ verdict: "deny", source: "rule" });
+		expect(w.reason).toContain("system directory");
+	});
+
+	test("basename family survives: authorized_keys staged under the exempt tree still denies (Q3)", async () => {
+		const base = mkBase("s1-ak");
+		setTmpdirBasesForTests([base, fs.realpathSync(base)]); // both forms, mirroring production
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = mkEnv();
+		const w = await adjudicate(state, { toolName: "write", input: { path: path.join(base, "authorized_keys"), content: "ssh-ed25519 ..." } }, env as any);
+		expect(w).toMatchObject({ verdict: "deny", source: "rule" });
+		expect(w.reason).toContain("system directory");
+	});
+
+	test("denyPaths still asks for an exempt-tree read (pipeline step 4 preempts the floor allow)", async () => {
+		const base = mkBase("s1-dp");
+		fs.writeFileSync(path.join(base, "f"), "x");
+		setTmpdirBasesForTests([base, fs.realpathSync(base)]); // both forms, mirroring production
+		setConfig({ denyPaths: [base] });
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = mkEnv(true);
+		const v = await adjudicate(state, { toolName: "read", input: { path: path.join(base, "f") } }, env as any);
+		expect(v).toMatchObject({ verdict: "ask", source: "protected-path" });
+	});
+
+	test("control: /etc direct stays denied; a plain project read is untouched", async () => {
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null));
+		const env = mkEnv();
+		const w = await adjudicate(state, { toolName: "write", input: { path: "/etc/hosts", content: "x" } }, env as any);
+		expect(w).toMatchObject({ verdict: "deny", source: "rule" });
+		expect(w.reason).toContain("system directory");
+	});
+
+	afterEach(() => setTmpdirBasesForTests(null));
+	afterAll(() => {
+		for (const d of fixtureDirs) fs.rmSync(d, { recursive: true, force: true });
+	});
+});
 
 describe("agent-facing block reason form (#53)", () => {
 	const HEAD = "BLOCKED — this action did NOT run. Reason: ";
