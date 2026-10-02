@@ -235,6 +235,7 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 - no built-in allowlist by design (see the [bypass writeup](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
 - the path sensitivity floor applies to file tools only: bash command strings are matched by the danger regexes alone, so e.g. `cat ~/.ssh/id_rsa` goes to the classifier rather than the deterministic S0 deny (the file-tool spelling `read ~/.ssh/id_rsa` does deny)
 - on Windows the built-in floor covers bash-shaped patterns only — PowerShell-native dangerous commands (`Remove-Item -Recurse -Force`, `Invoke-Expression`, `Set-ExecutionPolicy`, …) rely on the classifier (fail-closed)
+- on macOS the per-user temp tree (`$TMPDIR`, the `/var/folders/…/T` confstr dir) is exempt from the system-directory floor: reads allow at zero cost, writes adjudicate as ordinary outside-project writes (classifier). The exemption anchors to the runtime-resolved confstr family — a hand-set `TMPDIR` lifts nothing — and `/var/tmp` (POSIX shared temp) stays denied; symlink spellings whose real form escapes the temp tree still hit S1
 - AGENTS.md is not passed to the classifier as downweighted intent evidence (Claude Code does this)
 - parallel gray-zone calls are adjudicated serially
 - self-reflection means the session model adjudicates — point `--auto-mode-model` at a lighter model if verdict latency/cost matters (open question tracked in the issue tracker)
