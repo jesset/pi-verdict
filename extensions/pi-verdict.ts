@@ -276,9 +276,17 @@ interface UserRules {
 	/** #67: does the second layer adjudicate cascaded calls ("enforce", default since
 	 *  0.12.0) or only record its opinion while the human decides ("shadow")? */
 	classifierFallbackMode: "shadow" | "enforce";
+	/** #90/ADR-0006: nested-call policy. "gate" (default) = nested calls adjudicate
+	 *  identically to direct calls; "rules-only" = nested calls keep every
+	 *  deterministic layer (self-protection, floor, user rules, denyPaths + its ask)
+	 *  and skip only the classifier + cascade — the gray zone passes, because serial
+	 *  adjudication of codemode batches amplifies per-call latency (live-fire:
+	 *  ~350ms/call). Opt-in: rule-passing actions the classifier would have caught
+	 *  pass under rules-only (coverage is denyPaths-declaration-dependent). */
+	codemodeNestedCalls: "gate" | "rules-only";
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "enforce" };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "enforce", codemodeNestedCalls: "gate" };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -371,7 +379,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -416,6 +424,9 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 		if (minConfRaw !== undefined && minConfRaw !== null && !minConfOk) skipped.push(`classifierMinConfidence: ${JSON.stringify(minConfRaw)}`);
 		const fbModeRaw = raw.classifierFallbackMode;
 		if (fbModeRaw !== undefined && fbModeRaw !== "shadow" && fbModeRaw !== "enforce") skipped.push(`classifierFallbackMode: ${JSON.stringify(fbModeRaw)}`);
+		// #90: nested-call policy — invalid values skip into the one-shot warning channel
+		const nestedRaw = raw.codemodeNestedCalls;
+		if (nestedRaw !== undefined && nestedRaw !== "gate" && nestedRaw !== "rules-only") skipped.push(`codemodeNestedCalls: ${JSON.stringify(nestedRaw)}`);
 		return {
 			rules: {
 				allow: compile(raw.allow),
@@ -430,6 +441,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				classifierFallbackModel: typeof raw.classifierFallbackModel === "string" && raw.classifierFallbackModel.trim() ? raw.classifierFallbackModel.trim() : null,
 				classifierMinConfidence: minConfOk ? minConfRaw : null,
 				classifierFallbackMode: fbModeRaw === undefined ? "enforce" : fbModeRaw === "enforce" ? "enforce" : "shadow", // invalid values land on the conservative shadow (standing invalid-config precedent); the key-less default is enforce
+				codemodeNestedCalls: nestedRaw === "rules-only" ? "rules-only" : "gate", // invalid values keep the safe default (gate)
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -1741,14 +1753,23 @@ export interface AuditRecord {
 	verdict: "allow" | "ask" | "deny";
 	reason: string;
 	/** #62: protected-path asks are recorded too — their user answers grade the
-	 *  denyPaths rules; rule allow/deny verdicts remain unaudited. */
-	source: "model" | "fail-closed" | "protected-path";
+	 *  denyPaths rules; rule allow/deny verdicts remain unaudited. "rule" exists for
+	 *  one audited rule-layer outcome: the rules-only nested passthrough (#90). */
+	source: "model" | "fail-closed" | "protected-path" | "rule";
 	degraded: boolean;
 	/** #62 ground truth: the user's answer to an interactive ask confirm. Present only
 	 *  on records whose confirm actually ran; headless/degraded asks omit it. */
 	userAnswer?: "allowed" | "declined";
 	/** #62: ISO timestamp of the confirm resolution; `ts` stays adjudication time. */
 	answeredAt?: string;
+	/** #90: the call's id — `<parent id>/<n>` for nested calls (codemode scripts).
+ *  Direct-call records carry it too; pre-0.14 corpora simply lack the field. */
+	toolCallId?: string;
+	/** #90: set iff another tool (a codemode script) issued this call — the audit
+	 *  attribution that makes nested calls distinguishable from direct ones. */
+	parentToolCallId?: string;
+	/** #90: the nested-call policy in effect for a rules-only passthrough record. */
+	policy?: "rules-only";
 	/** #62: protected-path records only — the matched path. */
 	detail?: string;
 	/** #67: the confidence floor fired — the first-layer verdict was demoted. */
@@ -1991,7 +2012,7 @@ async function runConfidenceCascade(
  */
 export async function adjudicate(
 	state: SessionState,
-	call: { toolName: string; input: Record<string, unknown> },
+	call: { toolName: string; input: Record<string, unknown>; toolCallId?: string; parentToolCallId?: string },
 	env: AdjudicateEnv,
 ): Promise<Verdict> {
 	const rule = classifyByRules(call.toolName, call.input, env.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(env.cwd));
@@ -2016,6 +2037,10 @@ export async function adjudicate(
 		thinking: raw?.thinking ?? null,
 		transcript: raw?.transcript ?? null,
 		rawResponse: raw?.rawResponse ?? null,
+		// #90 audit attribution: ids ride on every record; nested records additionally
+		// carry the parent linkage, making them distinguishable from direct calls
+		...(call.toolCallId !== undefined ? { toolCallId: call.toolCallId } : {}),
+		...(call.parentToolCallId !== undefined ? { parentToolCallId: call.parentToolCallId } : {}),
 		...v,
 	});
 
@@ -2028,6 +2053,17 @@ export async function adjudicate(
 		// headless: the ask degrades to deny — recorded like the gray-zone rule (the effective post-degradation verdict is what lands in the record)
 		state.audit?.append({ ...buildRecord({ verdict: "deny", reason: rule.reason ?? "", source: "protected-path", degraded: true }, null), detail: rule.detail });
 		return { verdict: "deny", reason: rule.reason ?? "", detail: rule.detail, source: "protected-path", degraded: true };
+	}
+
+	// ADR-0006 (#90): the layered-exemption policy. Nested calls under rules-only have
+	// already passed every deterministic layer above (self-protection, floor, user
+	// rules, denyPaths + its ask) — only the intelligence layer is skipped: the gray
+	// zone passes. Audited when audit is on (source rule + policy marker): the user
+	// needs corpus data on what the opt-in actually let through.
+	if (call.parentToolCallId !== undefined && state.userRules.codemodeNestedCalls === "rules-only") {
+		const reason = "codemodeNestedCalls rules-only: gray-zone passthrough (nested call — deterministic layers only)";
+		state.audit?.append({ ...buildRecord({ verdict: "allow", reason, source: "rule", degraded: false }, null), policy: "rules-only" });
+		return { verdict: "allow", reason, source: "rule", degraded: false };
 	}
 
 	// 灰区 → 分类器;无可用模型 → fail-closed
@@ -2219,6 +2255,8 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	const toggleHint = () => (registeredToggleKey ? ` · toggle: ${registeredToggleKey}` : "");
 	/** Status line denyPaths count (ADR-0002): shown only when configured */
 	const denyPathsHint = () => (state.userRules.denyPaths.length > 0 ? `\ndenyPaths: ${state.userRules.denyPaths.length} active` : "");
+	/** #90: nested-call policy hint — shown only when the exemption is active */
+	const nestedPolicyHint = () => (state.userRules.codemodeNestedCalls === "rules-only" ? "\nnested calls: rules-only (deterministic layers only — the gray zone passes)" : "");
 	/** Status line audit hint (#54): shown only while the sink is active */
 	const auditHint = () => (state.audit ? `\naudit: on → ${state.audit.dir}` : "");
 	/** Status line cascade hint (#63/#67): shown while the floor or the fallback is configured */
@@ -2236,7 +2274,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			const arg = args.trim().toLowerCase();
 			// 裸调用:只读状态展示,无副作用
 			if (arg === "") {
-				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${denyPathsHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
+				ctx.ui.notify(`${enabled ? "🛡️ Auto Mode: on" : "Auto Mode: off"}\n${denyPathsHint()}${nestedPolicyHint()}${auditHint()}${fallbackHint()}\nUsage: /automode on|off${toggleHint()}`, "info");
 			return;
 			}
 			// 幂等设定:与现值相同不翻转,仅确认
@@ -2451,7 +2489,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		}
 
 		// 判定管线(零 UI)→ 呈现(source 模板)
-		const verdict = await adjudicate(state, { toolName: event.toolName, input }, {
+		const verdict = await adjudicate(state, { toolName: event.toolName, input, toolCallId: event.toolCallId, parentToolCallId: event.parentToolCallId }, {
 			cwd: ctx.cwd,
 			hasUI: !!ctx.hasUI,
 			getModel: () => resolveClassifier(ctx),

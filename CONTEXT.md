@@ -30,7 +30,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 规则层 (rule layer)
 
-判定管线的第一段:确定性规则给出硬性 allow 或 deny。由两部分组成:**内置 deny floor**(bash 危险正则 + 文件路径敏感度分级,只做 deny 声明——误报方向安全;macOS 的 per-user 临时目录经运行时解析的 confstr 族豁免于系统目录分级,交集形态,`authorized_keys` 等文件名族不受豁免)与**用户规则**(allow/deny 正则,由用户配置并背书)。内置层不提供白名单(0.2.0 起,安全审计结论:白名单健全性需要 shell AST 分析)。
+判定管线的第一段:确定性规则给出硬性 allow 或 deny。由两部分组成:**内置 deny floor**(bash 危险正则 + 文件路径敏感度分级,只做 deny 声明——误报方向安全;macOS 的 per-user 临时目录经运行时解析的 confstr 族豁免于系统目录分级,交集形态,`authorized_keys` 等文件名族不受豁免)与**用户规则**(allow/deny 正则,由用户配置并背书)。内置层不提供白名单(0.2.0 起,安全审计结论:白名单健全性需要 shell AST 分析)。嵌套调用策略(`codemodeNestedCalls`,ADR-0006):默认与直发同管线;rules-only 时嵌套调用仅走确定性层、灰区直接放行——分层豁免,非跳过。
 
 ### 双形匹配
 
