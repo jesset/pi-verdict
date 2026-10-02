@@ -482,14 +482,14 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="tamper" data-edge-to="selfprot" data-edge-label="baseline intact" data-edge-key="9" data-edge-id="tamper-selfprot" data-composition-points="461,217;461,162;562,162;562,385;546,385" d="M 461 217 L 461 162 L 562 162 L 562 385 L 546 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="userrules" data-edge-to="block" data-edge-label="deny" data-edge-key="10" data-edge-id="userrules-block" data-composition-points="878.8,351;878.8,113;762.8,113" d="M 878.8 351 L 878.8 113 L 762.8 113" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="userrules" data-edge-to="classifier" data-edge-label="gray zone" data-edge-key="11" data-edge-id="userrules-classifier" data-composition-points="885.8,351;885.8,294;986.8,294;986.8,519;970.8,519" d="M 885.8 351 L 885.8 294 L 986.8 294 L 986.8 519 L 970.8 519" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools" data-edge-key="12" data-edge-id="userrules-run" data-composition-points="892.8,351;892.8,120;1003.8,120" d="M 892.8 351 L 892.8 120 L 1003.8 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / nested·rules-only" data-edge-key="12" data-edge-id="userrules-run" data-composition-points="885.8,351;885.8,238;1088.8,238;1088.8,146" d="M 885.8 351 L 885.8 238 L 1088.8 238 L 1088.8 146" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths hit → terminal ask" data-edge-key="13" data-edge-id="userrules-verdict" data-composition-points="970.8,392;986.8,392;986.8,294;1081.8,294;1081.8,493" d="M 970.8 392 L 986.8 392 L 986.8 294 L 1081.8 294 L 1081.8 493" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="verdict" data-edge-to="block" data-edge-label="deny · declined / headless" data-edge-key="14" data-edge-id="verdict-block" data-composition-points="1178.8,519;1203,519;1203,78;677.8,78;677.8,94" d="M 1178.8 519 L 1203 519 L 1203 78 L 677.8 78 L 677.8 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="verdict" data-edge-to="run" data-edge-label="allow · confirmed" data-edge-key="15" data-edge-id="verdict-run" data-composition-points="1088.8,493;1088.8,477;1203,477;1203,120;1173.8,120" d="M 1088.8 493 L 1088.8 477 L 1203 477 L 1203 120 L 1173.8 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <g id="node-call" data-node-id="call" data-node-label="Tool Call" tabindex="0" role="button" aria-label="Focus Tool Call, tool_call hook · reviewed first, Agent Runtime (pi) › Intercept · Integrity" aria-pressed="false" data-node-kind="external" data-node-sublabel="tool_call hook · reviewed first" data-node-context="Agent Runtime (pi) › Intercept · Integrity">
-          <title>Tool Call · tool_call hook · reviewed first · Agent Runtime (pi) › Intercept · Integrity</title>
+        <g id="node-call" data-node-id="call" data-node-label="Tool Call" tabindex="0" role="button" aria-label="Focus Tool Call, tool_call hook · direct + nested, Agent Runtime (pi) › Intercept · Integrity" aria-pressed="false" data-node-kind="external" data-node-sublabel="tool_call hook · direct + nested" data-node-context="Agent Runtime (pi) › Intercept · Integrity">
+          <title>Tool Call · tool_call hook · direct + nested · Agent Runtime (pi) › Intercept · Integrity</title>
           <rect x="48" y="94" width="170" height="52" rx="6" class="c-mask"/>
           <rect x="48" y="94" width="170" height="52" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 100) scale(0.6875)">
@@ -497,7 +497,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-node-label="" x="133" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Tool Call</text>
-          <text x="133" y="132" class="t-muted" font-size="8" text-anchor="middle">tool_call hook · reviewed first</text>
+          <text x="133" y="132" class="t-muted" font-size="8" text-anchor="middle">tool_call hook · direct + nested</text>
         </g>
 
         <g id="node-block" data-node-id="block" data-node-label="Block" tabindex="0" role="button" aria-label="Focus Block, block + reason back to agent, Agent Runtime (pi) › Adjudication Pipeline (rules → classifier → exits)" aria-pressed="false" data-node-kind="security" data-node-sublabel="block + reason back to agent" data-node-context="Agent Runtime (pi) › Adjudication Pipeline (rules → classifier → exits)">
@@ -585,16 +585,16 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="885.8" y="407" class="t-backend" font-size="7" text-anchor="middle">pi-verdict.json</text>
         </g>
 
-        <g id="node-classifier" data-node-id="classifier" data-node-label="Model Classifier" tabindex="0" role="button" aria-label="Focus Model Classifier, transcript + hint · contract, Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="transcript + hint · contract" data-node-tag="fail-closed" data-node-context="Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)">
-          <title>Model Classifier · transcript + hint · contract · Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits) · fail-closed</title>
+        <g id="node-classifier" data-node-id="classifier" data-node-label="Model Classifier" tabindex="0" role="button" aria-label="Focus Model Classifier, native classify() or chat LLM, Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="native classify() or chat LLM" data-node-tag="ADR-0005" data-node-context="Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)">
+          <title>Model Classifier · native classify() or chat LLM · Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits) · ADR-0005</title>
           <rect x="800.8" y="485" width="170" height="68" rx="6" class="c-mask"/>
           <rect x="800.8" y="485" width="170" height="68" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(806.8 491) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
           <text data-node-label="" x="885.8" y="506" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Model Classifier</text>
-          <text x="885.8" y="523" class="t-muted" font-size="8" text-anchor="middle">transcript + hint · contract</text>
-        <text x="885.8" y="541" class="t-cloud" font-size="7" text-anchor="middle">fail-closed</text>
+          <text x="885.8" y="523" class="t-muted" font-size="8" text-anchor="middle">native classify() or chat LLM</text>
+        <text x="885.8" y="541" class="t-cloud" font-size="7" text-anchor="middle">ADR-0005</text>
         </g>
 
         <g id="node-verdict" data-node-id="verdict" data-node-label="Verdict · Human Confirm" tabindex="0" role="button" aria-label="Focus Verdict · Human Confirm, ask → confirm · headless → deny, Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="ask → confirm · headless → deny" data-node-context="Semantic Adjudication › Semantic Adjudication › Adjudication Pipeline (rules → classifier → exits)">
@@ -654,9 +654,9 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="909.6999999999999" y="274" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
           <text x="936.3" y="284" class="t-backend" font-size="8" text-anchor="middle">gray zone</text>
         </g>
-        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools" data-edge-key="12" data-edge-id="userrules-run">
-          <rect x="897.6999999999999" y="100" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="948.3" y="110" class="t-muted" font-size="8" text-anchor="middle">allow / ignoreTools</text>
+        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / nested·rules-only" data-edge-key="12" data-edge-id="userrules-run">
+          <rect x="888.6999999999999" y="218" width="197.2" height="14" rx="3" class="c-mask"/>
+          <text x="987.3" y="228" class="t-muted" font-size="8" text-anchor="middle">allow / ignoreTools / nested·rules-only</text>
         </g>
         <g data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths hit → terminal ask" data-edge-key="13" data-edge-id="userrules-verdict">
           <rect x="962.0999999999999" y="274" width="144.4" height="14" rx="3" class="c-mask"/>

@@ -185,7 +185,7 @@ pi 0.99 可以在 QuickJS 沙箱(`codemode`)里运行模型写的 JavaScript 去
 
 ![pi-verdict 安全门禁——工具调用判定管线](https://cdn.jsdelivr.net/gh/jesset/pi-verdict@main/docs/diagrams/security-pipeline.zh.svg)
 
-*图源与再生成：[docs/diagrams/](docs/diagrams/README.md)。管线基准：v0.12——下方 ASCII 为文本等价版。*
+*图源与再生成：[docs/diagrams/](docs/diagrams/README.md)。管线基准：v0.14——下方 ASCII 为文本等价版。*
 
 ```
 tool_call
@@ -203,10 +203,13 @@ tool_call
   │     ├─ ignoreTools:用户声明的未覆盖工具 → 直接放行,零模型调用
   │     └─ 无内置白名单 —— 「永远放行」的声明由你自己做
   │
-  ├─ 2. 灰区 → 模型分类器(默认继承会话模型 —— "自省")
-  │     ├─ 输入:CC 风格 <transcript> —— 近期用户意图 + 工具调用,
-  │     │        待审动作固定在末尾
-  │     └─ 输出契约:<verdict>allow|ask|deny</verdict> 前缀锚定
+  ├─ 2. 灰区 → 嵌套策略,再进模型分类器
+  │     ├─ 嵌套调用(codemode)+ codemodeNestedCalls=rules-only → 放行;
+  │     │   上方确定性层已全部跑完(ADR-0006)
+  │     ├─ gate(默认,或直发调用)→ 分类器:原生 classify()
+  │     │   (choice + probabilities + confidence;reason 无标签,完整契约行
+  │     │   存审计 rawResponse)或 chat 路径(会话模型自省)的
+  │     │   <verdict>…</verdict> 前缀锚定自由文本
   │
   └─ 3. 三态裁决
         ├─ allow → 放行

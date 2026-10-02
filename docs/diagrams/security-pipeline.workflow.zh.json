@@ -134,7 +134,7 @@
       "col": 0,
       "type": "external",
       "label": "工具调用",
-      "sublabel": "tool_call 钩子 · 先审后行",
+      "sublabel": "tool_call 钩子 · 直发与嵌套调用",
       "width": 160
     },
     {
@@ -209,8 +209,8 @@
       "col": 4,
       "type": "cloud",
       "label": "模型分类器",
-      "sublabel": "转录 + 存在性话术 · 契约裁决",
-      "tag": "fail-closed",
+      "sublabel": "原生 classify() 或 chat LLM",
+      "tag": "ADR-0005",
       "width": 160
     },
     {
@@ -310,7 +310,7 @@
       "id": "userrules-run",
       "from": "userrules",
       "to": "run",
-      "label": "allow / ignoreTools",
+      "label": "allow / ignoreTools / 嵌套·rules-only",
       "role": "branch"
     },
     {
@@ -366,6 +366,7 @@
       "title": "豁免边界",
       "items": [
         "主开关是唯一全局豁免",
+        "rules-only 嵌套:确定性层照走(ADR-0006)",
         "自保护层不可被任何配置关闭",
         "放行白名单永远是用户自己声明"
       ]

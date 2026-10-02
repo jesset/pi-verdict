@@ -185,7 +185,7 @@ Honest framing: pi-automode and pi-verdict have **converged on the same architec
 
 ![pi-verdict security gate — tool-call adjudication pipeline](https://cdn.jsdelivr.net/gh/jesset/pi-verdict@main/docs/diagrams/security-pipeline.en.svg)
 
-*Diagram source & regeneration: [docs/diagrams/](docs/diagrams/README.md). Pipeline as of v0.12 — the ASCII version below is the text-faithful equivalent.*
+*Diagram source & regeneration: [docs/diagrams/](docs/diagrams/README.md). Pipeline as of v0.14 — the ASCII version below is the text-faithful equivalent.*
 
 ```
 tool_call
@@ -203,12 +203,13 @@ tool_call
   │     ├─ ignoreTools: your declared uncovered tools → allow, zero model calls
   │     └─ no built-in allowlist — every "always allow" claim is yours to make
   │
-  ├─ 2. Gray zone → model classifier (defaults to session model — "self-reflection")
-  │     ├─ input: CC-style <transcript> — recent user intent + tool calls,
-  │     │        action under review always last
-  │     └─ output: native classify() answers (choice + probabilities + confidence;
-  │              tag-free reason, full contract line in the audit rawResponse) or,
-  │              on the chat path, <verdict>…</verdict> prefix-anchored free text
+  ├─ 2. Gray zone → nested-call policy, then model classifier
+  │     ├─ nested call (codemode) + codemodeNestedCalls=rules-only → pass;
+  │     │   deterministic layers above already ran (ADR-0006)
+  │     ├─ gate (default, or a direct call) → classifier: native classify()
+  │     │   (choice + probabilities + confidence; tag-free reason, full contract
+  │     │   line in the audit rawResponse) or, on the chat path (session-model
+  │     │   self-reflection), <verdict>…</verdict> prefix-anchored free text
   │
   └─ 3. Three-state adjudication
         ├─ allow → pass

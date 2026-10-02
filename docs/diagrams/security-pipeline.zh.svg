@@ -482,14 +482,14 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="tamper" data-edge-to="selfprot" data-edge-label="基线一致" data-edge-key="9" data-edge-id="tamper-selfprot" data-composition-points="446,217;446,162;542,162;542,385;526,385" d="M 446 217 L 446 162 L 542 162 L 542 385 L 526 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="userrules" data-edge-to="block" data-edge-label="deny" data-edge-key="10" data-edge-id="userrules-block" data-composition-points="843.8,351;843.8,113;732.8,113" d="M 843.8 351 L 843.8 113 L 732.8 113" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="userrules" data-edge-to="classifier" data-edge-label="灰区" data-edge-key="11" data-edge-id="userrules-classifier" data-composition-points="850.8,351;850.8,294;946.8,294;946.8,519;930.8,519" d="M 850.8 351 L 850.8 294 L 946.8 294 L 946.8 519 L 930.8 519" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools" data-edge-key="12" data-edge-id="userrules-run" data-composition-points="857.8,351;857.8,120;963.8,120" d="M 857.8 351 L 857.8 120 L 963.8 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / 嵌套·rules-only" data-edge-key="12" data-edge-id="userrules-run" data-composition-points="850.8,351;850.8,238;1043.8,238;1043.8,146" d="M 850.8 351 L 850.8 238 L 1043.8 238 L 1043.8 146" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths 命中 → ask 终局" data-edge-key="13" data-edge-id="userrules-verdict" data-composition-points="930.8,385;946.8,385;946.8,294;1036.8,294;1036.8,493" d="M 930.8 385 L 946.8 385 L 946.8 294 L 1036.8 294 L 1036.8 493" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="verdict" data-edge-to="block" data-edge-label="deny · 拒绝 / 无 UI 降级" data-edge-key="14" data-edge-id="verdict-block" data-composition-points="1128.8,519;1153,519;1153,78;652.8,78;652.8,94" d="M 1128.8 519 L 1153 519 L 1153 78 L 652.8 78 L 652.8 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="verdict" data-edge-to="run" data-edge-label="allow · 确认通过" data-edge-key="15" data-edge-id="verdict-run" data-composition-points="1043.8,493;1043.8,477;1153,477;1153,120;1123.8,120" d="M 1043.8 493 L 1043.8 477 L 1153 477 L 1153 120 L 1123.8 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <g id="node-call" data-node-id="call" data-node-label="工具调用" tabindex="0" role="button" aria-label="聚焦工具调用，tool_call 钩子 · 先审后行, Agent 运行时(pi) › 拦截 · 完整性" aria-pressed="false" data-node-kind="external" data-node-sublabel="tool_call 钩子 · 先审后行" data-node-context="Agent 运行时(pi) › 拦截 · 完整性">
-          <title>工具调用 · tool_call 钩子 · 先审后行 · Agent 运行时(pi) › 拦截 · 完整性</title>
+        <g id="node-call" data-node-id="call" data-node-label="工具调用" tabindex="0" role="button" aria-label="聚焦工具调用，tool_call 钩子 · 直发与嵌套调用, Agent 运行时(pi) › 拦截 · 完整性" aria-pressed="false" data-node-kind="external" data-node-sublabel="tool_call 钩子 · 直发与嵌套调用" data-node-context="Agent 运行时(pi) › 拦截 · 完整性">
+          <title>工具调用 · tool_call 钩子 · 直发与嵌套调用 · Agent 运行时(pi) › 拦截 · 完整性</title>
           <rect x="48" y="94" width="160" height="52" rx="6" class="c-mask"/>
           <rect x="48" y="94" width="160" height="52" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 100) scale(0.6875)">
@@ -497,7 +497,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-node-label="" x="128" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">工具调用</text>
-          <text x="128" y="132" class="t-muted" font-size="8" text-anchor="middle">tool_call 钩子 · 先审后行</text>
+          <text x="128" y="132" class="t-muted" font-size="8" text-anchor="middle">tool_call 钩子 · 直发与嵌套调用</text>
         </g>
 
         <g id="node-block" data-node-id="block" data-node-label="拦截" tabindex="0" role="button" aria-label="聚焦拦截，block + 理由回传 agent, Agent 运行时(pi) › 判定管线(规则 → 分类器 → 出口)" aria-pressed="false" data-node-kind="security" data-node-sublabel="block + 理由回传 agent" data-node-context="Agent 运行时(pi) › 判定管线(规则 → 分类器 → 出口)">
@@ -585,16 +585,16 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="850.8" y="407" class="t-backend" font-size="7" text-anchor="middle">pi-verdict.json</text>
         </g>
 
-        <g id="node-classifier" data-node-id="classifier" data-node-label="模型分类器" tabindex="0" role="button" aria-label="聚焦模型分类器，转录 + 存在性话术 · 契约裁决, 语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="转录 + 存在性话术 · 契约裁决" data-node-tag="fail-closed" data-node-context="语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)">
-          <title>模型分类器 · 转录 + 存在性话术 · 契约裁决 · 语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口) · fail-closed</title>
+        <g id="node-classifier" data-node-id="classifier" data-node-label="模型分类器" tabindex="0" role="button" aria-label="聚焦模型分类器，原生 classify() 或 chat LLM, 语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="原生 classify() 或 chat LLM" data-node-tag="ADR-0005" data-node-context="语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)">
+          <title>模型分类器 · 原生 classify() 或 chat LLM · 语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口) · ADR-0005</title>
           <rect x="770.8" y="485" width="160" height="68" rx="6" class="c-mask"/>
           <rect x="770.8" y="485" width="160" height="68" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(776.8 491) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
           <text data-node-label="" x="850.8" y="506" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">模型分类器</text>
-          <text x="850.8" y="523" class="t-muted" font-size="8" text-anchor="middle">转录 + 存在性话术 · 契约裁决</text>
-        <text x="850.8" y="541" class="t-cloud" font-size="7" text-anchor="middle">fail-closed</text>
+          <text x="850.8" y="523" class="t-muted" font-size="8" text-anchor="middle">原生 classify() 或 chat LLM</text>
+        <text x="850.8" y="541" class="t-cloud" font-size="7" text-anchor="middle">ADR-0005</text>
         </g>
 
         <g id="node-verdict" data-node-id="verdict" data-node-label="三态裁决 · 人工确认" tabindex="0" role="button" aria-label="聚焦三态裁决 · 人工确认，ask 转确认 · 无 UI 降级 deny, 语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="ask 转确认 · 无 UI 降级 deny" data-node-context="语义裁决 › 语义裁决 › 判定管线(规则 → 分类器 → 出口)">
@@ -654,9 +654,9 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="883.8" y="274" width="30" height="14" rx="3" class="c-mask"/>
           <text x="898.8" y="284" class="t-backend" font-size="8" text-anchor="middle">灰区</text>
         </g>
-        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools" data-edge-key="12" data-edge-id="userrules-run">
-          <rect x="860.1999999999999" y="100" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="910.8" y="110" class="t-muted" font-size="8" text-anchor="middle">allow / ignoreTools</text>
+        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / 嵌套·rules-only" data-edge-key="12" data-edge-id="userrules-run">
+          <rect x="853.5" y="218" width="187.6" height="14" rx="3" class="c-mask"/>
+          <text x="947.3" y="228" class="t-muted" font-size="8" text-anchor="middle">allow / ignoreTools / 嵌套·rules-only</text>
         </g>
         <g data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths 命中 → ask 终局" data-edge-key="13" data-edge-id="userrules-verdict">
           <rect x="926.8" y="274" width="130" height="14" rx="3" class="c-mask"/>
