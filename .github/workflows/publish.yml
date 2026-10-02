@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.release.tag_name || inputs.tag }}
@@ -63,7 +63,7 @@ jobs:
           bun run typecheck
           bun test
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
