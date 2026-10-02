@@ -119,7 +119,7 @@ pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-000
 
 - `allow`/`deny` 为 JS 正则数组；**`deny` 优先于 `allow`**，两者都优先于分类器
 - `denyPaths` 是你声明**受保护**的普通路径列表：触碰触发**终局 ask** 由你裁决(非交互降级 deny)；分类器只被告知路径**存在**，路径明文永不出本机。`grep`/`find`/`ls` 按**整个搜索范围**比较：省略 `path`(pi 默认：当前目录)或传入位于声明路径之上的父目录，同样触发 ask。全新安装会预填一份**入门列表**(`~/.ssh/`、`~/.gnupg`、`~/.mc`、shell rc/profile 文件)
-- `ignoreTools` 列出规则未覆盖的工具(`todo`、`web_search`、MCP/自定义工具)：**直接放行、零模型调用**；列出已覆盖工具(`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`)的条目无效：它们仍受 deny floor 与你的 allow/deny 规则约束，自保护层也永远先行。全新安装会预填一份**入门列表**(`todo`、`ask_user_question`、`memory_write`、`memory_search`——来自项目 1265 条生产审计的观察)。注意：被豁免的工具失去分类器对 `denyPaths` 的存在性话术警戒(未覆盖工具本就不进路径提取器)
+- `ignoreTools` 列出规则未覆盖的工具(`todo`、`web_search`、MCP/自定义工具)：**直接放行、零模型调用**；列出已覆盖工具(`bash`/`read`/`write`/`edit`/`grep`/`find`/`ls`/`powershell`)的条目无效：它们仍受 deny floor 与你的 allow/deny 规则约束，自保护层也永远先行。全新安装会预填一份**入门列表**(`todo`、`ask_user_question`、`memory_write`、`memory_search`——来自项目 1265 条生产审计的观察)。注意：被豁免的工具失去分类器对 `denyPaths` 的存在性话术警戒(未覆盖工具本就不进路径提取器);MCP 工具名匹配前会归一化——见 [codemode 与 MCP](#pi-099-codemode-与-mcp间接调用同样受门禁)
 - `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担；下方自保护层永远开启)
 - `classifierModel` 指定分类器模型，如 `"zai/glm-5.3-flash:low"`(支持思考后缀；缺省 = 会话模型且显式关思考)
 - `classifierModel: "typesafe/jev-latest"` 启用**原生 jev 分类器**——每次灰区裁决经 pi 内置分类器目录发一次结构化 `classify()` 调用(TypeSafe 直连,或 OpenRouter/OpenCode/Cloudflare/Vercel 上的 Jev);详见 [ADR-0005](docs/adr/0005-native-classifier-migration.md)
@@ -147,6 +147,16 @@ pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-000
 - 沿袭限制:denyPaths 存在性话术仍不达分类器形态模型([ADR-0005](docs/adr/0005-native-classifier-migration.md));TypeSafe 直连的单次成本显示 $0(其 API 不返回 cost)
 
 jev 的校准 confidence 正是置信地板的判定依据——搭配第二层使用(`"classifierMinConfidence", "classifierFallbackModel"`)，让低置信调用交由更深的模型复裁，而非就地生效([ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))。
+
+### pi 0.99 codemode 与 MCP:间接调用同样受门禁
+
+pi 0.99 可以在 QuickJS 沙箱(`codemode`)里运行模型写的 JavaScript 去调用 pi 的工具,MCP 服务器则以 `mcp__<server>__<tool>` 注册工具。这两个新增面都不会绕过本门禁:
+
+- **嵌套调用与直接调用同样过门**——pi 把 codemode 脚本发起的每一次工具调用都路由到同一条 `tool_call` 管线(带 `parentToolCallId`,id 形如 `<父id>/<n>`);被拦截的调用以错误形式回传脚本,模型可见
+- **MCP 工具落入灰区**——规则层只覆盖内置命令/文件工具;每次 `mcp__*` 调用都走分类器,含 fail-closed
+- **`ignoreTools` 与 MCP 工具名**:工具名会归一化——`[A-Za-z0-9_]` 之外的字符统一变 `_`(`mcp__dev-radius__x` → `mcp__dev_radius__x`);豁免条目必须写归一化后的形态
+- **成本放大**:单个脚本最多可发 256 次嵌套调用,灰区调用逐个分类,慢的 LLM 分类器会把单次延迟成倍放大
+- **暴露边界**:添加 MCP 服务器会自动开启 codemode,而 `pi --no-extensions -e builtin:mcp` 可在不加载任何扩展(即无本门禁)的情况下启用 MCP 工具。门禁自身即扩展,在完全不加载扩展的会话中无法生效;此边界为 pi 扩展模型的固有属性,此处显式陈述而非掩饰
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 

@@ -1040,11 +1040,18 @@ export interface NativeClassifierSpec {
 	provider?: string;
 }
 
-/** The resolved classifier layer (ADR-0005): native = classify() protocol path
- *  (floor-capable by construction), chat = LLM prompt path (thinking applies). */
-export type ResolvedModel =
+/** The resolved classifier spec (ADR-0005): native = classify() protocol path
+ *  (floor-capable by construction), chat = LLM prompt path — what spec resolution
+ *  returns, before the thinking level is attached. */
+export type ResolvedSpec =
 	| { kind: "native"; model: NativeClassifierSpec }
 	| { kind: "chat"; model: NonNullable<ExtensionContext["model"]> };
+
+/** A fully resolved classifier layer: the spec plus its thinking level. Native
+ *  layers do not consume the level (classifier models carry no reasoning — a
+ *  suffix warns once and the audit records null), but the parsed value stays on
+ *  the layer; chat layers pass it through to the completion call. */
+export type ResolvedLayer = ResolvedSpec & { thinking: ThinkingLevel };
 
 export interface ClassifierAnswerShape {
 	type: string;
@@ -1432,27 +1439,23 @@ export async function classifyNative(
 }
 
 async function classifyWithModel(
-	host: PipelineHost,
-	signal: AbortSignal | undefined,
-	complete: CompletionFn,
-	classify: ClassifyFn | undefined,
-	model: ResolvedModel,
-	actionLine: string,
-	thinking: ThinkingLevel = "off",
-	denyPathsActive = false,
-	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
+	env: Pick<AdjudicateEnv, "host" | "signal" | "complete" | "classify">,
+	resolved: ResolvedLayer,
+	call: { actionLine: string; denyPathsActive: boolean; timeoutMs?: number },
 ): Promise<ClassifierOutcome> {
-	if (model.kind === "native") return classifyNative(classify, model.model, host, actionLine, signal, timeoutMs);
-	const chat = model.model;
-	const transcript = buildTranscript(host, actionLine);
+	const timeoutMs = call.timeoutMs ?? CLASSIFIER_TIMEOUT_MS;
+	if (resolved.kind === "native") return classifyNative(env.classify, resolved.model, env.host, call.actionLine, env.signal, timeoutMs);
+	const chat = resolved.model;
+	const thinking = resolved.thinking;
+	const transcript = buildTranscript(env.host, call.actionLine);
 	const userMessage = `<transcript>\n${transcript}\n</transcript>\nJudge the LAST action in the transcript above. Your entire response MUST begin with <verdict>.`;
-	const systemPrompt = denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
+	const systemPrompt = call.denyPathsActive ? CLASSIFIER_SYSTEM + DENY_PATHS_HINT : CLASSIFIER_SYSTEM;
 	const attempts: Array<[number, number]> = [[1, CLASSIFIER_MAX_TOKENS], [2, CLASSIFIER_RETRY_MAX_TOKENS]];
 	const failures: string[] = [];
 	let rawResponse = ""; // #54: raw output of the last attempt ("" for exception attempts — diagnostics already live in failures)
 	for (const [n, maxTokens] of attempts) {
-		if (signal?.aborted) break; // 用户已取消,不再重试
-		const r = await callClassifierOnce(host, signal, complete, chat, userMessage, maxTokens, thinking, systemPrompt, timeoutMs);
+		if (env.signal?.aborted) break; // 用户已取消,不再重试
+		const r = await callClassifierOnce(env.host, env.signal, env.complete, chat, userMessage, maxTokens, thinking, systemPrompt, timeoutMs);
 		if (r.ok) {
 			rawResponse = r.text;
 			const diag = `stopReason=${r.stopReason}, model=${chat.id}, errorMessage=${JSON.stringify(r.errorMessage ?? null)}, raw output=${JSON.stringify(r.text.slice(0, 200))}`;
@@ -1704,14 +1707,14 @@ export interface Verdict {
 export interface AdjudicateEnv {
 	cwd: string;
 	hasUI: boolean;
-	getModel: () => { model: ResolvedModel; thinking: ThinkingLevel } | null;
+	getModel: () => ResolvedLayer | null;
 	complete: CompletionFn;
 	/** Native classify() seam (ADR-0005); absent on hosts without the capability —
 	 *  the native path fail-closes, never silently falls back to the chat path. */
 	classify?: ClassifyFn;
 	host: PipelineHost;
 	signal?: AbortSignal;
-	getFallbackModel?: () => { model: ResolvedModel; thinking: ThinkingLevel } | null;
+	getFallbackModel?: () => ResolvedLayer | null;
 }
 
 /** #67 (0.13, ADR-0005): the floor gates on protocol-native confidence — set only
@@ -1777,10 +1780,10 @@ async function runConfidenceCascade(
 	};
 	const resolved = getFb();
 	if (!resolved) return failed(rules.classifierFallbackModel, "fallback model unresolvable (not found or no configured auth)");
-	const outcome = await classifyWithModel(env.host, env.signal, env.complete, env.classify, resolved.model, actionLine, resolved.thinking, denyPathsActive, FALLBACK_TIMEOUT_MS);
-	if (outcome.source !== "model") return failed(resolved.model.model.id, outcome.reason);
+	const outcome = await classifyWithModel(env, resolved, { actionLine, denyPathsActive, timeoutMs: FALLBACK_TIMEOUT_MS });
+	if (outcome.source !== "model") return failed(resolved.model.id, outcome.reason);
 	state.fallback.note(first?.verdict ?? null, outcome.verdict);
-	const fb: FallbackAudit = { ...base, model: resolved.model.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs: Date.now() - start, error: null };
+	const fb: FallbackAudit = { ...base, model: resolved.model.id, verdict: outcome.verdict, reason: outcome.reason, durationMs: Date.now() - start, error: null };
 	if (mode === "shadow") return { ...demotedMark, fb, ...shadowApplied };
 	// The carve-outs on second-layer authority (#71): it may not auto-relax a negative
 	// first-layer verdict — a demoted deny OR ask that the fallback would allow goes to
@@ -1868,7 +1871,7 @@ export async function adjudicate(
 		return { verdict: "deny", reason, source: "fail-closed", degraded: false };
 	}
 
-	const outcome = await classifyWithModel(env.host, env.signal, env.complete, env.classify, resolved.model, actionLine, resolved.thinking, state.userRules.denyPaths.length > 0);
+	const outcome = await classifyWithModel(env, resolved, { actionLine, denyPathsActive: state.userRules.denyPaths.length > 0 });
 
 	// #67 cascade: a confidence-floor demotion, or a classifier fail-closed outcome
 	// (the first layer produced no verdict)
@@ -2104,6 +2107,16 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		return id.includes("jev");
 	}
 
+	/** Shared "spec unavailable" wording: jev specs get the specialized causes,
+	 *  anything else the generic miss; `tail` carries the layer's fallback
+	 *  semantics with its leading separator. (Extracted from two previously
+	 *  lockstep-synchronized ternaries — see CHANGELOG [Unreleased].) */
+	function unavailableNotice(subject: string, raw: string, specPart: string, tail: string): string {
+		return isJevSpec(specPart)
+			? `pi-verdict: ${subject} "${raw}" unavailable — ${JEV_UNAVAILABLE_HINT}${tail}`
+			: `pi-verdict: ${subject} "${raw}" unavailable (not found or no configured auth)${tail}`;
+	}
+
 	/** ADR-0005: shared spec→model resolution for both classifier layers. Native
 	 *  classifier entries are looked up first (findOfType) and WIN on same-id dual
 	 *  listings (llama.cpp chat+classifier share ids) — the native path is the point
@@ -2113,7 +2126,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	 *  chat path the suffix stays effective and must not be called ignored). Returns
 	 *  null when the spec does not resolve; the layer's fallback semantics stay with
 	 *  the caller. */
-	function findSpecModel(ctx: ExtensionContext, specPart: string, level: string | null, layer: "classifier" | "fallback"): ResolvedModel | null {
+	function findSpecModel(ctx: ExtensionContext, specPart: string, level: string | null, layer: "classifier" | "fallback"): ResolvedSpec | null {
 		const slash = specPart.indexOf("/");
 		if (slash <= 0) return null;
 		const provider = specPart.slice(0, slash);
@@ -2141,7 +2154,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	 *  model and self-reflection fallback alike; a purely rule-adjudicated session never
 	 *  sees it — lazy via getModel). Neutral wording: the fact, never a judgment on the
 	 *  config (users may pre-set the floor for a future classifier switch). */
-	function warnFloorInert(ctx: ExtensionContext, model: ResolvedModel): void {
+	function warnFloorInert(ctx: ExtensionContext, model: ResolvedSpec): void {
 		if (warnedFloorInert || state.userRules.classifierMinConfidence === null || model.kind === "native") return;
 		warnedFloorInert = true;
 		ctx.ui.notify("pi-verdict: classifierMinConfidence has no effect on a chat-model classifier (the floor applies to native classifier models like typesafe/jev-latest, whose confidence is protocol-native)", "warning");
@@ -2151,7 +2164,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	 *  自省(会话模型,恒为 chat 路径——0.99 分类器不进 /model)。不可用回退会话模型
 	 *  并警告一次;null = 连会话模型都没有 → fail-closed。经 AdjudicateEnv.getModel
 	 *  惰性调用(仅灰区),回退警告不会出现在规则已裁决的调用上。 */
-	function resolveClassifier(ctx: ExtensionContext): { model: ResolvedModel; thinking: ThinkingLevel } | null {
+	function resolveClassifier(ctx: ExtensionContext): ResolvedLayer | null {
 		const raw =
 			(pi.getFlag("auto-mode-model") as string | undefined) ?? process.env.PI_AUTO_MODE_MODEL ?? state.userRules.classifierModel;
 		let thinking: ThinkingLevel = "off";
@@ -2162,17 +2175,15 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 				ctx.ui.notify(msg, "warning");
 			});
 			thinking = (level ?? "off") as ThinkingLevel;
-			const model = findSpecModel(ctx, specPart, level, "classifier");
-			if (model) {
-				warnFloorInert(ctx, model);
-				return { model, thinking };
+			const spec = findSpecModel(ctx, specPart, level, "classifier");
+			if (spec) {
+				warnFloorInert(ctx, spec);
+				return { ...spec, thinking };
 			}
 			if (!warnedClassifierModel) {
 				warnedClassifierModel = true; // 每会话仅警告一次,避免逐调用刷屏
 				ctx.ui.notify(
-					isJevSpec(specPart)
-						? `pi-verdict: classifier model "${raw}" unavailable — ${JEV_UNAVAILABLE_HINT}; falling back to session model (self-reflection)`
-						: `pi-verdict: classifier model "${raw}" unavailable (not found or no configured auth), falling back to session model (self-reflection)`,
+					unavailableNotice("classifier model", raw, specPart, "; falling back to session model (self-reflection)"),
 					"warning",
 				);
 			}
@@ -2180,9 +2191,9 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 		// 自省:继承当前会话模型(chat 路径——0.99 分类器不进 /model,会话模型恒为
 		// chat/virtual);显式指定的思考级别在回退时仍生效(原语义)
 		if (ctx.model) {
-			const self: ResolvedModel = { kind: "chat", model: ctx.model };
+			const self: ResolvedSpec = { kind: "chat", model: ctx.model };
 			warnFloorInert(ctx, self);
-			return { model: self, thinking };
+			return { ...self, thinking };
 		}
 		return null;
 	}
@@ -2194,7 +2205,7 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 	 *  judgment twice instead of adding a second opinion. Unresolvable → one-time warning
 	 *  + null (shadow: inert; enforce: triggered calls fail-closed, see runFallbackCascade).
 	 *  Resolved lazily via AdjudicateEnv.getFallbackModel, only after the gate fires. */
-	function resolveFallbackClassifier(ctx: ExtensionContext): { model: ResolvedModel; thinking: ThinkingLevel } | null {
+	function resolveFallbackClassifier(ctx: ExtensionContext): ResolvedLayer | null {
 		const raw = state.userRules.classifierFallbackModel;
 		if (!raw) return null;
 		const { specPart, level } = parseModelSpec(raw, (msg) => {
@@ -2203,14 +2214,12 @@ export default function autoMode(pi: ExtensionAPI, deps: AutoModeDeps = {}) {
 			ctx.ui.notify(msg, "warning");
 		});
 		const thinking = (level ?? "off") as ThinkingLevel;
-		const model = findSpecModel(ctx, specPart, level, "fallback");
-		if (model) return { model, thinking };
+		const spec = findSpecModel(ctx, specPart, level, "fallback");
+		if (spec) return { ...spec, thinking };
 		if (!warnedFallbackModel) {
 			warnedFallbackModel = true; // one warning per session
 			ctx.ui.notify(
-				isJevSpec(specPart)
-					? `pi-verdict: fallback model "${raw}" unavailable — ${JEV_UNAVAILABLE_HINT} — classifierFallbackModel inactive this session`
-					: `pi-verdict: fallback model "${raw}" unavailable (not found or no configured auth) — classifierFallbackModel inactive this session`,
+				unavailableNotice("fallback model", raw, specPart, " — classifierFallbackModel inactive this session"),
 				"warning",
 			);
 		}

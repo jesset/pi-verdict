@@ -712,6 +712,7 @@ describe("classifier mode feedback (#81)", () => {
 		await toolCall(h2, "bash", { command: "cargo build" });
 		const warn2 = h2.notifies.find(([m, l]) => l === "warning" && m.includes("unavailable"))?.[0] ?? "";
 		expect(warn2).toContain("not found or no configured auth");
+		expect(warn2).toContain("; falling back to session model"); // normalized separator, matching the jev branch
 		const h3 = session({ audit: true, classifierFallbackModel: "typesafe/jev-latest" }); // fallback layer, same treatment
 		h3.findMap = {};
 		h3.confirmAnswer = true; // fail-closed first layer + unresolvable fallback → the human decides
@@ -2178,7 +2179,7 @@ describe("confidence floor + cascade (#67)", () => {
 			cwd: "/proj",
 			hasUI: false,
 			getModel: () => null,
-			getFallbackModel: () => ({ model: { kind: "chat", model: { id: "fb-model" } }, thinking: "off" as const }),
+			getFallbackModel: () => ({ kind: "chat", model: { id: "fb-model" }, thinking: "off" as const }),
 			complete: (async () => ({ content: [{ type: "text", text: script[i++] }], stopReason: "stop" })) as any,
 			host: { getBranch: () => [], getSessionId: () => "s1" },
 		};
@@ -2286,8 +2287,8 @@ describe("confidence floor + cascade (#67)", () => {
 			const env = {
 				cwd: "/proj",
 				hasUI: true,
-				getModel: () => ({ model: { kind: "native", model: { type: "classifier", id: "glm-jev", api: "typesafe-system-one", provider: "typesafe" } }, thinking: "off" as const }),
-				getFallbackModel: () => ({ model: { kind: "chat", model: { id: "fb-model" } }, thinking: "off" as const }),
+				getModel: () => ({ kind: "native", model: { type: "classifier", id: "glm-jev", api: "typesafe-system-one", provider: "typesafe" }, thinking: "off" as const }),
+				getFallbackModel: () => ({ kind: "chat", model: { id: "fb-model" }, thinking: "off" as const }),
 				signal: ctrl.signal,
 				classify: (async () => {
 					ctrl.abort(); // abort during the first (native) layer — the fallback attempt sees the aborted signal
@@ -2670,14 +2671,14 @@ function adjudicateEnv(overrides: { text?: string; hasUI?: boolean; model?: any;
 	return {
 		cwd: "/proj",
 		hasUI: overrides.hasUI ?? true,
-		getModel: () => (overrides.failModel ? null : { model: { kind: "chat", model: overrides.model ?? { id: "mock/glm" } }, thinking: "off" as const }),
+		getModel: () => (overrides.failModel ? null : { kind: "chat", model: overrides.model ?? { id: "mock/glm" }, thinking: "off" as const }),
 		complete: (async () => ({
 			content: [{ type: "text", text: overrides.text ?? "<verdict>allow</verdict> ok" }],
 			stopReason: "stop",
 		})) as any,
 		host: { getBranch: () => [], getSessionId: () => "s1" },
 		signal: undefined,
-		getFallbackModel: overrides.fallback === undefined ? undefined : () => ({ model: { kind: "chat", model: overrides.fallback }, thinking: "off" as const }),
+		getFallbackModel: overrides.fallback === undefined ? undefined : () => ({ kind: "chat", model: overrides.fallback, thinking: "off" as const }),
 	};
 }
 
