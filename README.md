@@ -141,7 +141,7 @@ No built-in allowlist — every "always allow" claim is yours ([why](docs/config
    - or try it once: `PI_AUTO_MODE_MODEL=typesafe/jev-latest pi`
 
 **Notes**:
-- Verdicts are structured `classify()` answers (choice + probabilities + confidence); the reason line keeps the historical `jev:` shape, other classifier APIs render `classifier:`
+- Verdicts are structured `classify()` answers (choice + probabilities + confidence); the reason line keeps the historical `jev:` probability breakdown (tag-free — the `<verdict>` prefix survives only in the audit record's rawResponse), other classifier APIs render `classifier:`
 - Classifier specs resolve through pi's classifier catalog first (`findOfType`), chat registry second; on same-id dual listings (llama.cpp) the native entry wins; thinking suffixes on a classifier spec warn once and drop (recorded `thinking: null`)
 - Custom endpoints: override the provider's `baseUrl` in models.json (the 0.12 `PI_VERDICT_JEV_URL` escape hatch is gone, as is `PI_VERDICT_JEV_TRANSPORT` — transport choice is now the spec itself)
 - Carried-over limit: the denyPaths existence hint still does not reach classifier-typed models ([ADR-0005](docs/adr/0005-native-classifier-migration.md)); on the TypeSafe direct transport per-call cost shows $0 (its API does not report it)
@@ -205,7 +205,9 @@ tool_call
   ├─ 2. Gray zone → model classifier (defaults to session model — "self-reflection")
   │     ├─ input: CC-style <transcript> — recent user intent + tool calls,
   │     │        action under review always last
-  │     └─ output contract: <verdict>allow|ask|deny</verdict> prefix-anchored
+  │     └─ output: native classify() answers (choice + probabilities + confidence;
+  │              tag-free reason, full contract line in the audit rawResponse) or,
+  │              on the chat path, <verdict>…</verdict> prefix-anchored free text
   │
   └─ 3. Three-state adjudication
         ├─ allow → pass

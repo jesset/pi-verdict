@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 - Internal refactor (the 0.13 review's judgement calls, zero behavior change): `classifyWithModel` takes `(env, resolved, call)` instead of nine positional params; the resolved-layer type is flattened to `{kind, model, thinking}` removing the `resolved.model.model.id` double hop; the two spec-unavailable warnings share one formatter (the generic classifier-layer wording normalizes `, falling back` to `; falling back`, matching the jev branch).
 
+### Changed
+
+- Native-path reasons are tag-free: the vestigial `<verdict>…</verdict>` prefix is dropped from the reason composed by `composeVerdictLine` — it existed to satisfy the LLM path's `parseVerdict` contract, which the native classify() path never needed (the verdict comes from the structured answer; the floor reads structured confidence). Notifications and ask dialogs now read e.g. `🛡️ allow (classifier): jev: allow 95% (confidence 93%; ask 4%, deny 1%)`. The audit record's `rawResponse` keeps the full contract line (tag included), mirroring the chat path's rawResponse (the model's full output). ⚠️ Corpus comparability: native-path audit `reason` fields lose the leading tag; tooling anchored on `^<verdict>` over `reason` must switch to `rawResponse` (ADR-0005 amendment).
+
 ### Internal
 
 - CI: `actions/checkout` and `actions/setup-node` bumped v4 → v5 (run logs showed Node 20 deprecation warnings).
