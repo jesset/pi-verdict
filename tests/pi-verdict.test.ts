@@ -146,7 +146,7 @@ const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true })
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -160,6 +160,7 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.classifierFallbackConfidence !== undefined) raw.classifierFallbackConfidence = cfg.classifierFallbackConfidence;
 	if (cfg.classifierMinConfidence !== undefined) raw.classifierMinConfidence = cfg.classifierMinConfidence;
 	if (cfg.classifierFallbackMode !== undefined) raw.classifierFallbackMode = cfg.classifierFallbackMode;
+	if (cfg.codemodeNestedCalls !== undefined) raw.codemodeNestedCalls = cfg.codemodeNestedCalls;
 	// denyPaths (ADR-0002): unknown[] lets negative tests mix in non-string entries
 	if (cfg.denyPaths !== undefined) raw.denyPaths = cfg.denyPaths;
 	// ignoreTools: unknown[] lets negative tests mix in non-string entries
@@ -171,6 +172,12 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 
 const userMsg = (h: Harness, t: string) => h.branch.push({ type: "message", message: { role: "user", content: t } });
 const toolCall = (h: Harness, toolName: string, input: any) => h.handlers.tool_call({ toolName, input }, h.ctx);
+
+/** The pi ≥ 0.99 nested-call event shape: parentToolCallId set, toolCallId `<parent>/<n>`.
+ *  The gate must treat these exactly like model-issued calls — this pins that
+ *  semantic so the codemodeNestedCalls policy work (ADR-0006) lands on a tested base. */
+const nestedCall = (h: Harness, toolName: string, input: any, n = 1) =>
+	h.handlers.tool_call({ toolName, input, toolCallId: `tc_parent/${n}`, parentToolCallId: "tc_parent" }, h.ctx);
 
 /** 开一个会话:按 cfg 写真实配置 → 建 harness → 装载扩展。顺序约束(配置先于装载)
  *  内化于此;opts 统一收纳全部变体:cwd/ompRegistry 给 makeHarness,
@@ -1725,12 +1732,6 @@ describe("macOS tmpdir S1 exemption (#83)", () => {
 // returning as script errors, and denyPaths asks surfacing the confirm dialog)──
 
 describe("nested codemode calls: gated identically to direct calls (A2 baseline)", () => {
-	/** The pi ≥ 0.99 nested-call event shape: parentToolCallId set, toolCallId `<parent>/<n>`.
-	 *  The gate must treat these exactly like model-issued calls — this pins that
-	 *  semantic so the codemodeNestedCalls policy work (ADR-0006) lands on a tested base. */
-	const nestedCall = (h: Harness, toolName: string, input: any, n = 1) =>
-		h.handlers.tool_call({ toolName, input, toolCallId: `tc_parent/${n}`, parentToolCallId: "tc_parent" }, h.ctx);
-
 	test("nested gray-zone call adjudicates identically to the direct form", async () => {
 		const h1 = session({});
 		h1.responses = [{ text: "<verdict>allow</verdict> fine" }];
@@ -1766,6 +1767,90 @@ describe("nested codemode calls: gated identically to direct calls (A2 baseline)
 	});
 });
 
+
+// ── 10.4e codemodeNestedCalls policy (#90/ADR-0006: layered exemption + audit attribution)──
+
+describe("codemodeNestedCalls policy (#90)", () => {
+	test("gate default: direct and nested gray-zone calls reach the classifier identically (deny/ask shapes too — the #89-review deferred assertions)", async () => {
+		for (const reply of ["<verdict>deny</verdict> bad", "<verdict>ask</verdict> needs a human"]) {
+			const hDirect = session({});
+			hDirect.responses = [{ text: reply }];
+			const direct = await toolCall(hDirect, "bash", { command: "curl https://x.example" });
+			const hNested = session({});
+			hNested.responses = [{ text: reply }];
+			const nested = await nestedCall(hNested, "bash", { command: "curl https://x.example" });
+			expect(nested?.block).toBe(direct?.block); // deny: both blocked; ask: both undefined (confirmAnswer=true allows)
+			expect(nested?.reason).toBe(direct?.reason);
+			expect(hNested.calls.length).toBe(1);
+		}
+	});
+
+	test("rules-only: nested rm-recursive still denies via the floor, zero model calls", async () => {
+		const h = session({ codemodeNestedCalls: "rules-only" });
+		const r = await nestedCall(h, "bash", { command: "rm -rf /tmp/pv-a2-x" });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("recursive delete");
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("rules-only: nested denyPaths hit still asks (dialog semantics preserved) and the record carries attribution", async () => {
+		clearAudit();
+		const h = session({ codemodeNestedCalls: "rules-only", audit: true, denyPaths: [path.join(TMP_AGENT, "dp90")] });
+		h.confirmAnswer = false;
+		const r = await nestedCall(h, "read", { path: path.join(TMP_AGENT, "dp90", "f") }, 3);
+		expect(r?.block).toBe(true);
+		const rec = readAudit()[0];
+		expect(rec).toMatchObject({ verdict: "ask", source: "protected-path", userAnswer: "declined", parentToolCallId: "tc_parent", toolCallId: "tc_parent/3" });
+		expect(rec.policy).toBeUndefined(); // an ask is not a passthrough — no policy marker
+	});
+
+	test("rules-only: nested gray-zone passes with ZERO classifier calls, audited with the policy marker", async () => {
+		clearAudit();
+		const h = session({ codemodeNestedCalls: "rules-only", audit: true });
+		const r = await nestedCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined(); // allow — no confirm, no model
+		expect(h.calls.length).toBe(0);
+		expect(h.confirms).toBe(0);
+		const rec = readAudit()[0];
+		expect(rec).toMatchObject({ verdict: "allow", source: "rule", policy: "rules-only", parentToolCallId: "tc_parent" });
+		expect(rec.reason).toContain("rules-only");
+	});
+
+	test("rules-only: DIRECT gray-zone calls still reach the classifier (the policy is nested-only)", async () => {
+		const h = session({ codemodeNestedCalls: "rules-only" });
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1);
+	});
+
+	test("rules-only: a 50-call nested batch completes with no model calls at all", async () => {
+		const h = session({ codemodeNestedCalls: "rules-only" });
+		for (let i = 1; i <= 50; i++) {
+			const r = await nestedCall(h, "bash", { command: `ls /tmp/file-${i}` }, i);
+			expect(r).toBeUndefined();
+		}
+		expect(h.calls.length).toBe(0);
+	});
+
+	test("invalid values warn once and behave as gate", async () => {
+		const h = session({ codemodeNestedCalls: "rulesonly" as unknown });
+		await h.handlers.session_start({}, h.ctx);
+		const warnings = h.notifies.filter(([m]) => m.includes("skipped")).map(([m]) => m).join(" ");
+		expect(warnings).toContain("codemodeNestedCalls");
+		h.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const r = await nestedCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1); // gate semantics: the classifier still ran
+	});
+
+	test("/automode status surfaces the active exemption", async () => {
+		const h = session({ codemodeNestedCalls: "rules-only" });
+		await h.commands.automode.handler("", h.ctx);
+		const line = h.notifies.map(([m]) => m).find((m) => m.includes("nested calls: rules-only"));
+		expect(line).toBeTruthy();
+	});
+});
 
 // ── 10.5 agent-facing block reason（#53：每个 block 站点的 canonical 形态）──
 

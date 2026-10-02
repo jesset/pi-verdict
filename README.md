@@ -157,6 +157,7 @@ pi 0.99 can run model-written JavaScript in a QuickJS sandbox (`codemode`) that 
 - **`ignoreTools` and MCP names**: tool names are normalized — every character outside `[A-Za-z0-9_]` becomes `_` (`mcp__dev-radius__x` → `mcp__dev_radius__x`); exemption entries must use the normalized form
 - **Cost amplification**: one script may issue up to 256 nested calls; gray-zone calls classify one by one, so a slow LLM classifier multiplies per-call latency
 - **Exposure boundary**: adding an MCP server auto-enables codemode, and `pi --no-extensions -e builtin:mcp` runs MCP tools with no extensions loaded — i.e. without this gate. The gate is itself an extension, so it cannot be active in a session that loads none; the boundary is inherent to pi's extension model, stated here rather than papered over
+- **Batch latency is configurable** ([ADR-0006](docs/adr/0006-codemode-nested-calls-policy.md)): every nested call adjudicates individually and gray-zone adjudication is serial (~350ms/call measured), so large script batches pay real latency. `"codemodeNestedCalls": "rules-only"` opts nested calls into the deterministic layers only (rules, floor, self-protection, denyPaths + ask) — the gray zone passes; the trade-off is that rule-passing actions the classifier would have caught (e.g. a nested `bash head ~/.ssh/config` without a denyPaths declaration) pass too. Audit records carry `toolCallId`/`parentToolCallId` either way
 
 ### Self-protection (the gate guards itself — [ADR-0001](docs/adr/0001-self-protection-layer.md))
 

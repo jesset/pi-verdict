@@ -157,6 +157,7 @@ pi 0.99 可以在 QuickJS 沙箱(`codemode`)里运行模型写的 JavaScript 去
 - **`ignoreTools` 与 MCP 工具名**:工具名会归一化——`[A-Za-z0-9_]` 之外的字符统一变 `_`(`mcp__dev-radius__x` → `mcp__dev_radius__x`);豁免条目必须写归一化后的形态
 - **成本放大**:单个脚本最多可发 256 次嵌套调用,灰区调用逐个分类,慢的 LLM 分类器会把单次延迟成倍放大
 - **暴露边界**:添加 MCP 服务器会自动开启 codemode,而 `pi --no-extensions -e builtin:mcp` 可在不加载任何扩展(即无本门禁)的情况下启用 MCP 工具。门禁自身即扩展,在完全不加载扩展的会话中无法生效;此边界为 pi 扩展模型的固有属性,此处显式陈述而非掩饰
+- **批量延迟可配置**([ADR-0006](docs/adr/0006-codemode-nested-calls-policy.md)):每个嵌套调用独立裁决且灰区裁决为串行(实测 ~350ms/次),大脚本批次的判定开销可观。`"codemodeNestedCalls": "rules-only"` 让嵌套调用只走确定性层(规则、floor、自保护、denyPaths + ask)——灰区直接放行;代价是规则层放行、但分类器会拦的动作(如未声明 denyPaths 时的嵌套 `bash head ~/.ssh/config`)同样放行。两种模式下审计记录均携带 `toolCallId`/`parentToolCallId` 归因
 
 ### 自保护(门禁守护自身——[ADR-0001](docs/adr/0001-self-protection-layer.md))
 

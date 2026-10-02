@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+
+- `codemodeNestedCalls` policy key + nested-call audit attribution (#90, [ADR-0006](docs/adr/0006-codemode-nested-calls-policy.md)): nested codemode calls default to `"gate"` (identical to direct calls, unchanged); `"rules-only"` opts them into the deterministic layers only — self-protection, the built-in floor, user rules, denyPaths with its ask — skipping the classifier + cascade (the gray zone passes, audited as `source: rule` + `policy: rules-only`). Motivation: serial gray-zone adjudication of script batches measured ~350ms/call (50 calls ≈ 17.5s; the 256 cap ≈ 90s). Honest cost, stated in the docs: rule-passing actions the classifier would have caught pass under rules-only (coverage beyond the floor is denyPaths-declaration-dependent). Mode-independently, audit records gain `toolCallId`/`parentToolCallId` attribution — nested records become distinguishable from direct ones (live-fire evidence: they were field-for-field identical). `/automode` surfaces the active exemption; invalid values warn once and keep gate semantics; direct calls are byte-identical in both modes (PR #89 baseline pinned).
+
 ### Internal
 
 - devDependencies `@earendil-works/pi-coding-agent` 0.99.2 → 1.0.0 (typecheck zero errors; 241/241 tests green; fullscreen `ask`/`notify` smoke-verified interactively on 1.0.0). `peerDependencies` stays `>=0.99.0` — pi 1.0.0 leaves the extension API surface unchanged, so no code migration.
