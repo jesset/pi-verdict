@@ -1719,6 +1719,56 @@ describe("macOS tmpdir S1 exemption (#83)", () => {
 	});
 });
 
+// ── 10.4d nested codemode calls (live-fire baseline 2026-10-02: nested calls pass through
+// the identical tool_call pipeline — verified in production on pi 1.0.0 + 0.13.1,
+// incl. serial adjudication of Promise.all batches at ~350ms/call, floor denies
+// returning as script errors, and denyPaths asks surfacing the confirm dialog)──
+
+describe("nested codemode calls: gated identically to direct calls (A2 baseline)", () => {
+	/** The pi ≥ 0.99 nested-call event shape: parentToolCallId set, toolCallId `<parent>/<n>`.
+	 *  The gate must treat these exactly like model-issued calls — this pins that
+	 *  semantic so the codemodeNestedCalls policy work (ADR-0006) lands on a tested base. */
+	const nestedCall = (h: Harness, toolName: string, input: any, n = 1) =>
+		h.handlers.tool_call({ toolName, input, toolCallId: `tc_parent/${n}`, parentToolCallId: "tc_parent" }, h.ctx);
+
+	test("nested gray-zone call adjudicates identically to the direct form", async () => {
+		const h1 = session({});
+		h1.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const direct = await toolCall(h1, "bash", { command: "ls -la /tmp" });
+		const h2 = session({});
+		h2.responses = [{ text: "<verdict>allow</verdict> fine" }];
+		const nested = await nestedCall(h2, "bash", { command: "ls -la /tmp" });
+		expect(nested).toBeUndefined(); // same allow, same single classifier call
+		expect(h2.calls.length).toBe(1);
+		expect(direct).toBeUndefined();
+	});
+
+	test("nested floor deny blocks (rm-recursive) and leaves no audit record — the script sees the error", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		const r = await nestedCall(h, "bash", { command: "rm -rf /tmp/pv-a2-x" });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).toContain("recursive delete");
+		expect(h.calls.length).toBe(0); // deterministic — never reaches the classifier
+		expect(fs.existsSync(path.join(VERDICTS(), "s1.jsonl"))).toBe(false); // floor denies stay unaudited (live-fire: the rm leg left no record)
+	});
+
+	test("nested denyPaths hit asks with the zero-leak wording and records the user's answer", async () => {
+		clearAudit();
+		const h = session({ audit: true, denyPaths: [path.join(TMP_AGENT, "nested-dp")] });
+		h.confirmAnswer = false; // decline — the script gets the block
+		const r = await nestedCall(h, "read", { path: path.join(TMP_AGENT, "nested-dp", "f") });
+		expect(r?.block).toBe(true);
+		expect(String(r?.reason)).not.toContain("nested-dp"); // zero-leak: plaintext never in reasons
+		const rec = readAudit()[0];
+		expect(rec).toMatchObject({ verdict: "ask", source: "protected-path", userAnswer: "declined" }); // pendingAudit finalize carries ground truth (live-fire: declined ~/.zshrc leg)
+		expect(rec.detail).toContain("nested-dp"); // plaintext lives only in the UI-only detail channel
+	});
+});
+
+
+// ── 10.5 agent-facing block reason（#53：每个 block 站点的 canonical 形态）──
+
 describe("agent-facing block reason form (#53)", () => {
 	const HEAD = "BLOCKED — this action did NOT run. Reason: ";
 	const TAIL = ". Report the block to the user; never claim it succeeded or completed.";
