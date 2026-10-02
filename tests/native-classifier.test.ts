@@ -30,22 +30,22 @@ const host = { getBranch: () => [] as any[], getSessionId: () => "s1" };
 describe("composeVerdictLine (ADR-0005: System One keeps the jev: prefix, corpus continuity)", () => {
 	test("System One api → byte-identical 0.12 jev line", () => {
 		expect(composeVerdictLine(answer(), "typesafe-system-one")).toBe(
-			"<verdict>allow</verdict> jev: allow 81% (confidence 72%; ask 13%, deny 5%)",
+			"jev: allow 81% (confidence 72%; ask 13%, deny 5%)",
 		);
 	});
 	test("non-System One api (llama.cpp) → classifier: prefix, same template", () => {
 		expect(composeVerdictLine(answer({ choice: "deny", probabilities: { deny: 0.64, allow: 0.36 } }), "llama-cpp-classify")).toBe(
-			"<verdict>deny</verdict> classifier: deny 64% (confidence 72%; allow 36%, ask 0%)",
+			"classifier: deny 64% (confidence 72%; allow 36%, ask 0%)",
 		);
 	});
 	test("the Cloudflare Workers AI transport is System One family → jev: prefix (spec-review finding)", () => {
 		expect(composeVerdictLine(answer(), "cloudflare-workers-ai-system-one")).toBe(
-			"<verdict>allow</verdict> jev: allow 81% (confidence 72%; ask 13%, deny 5%)",
+			"jev: allow 81% (confidence 72%; ask 13%, deny 5%)",
 		);
 	});
 	test("missing probabilities render as 0%, never NaN", () => {
 		expect(composeVerdictLine(answer({ probabilities: undefined }), "typesafe-system-one")).toBe(
-			"<verdict>allow</verdict> jev: allow 0% (confidence 72%; ask 0%, deny 0%)",
+			"jev: allow 0% (confidence 72%; ask 0%, deny 0%)",
 		);
 	});
 	test("confidence floors, not rounds: 0.496 stays 49 (a 50-floor must catch it)", () => {
@@ -110,7 +110,8 @@ describe("classifyNative (outcome mapping, fail-closed discipline)", () => {
 		};
 		const out = await classifyNative(classify, JEV, host, "bash: cargo build", undefined, 25_000);
 		expect(out).toMatchObject({ verdict: "allow", source: "model", confidence: 72 });
-		expect(out.reason).toBe("<verdict>allow</verdict> jev: allow 81% (confidence 72%; ask 13%, deny 5%)");
+		expect(out.reason).toBe("jev: allow 81% (confidence 72%; ask 13%, deny 5%)");
+		expect(out.auditRaw?.rawResponse).toBe("<verdict>allow</verdict> jev: allow 81% (confidence 72%; ask 13%, deny 5%)"); // the audit keeps the full contract line (tag included)
 		expect(out.auditRaw).toMatchObject({ modelId: "jev-latest", thinking: null });
 		expect(out.auditRaw?.transcript).toContain("cargo build");
 		// protocol shape: state wraps the transcript, questions are VERDICT_QUESTIONS
@@ -150,6 +151,6 @@ describe("classifyNative (outcome mapping, fail-closed discipline)", () => {
 	});
 	test("non-System One classifier keeps its api prefix in the reason", async () => {
 		const out = await classifyNative(async () => ({ stopReason: "stop", answers: { verdict: answer() } }), LLAMA, host, "x", undefined, 1000);
-		expect(out.reason).toStartWith("<verdict>allow</verdict> classifier: ");
+		expect(out.reason).toStartWith("classifier: ");
 	});
 });

@@ -1124,12 +1124,15 @@ export function confidencePercent(conf: number): number {
 	return Math.floor(conf * 100 + 1e-9);
 }
 
-/** Validates the verdict answer and synthesizes the contract line
- *  (`<verdict>…</verdict>` + one-line reason) from a native classify() answer. Any
- *  malformed shape throws — the caller's fail-closed path owns the fallout. Reason is
- *  user-facing (block reasons, ask dialogs): plain percentages, no internal notation.
- *  Confidence is hard-required (#63 carried over): the decisions contract guarantees it
- *  on choice answers, so absence is contract drift and drift fails closed. */
+/** Validates the verdict answer and synthesizes the human-readable reason line
+ *  (probability breakdown, plain percentages, no internal notation). Any malformed
+ *  shape throws — the caller's fail-closed path owns the fallout. Confidence is
+ *  hard-required (#63 carried over): the decisions contract guarantees it on choice
+ *  answers, so absence is contract drift and drift fails closed. The historical
+ *  `<verdict>…</verdict>` prefix is NOT part of the reason anymore (see the ADR-0005
+ *  amendment): it existed to satisfy the LLM path's parseVerdict contract, which the
+ *  native path never needed — the full contract line lives on in the audit record's
+ *  rawResponse only. */
 export function composeVerdictLine(answer: ClassifierAnswerShape, api: string): string {
 	const choice = String(answer.choice ?? "").trim().toLowerCase();
 	if (!VERDICTS.includes(choice as VerdictChoice)) {
@@ -1145,7 +1148,7 @@ export function composeVerdictLine(answer: ClassifierAnswerShape, api: string): 
 		.map((v) => `${v} ${pct(probs[v])}`)
 		.join(", ");
 	const prefix = SYSTEM_ONE_APIS.has(api) ? "jev" : "classifier";
-	return `<verdict>${choice}</verdict> ${prefix}: ${choice} ${pct(probs[choice])} (confidence ${confidencePercent(conf)}%; ${rest})`;
+	return `${prefix}: ${choice} ${pct(probs[choice])} (confidence ${confidencePercent(conf)}%; ${rest})`;
 }
 
 const MAX_USER_MESSAGES = 5;
@@ -1426,12 +1429,16 @@ export async function classifyNative(
 	if (answer.type !== "choice") return fail(`malformed verdict answer (type=${JSON.stringify(answer.type)})`);
 	try {
 		const line = composeVerdictLine(answer, model.api);
+		const verdict = String(answer.choice).trim().toLowerCase() as ClassifierOutcome["verdict"];
 		return {
-			verdict: String(answer.choice).trim().toLowerCase() as ClassifierOutcome["verdict"],
+			verdict,
 			reason: line,
 			source: "model",
 			confidence: confidencePercent(answer.confidence as number),
-			auditRaw: { transcript, rawResponse: line, modelId: model.id, thinking: null },
+			// The audit keeps the full contract line (tag included) in rawResponse — "what
+			// the protocol said" — mirroring the LLM path's rawResponse (the model's full
+			// output, tag included). The reason field is human-facing and tag-free.
+			auditRaw: { transcript, rawResponse: `<verdict>${verdict}</verdict> ${line}`, modelId: model.id, thinking: null },
 		};
 	} catch (error) {
 		return fail(`${error instanceof Error ? error.message : String(error)}`);

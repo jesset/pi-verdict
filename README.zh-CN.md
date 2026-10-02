@@ -141,7 +141,7 @@ pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-000
   - 或者临时试用一次:`PI_AUTO_MODE_MODEL=typesafe/jev-latest pi`
 
 **说明**:
-- 裁决为结构化 `classify()` 应答(choice + probabilities + confidence);reason 行保留历史 `jev:` 形态,其余分类器 API 渲染 `classifier:`
+- 裁决为结构化 `classify()` 应答(choice + probabilities + confidence);reason 行保留历史 `jev:` 概率分解(无标签——`<verdict>` 前缀只存活于审计记录的 rawResponse),其余分类器 API 渲染 `classifier:`
 - 分类器 spec 先经 pi 分类器目录解析(`findOfType`)、chat 注册表兜底;同 id 双型并存(llama.cpp)时原生条目优先;分类器 spec 上的思考后缀警告一次后丢弃(审计 `thinking` 记为 `null`)
 - 自定义端点:在 models.json 覆盖 provider 的 `baseUrl`(0.12 的 `PI_VERDICT_JEV_URL` 逃生口与 `PI_VERDICT_JEV_TRANSPORT` 均已移除——transport 选择即 spec 本身)
 - 沿袭限制:denyPaths 存在性话术仍不达分类器形态模型([ADR-0005](docs/adr/0005-native-classifier-migration.md));TypeSafe 直连的单次成本显示 $0(其 API 不返回 cost)
