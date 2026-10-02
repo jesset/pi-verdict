@@ -30,5 +30,5 @@ Then open the HTML, use **Export → SVG (editable vector, dual-theme)**, and
 replace the matching `.svg` file. Keep both language specs in sync on
 pipeline-structure changes (only string fields differ).
 
-Baseline: adjudication pipeline as of v0.12 (ADR-0001–0004; #22/#62/#71/#73
-semantics included).
+Baseline: adjudication pipeline as of v0.14 (ADR-0001–0006; #22/#62/#71/#73/#90
+semantics included — native classifier path, nested-call policy).

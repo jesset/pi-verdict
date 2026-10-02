@@ -134,7 +134,7 @@
       "col": 0,
       "type": "external",
       "label": "Tool Call",
-      "sublabel": "tool_call hook · reviewed first",
+      "sublabel": "tool_call hook · direct + nested",
       "width": 170
     },
     {
@@ -209,8 +209,8 @@
       "col": 4,
       "type": "cloud",
       "label": "Model Classifier",
-      "sublabel": "transcript + hint · contract",
-      "tag": "fail-closed",
+      "sublabel": "native classify() or chat LLM",
+      "tag": "ADR-0005",
       "width": 170
     },
     {
@@ -310,7 +310,7 @@
       "id": "userrules-run",
       "from": "userrules",
       "to": "run",
-      "label": "allow / ignoreTools",
+      "label": "allow / ignoreTools / nested·rules-only",
       "role": "branch"
     },
     {
@@ -366,6 +366,7 @@
       "title": "Exemption boundaries",
       "items": [
         "master switch = only exemption",
+        "rules-only nested: deterministic layers stay (ADR-0006)",
         "self-protection survives any config",
         "allowlists are always user-claimed"
       ]
