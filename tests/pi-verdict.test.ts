@@ -1852,6 +1852,61 @@ describe("codemodeNestedCalls policy (#90)", () => {
 	});
 });
 
+// ── 10.4f virtual session model (D6: self-reflection pass-through, pi 1.0 createVirtualModel shape)──
+
+describe("virtual session model (D6)", () => {
+	/** The real shape pi 1.0's createVirtualModel() produces: api "pi-virtual", a
+	 *  thinkingLevelMap, zero cost, empty baseUrl. The gate must treat it like any
+	 *  chat model on the self-reflection path — hand it to complete() unchanged
+	 *  (the registry routes per request) and never demote on its verdicts. */
+	const VIRTUAL = {
+		id: "auto",
+		name: "Auto (Jev)",
+		api: "pi-virtual",
+		provider: "jev",
+		baseUrl: "",
+		reasoning: true,
+		thinkingLevelMap: { off: "off", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 272_000,
+		maxTokens: 128_000,
+	};
+
+	test("self-reflection with a virtual session model flows through the chat path unchanged", async () => {
+		clearAudit();
+		setConfig({ audit: true }); // the bare SessionState initializes its audit sink from the config (#77 pattern)
+		const seen: unknown[] = [];
+		const state = new SessionState(buildProtectedSet(TMP_AGENT, null), undefined, TMP_AGENT);
+		const env = {
+			cwd: "/proj",
+			hasUI: false,
+			getModel: () => ({ kind: "chat", model: VIRTUAL, thinking: "off" as const }),
+			complete: (async (m: any) => {
+				seen.push(m);
+				return { content: [{ type: "text", text: "<verdict>allow</verdict> fine" }], stopReason: "stop" };
+			}) as any,
+			host: { getBranch: () => [] as any[], getSessionId: () => "s1" },
+		};
+		const v = await adjudicate(state, { toolName: "bash", input: { command: "ls -la /tmp" } }, env as any);
+		expect(v).toMatchObject({ verdict: "allow", source: "classifier" });
+		expect(seen.length).toBe(1);
+		expect(seen[0]).toBe(VIRTUAL); // pass-through: the registry object itself, no reshaping
+		const rec = readAudit()[0];
+		expect(rec).toMatchObject({ model: "auto", verdict: "allow" }); // audit carries the virtual id
+	});
+
+	test("no demotion for virtual-model verdicts (no protocol confidence); the floor-inert warning applies", async () => {
+		const h = session({ audit: true, classifierMinConfidence: 90 });
+		h.ctx.model = VIRTUAL; // virtual session model via self-reflection
+		h.responses = [{ text: "<verdict>allow</verdict> jev: allow 90% (confidence 50%; ask 10%, deny 0%)" }];
+		const r = await toolCall(h, "bash", { command: "ls -la /tmp" });
+		expect(r).toBeUndefined(); // allow stands: chat-path outcomes carry no confidence, never demote
+		expect(h.confirms).toBe(0);
+		expect(h.notifies.some(([m]) => m.includes("chat-model classifier"))).toBe(true); // floor inert, warned once
+	});
+});
+
 // ── 10.5 agent-facing block reason（#53：每个 block 站点的 canonical 形态）──
 
 describe("agent-facing block reason form (#53)", () => {
