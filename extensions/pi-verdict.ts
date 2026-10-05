@@ -81,6 +81,7 @@
  *               research/pi-model-call-and-ref-implementations.md
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -284,9 +285,12 @@ interface UserRules {
 	 *  ~350ms/call). Opt-in: rule-passing actions the classifier would have caught
 	 *  pass under rules-only (coverage is denyPaths-declaration-dependent). */
 	codemodeNestedCalls: "gate" | "rules-only";
+	/** ADR-0007: redact secret-shaped text from audit records before append.
+	 *  Default true; false is the explicit keep-raw escape hatch. */
+	auditRedactSecrets: boolean;
 }
 
-const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "enforce", codemodeNestedCalls: "gate" };
+const EMPTY_RULES: UserRules = { allow: [], deny: [], denyPaths: [], ignoreTools: [], builtinDenyFloor: true, classifierModel: null, toggleShortcut: DEFAULT_TOGGLE_SHORTCUT, audit: false, notifyAllows: false, classifierMinConfidence: null, classifierFallbackModel: null, classifierFallbackMode: "enforce", codemodeNestedCalls: "gate", auditRedactSecrets: true };
 
 /** This module's own file location (import.meta.url resolved; null = unresolvable). */
 const OWN_FILE_PATH: string | null = (() => {
@@ -355,6 +359,7 @@ const USER_CONFIG_TEMPLATE = `${JSON.stringify({
 	classifierModel: null,
 	toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
 	audit: false,
+	auditRedactSecrets: true,
 	notifyAllows: false,
 	classifierMinConfidence: null,
 	classifierFallbackModel: null,
@@ -379,7 +384,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 			} catch { /* 只读环境静默跳过 */ }
 			return { rules: EMPTY_RULES, skipped: [], shortcutWarning: null };
 		}
-		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown };
+		let raw: { allow?: unknown; deny?: unknown; denyPaths?: unknown; ignoreTools?: unknown; builtinDenyFloor?: unknown; classifierModel?: unknown; toggleShortcut?: unknown; audit?: unknown; notifyAllows?: unknown; classifierFallbackModel?: unknown; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown; auditRedactSecrets?: unknown };
 		try {
 			raw = JSON.parse(fs.readFileSync(p, "utf8")) as typeof raw;
 		} catch (err) {
@@ -427,6 +432,8 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 		// #90: nested-call policy — invalid values skip into the one-shot warning channel
 		const nestedRaw = raw.codemodeNestedCalls;
 		if (nestedRaw !== undefined && nestedRaw !== "gate" && nestedRaw !== "rules-only") skipped.push(`codemodeNestedCalls: ${JSON.stringify(nestedRaw)}`);
+		// ADR-0007: audit redaction — non-boolean values skip into the one-shot warning channel, redaction stays on
+		if (raw.auditRedactSecrets !== undefined && typeof raw.auditRedactSecrets !== "boolean") skipped.push(`auditRedactSecrets: ${JSON.stringify(raw.auditRedactSecrets)}`);
 		return {
 			rules: {
 				allow: compile(raw.allow),
@@ -442,6 +449,7 @@ function loadUserRules(): { rules: UserRules; skipped: string[]; shortcutWarning
 				classifierMinConfidence: minConfOk ? minConfRaw : null,
 				classifierFallbackMode: fbModeRaw === undefined ? "enforce" : fbModeRaw === "enforce" ? "enforce" : "shadow", // invalid values land on the conservative shadow (standing invalid-config precedent); the key-less default is enforce
 				codemodeNestedCalls: nestedRaw === "rules-only" ? "rules-only" : "gate", // invalid values keep the safe default (gate)
+				auditRedactSecrets: raw.auditRedactSecrets !== false, // default on; only an explicit false disables (ADR-0007)
 			},
 			skipped,
 			shortcutWarning: shortcut.warning,
@@ -1778,20 +1786,110 @@ export interface AuditRecord {
 	fallback?: FallbackAudit;
 }
 
+// ============================================================================
+// Audit secret redaction (ADR-0007)
+// ============================================================================
+
+/** sha256 fingerprint (first 8 hex), unsalted: deterministic — the same secret
+ *  keeps one fingerprint across records, preserving clustering and diffability.
+ *  The threat model anchors on high-entropy API keys, for which the rainbow
+ *  tables that salting guards against are infeasible (ADR-0007). */
+function redactionFingerprint(secret: string): string {
+	return crypto.createHash("sha256").update(secret).digest("hex").slice(0, 8);
+}
+
+/** Context-guided value redaction — shapeless secrets identified by neighboring
+ *  structure (assignment/header/URL position). Every value character class
+ *  excludes `<` (every replacement starts with `<`, so layering is idempotent);
+ *  `#` is excluded only where a bare fragment could look like a value (bearer,
+ *  query). The URL value class also excludes `/` (RFC 3986 userinfo forbids it —
+ *  and it keeps `host:8080/path@…` port shapes out of the password slot). */
+const REDACT_CONTEXT_RULES: ReadonlyArray<{ re: RegExp; build: (...m: string[]) => string }> = [
+	{ re: /(https?:\/\/[^/\s:@]+:)([^@/\s<]{8,})(?=@)/g, build: (...m) => `${m[1]}<redacted:url#${redactionFingerprint(m[2])}>` },
+	{ re: /(-u\s+"?)([^:\s"<]+):([^"\s<]{8,})(")/g, build: (...m) => `${m[1]}${m[2]}:<redacted:basic#${redactionFingerprint(m[3])}>${m[4]}` },
+	{ re: /(-u\s+)([^:\s"<]+):([^"\s<]{8,})/g, build: (...m) => `${m[1]}${m[2]}:<redacted:basic#${redactionFingerprint(m[3])}>` },
+	// query runs before env: a `?token=…` param belongs to the query tag; the env
+	// bare-name branch (TOKEN/APIKEY/SECRET) then only sees non-query positions
+	{ re: /([?&](?:token|apikey|api_key|access_token|client_secret|signature|sig)=)([^&\s"'#<>]{8,})/gi, build: (...m) => `${m[1]}<redacted:query#${redactionFingerprint(m[2])}>` },
+	{ re: /\b([A-Za-z_][A-Za-z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)|APIKEY|TOKEN|SECRET)(=)("[^"<]{8,}"|[^\s"<&;]{8,})/gi, build: (...m) => `${m[1]}${m[2]}<redacted:env#${redactionFingerprint(m[3].replace(/^"|"$/g, ""))}>` },
+	{ re: /(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi, build: (...m) => `${m[1]}<redacted:bearer#${redactionFingerprint(m[2])}>` },
+];
+
+/** Exact provider token shapes (near-zero false positives). Order matters both
+ *  here (specific prefix before general: sk-ant before sk) and against the
+ *  context layer: shapes run SECOND, so a provider-shaped *username* (e.g.
+ *  `-u "sk-…:shapelesspass"`) still has its raw form visible when the context
+ *  rules match — running shapes first would rewrite the username into a marker
+ *  and the `<` exclusion would defeat the `-u` rule, dropping the shapeless
+ *  password raw. All patterns are character classes + bounded/greedy
+ *  quantifiers — no nested quantifiers, no backtrack blowup. */
+const REDACT_TOKEN_SHAPES: ReadonlyArray<{ type: string; re: RegExp }> = [
+	{ type: "jwt", re: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g },
+	{ type: "github_pat", re: /github_pat_[A-Za-z0-9_]{22,}/g },
+	{ type: "gh", re: /gh[posur]_[A-Za-z0-9]{30,}/g },
+	{ type: "sk-ant", re: /sk-ant-[A-Za-z0-9_-]{20,}/g },
+	{ type: "sk", re: /sk-[A-Za-z0-9][A-Za-z0-9_-]{15,}/g },
+	{ type: "pk", re: /pk-[A-Za-z0-9][A-Za-z0-9_-]{15,}/g },
+	{ type: "aws", re: /AKIA[0-9A-Z]{16}/g },
+	{ type: "slack", re: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
+	{ type: "google", re: /AIza[0-9A-Za-z_-]{30,}/g },
+];
+
+function redactString(s: string): string {
+	let out = s;
+	for (const { re, build } of REDACT_CONTEXT_RULES) {
+		out = out.replace(re, build);
+	}
+	for (const { type, re } of REDACT_TOKEN_SHAPES) {
+		out = out.replace(re, (m) => `<redacted:${type}#${redactionFingerprint(m)}>`);
+	}
+	return out;
+}
+
+/** Audit redaction: recursively processes every string value of the record
+ *  (input/actionLine/transcript/reason/fallback…), returning a fresh tree and
+ *  never mutating the caller's object (pendingAudit is spread later for the
+ *  userAnswer finalize). Exotic objects (Date, …) pass through untouched —
+ *  JSON.stringify keeps authority over their serialization. Applies to the
+ *  persisted copy only — the adjudication pipeline and the classifier input
+ *  keep the raw text: the fact that a command carries a secret is itself an
+ *  adjudication signal (ADR-0007). */
+export function redactSecrets<T>(value: T): T {
+	if (typeof value === "string") return redactString(value) as T;
+	if (Array.isArray(value)) return value.map((v) => redactSecrets(v)) as T;
+	if (value !== null && typeof value === "object") {
+		const proto = Object.getPrototypeOf(value);
+		if (proto !== Object.prototype && proto !== null) return value;
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redactSecrets(v);
+		return out as T;
+	}
+	return value;
+}
+
 /** Audit sink (#54): append-only and fail-soft (the first write failure surfaces
  *  once via drainWarning; verdicts are never affected). The dir is created
  *  lazily — audit on with no gray-zone call all session leaves zero filesystem trace. */
 export class AuditLog {
 	private warning: string | null = null;
 	private warned = false;
-	constructor(readonly dir: string) {}
+	constructor(readonly dir: string, readonly redact = true) {}
 
 	append(record: AuditRecord): void {
 		// sessionId comes from the host with no shape guarantee: narrow to a safe filename charset
 		const file = path.join(this.dir, `${record.sessionId.replace(/[^a-zA-Z0-9_-]/g, "_")}.jsonl`);
 		try {
 			fs.mkdirSync(this.dir, { recursive: true });
-			fs.appendFileSync(file, JSON.stringify(record) + "\n");
+			// ADR-0007: redact the persisted copy only (new tree — the caller's
+			// pendingAudit object is spread later for the userAnswer finalize);
+			// a redaction failure fails open: record integrity over hygiene
+			let persisted: AuditRecord = record;
+			if (this.redact) {
+				try {
+					persisted = redactSecrets(record);
+				} catch { /* fail-open */ }
+			}
+			fs.appendFileSync(file, JSON.stringify(persisted) + "\n");
 		} catch (err) {
 			if (!this.warned) {
 				this.warned = true;
@@ -1859,7 +1957,7 @@ export class SessionState {
 
 	/** #54: the audit flag follows the rules (applies to new sessions); the dir is anchored to the install path */
 	private makeAudit(rules: UserRules): AuditLog | null {
-		return rules.audit && this.agentDir ? new AuditLog(path.join(this.agentDir, "verdicts")) : null;
+		return rules.audit && this.agentDir ? new AuditLog(path.join(this.agentDir, "verdicts"), rules.auditRedactSecrets) : null;
 	}
 
 	/** 会话重置:重载用户规则(配置改动新会话生效)+ 按会话 cwd 重锚 denyPaths

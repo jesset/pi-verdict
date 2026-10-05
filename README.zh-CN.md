@@ -110,6 +110,7 @@ pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-000
   "classifierModel": null,
   "toggleShortcut": "ctrl+shift+a",
   "audit": false,
+  "auditRedactSecrets": true,
   "notifyAllows": false,
   "classifierMinConfidence": null,
   "classifierFallbackModel": null,
@@ -123,7 +124,7 @@ pi-verdict 0.13+ 需 **pi ≥ 0.99**,仅支持 pi(原生分类器接入,[ADR-000
 - `builtinDenyFloor: false` 整体关闭内置危险/路径拦截(风险自担；下方自保护层永远开启)
 - `classifierModel` 指定分类器模型，如 `"zai/glm-5.3-flash:low"`(支持思考后缀；缺省 = 会话模型且显式关思考)
 - `classifierModel: "typesafe/jev-latest"` 启用**原生 jev 分类器**——每次灰区裁决经 pi 内置分类器目录发一次结构化 `classify()` 调用(TypeSafe 直连,或 OpenRouter/OpenCode/Cloudflare/Vercel 上的 Jev);详见 [ADR-0005](docs/adr/0005-native-classifier-migration.md)
-- `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件，保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth，确认结束后落盘)，protected-path ask 也入审计(#62)；规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机；[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注)；agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
+- `audit: true` 把每次**灰区裁决**(发给分类器的完整转录、其原始响应、解析出的裁决)以 JSONL 记录到 `~/.pi/agent/verdicts/<sessionId>.jsonl`——按会话一分文件，保留最近 20 个。交互式 ask 还会记录你的应答(`userAnswer` ground truth，确认结束后落盘)，protected-path ask 也入审计(#62)；规则 allow/deny 仍不入。仅存本机且全保真(受保护路径明文可能出现——永不出本机；[ADR-0002](docs/adr/0002-deny-paths-deterministic-ask.md) 边界注)；凭证明文在落盘前脱敏(`<redacted:类型#指纹>`，指纹具确定性、跨记录可追踪——`auditRedactSecrets: false` 可显式关闭；[ADR-0007](docs/adr/0007-audit-secret-redaction.md))；agent 对该目录读写双拒。开启时 `/automode` 会显示审计状态与路径
 - `notifyAllows: true` 对每次 **classifier 放行**发通知(reason + action 行——如 jev 的概率分解)；默认 `false` 保持放行静默。机械放行(你自己的 allow 规则、protected-path 确认)永不通知；两开关同开时通知只出现一次
 - `classifierMinConfidence`(可选，[ADR-0004](docs/adr/0004-classifier-fallback-cascade.md))设定**置信地板**：低于它的原生分类器裁决被降级——配置了 `classifierFallbackModel` 则级联(`enforce`，默认 = 第二层全权裁决；例外：降级的 **deny 与 ask** 永不被自动放宽为 allow；fail-closed 未产生裁决，其获救裁决照常生效；`shadow` = 只记录意见、由你裁决——`/automode` 会提示激活开关)，否则直接问你。不低于地板时第一层自主。地板仅作用于原生分类器模型(协议原生置信度)——chat/LLM 分类器下不生效，会有一次中性警告提示。天然搭配：jev 在前 + haiku/flash 级回退
 

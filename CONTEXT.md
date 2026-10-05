@@ -26,7 +26,11 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 裁决审计 (verdict audit records)
 
-灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。#62 起审计面扩至 protected-path ask——其用户应答是对 denyPaths 声明质量的反馈;#71 起 enforce 获救的 fail-closed 行顶层 verdict 落生效裁决(source 仍为 fail-closed),其余行顶层语义不变——且交互式 ask 记录 ground truth(`userAnswer`/`answeredAt` 于确认应答后落盘,`ts` 仍为裁决时间;确认中途会话中断丢该条,已接受的代价);规则层 allow/deny 仍不入审计。observe-only:append-only、永不回流裁决输入;全保真(受保护路径明文仅存本地,ADR-0002 边界注);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
+灰区裁决的 opt-in JSONL 决策记录(#54)。`pi-verdict.json` 的 `"audit": true` 开启;每条记录自包含(时间戳/会话 id/cwd/模型/工具与输入/action 行/思考级别/完整转录/原始响应/解析裁决/来源/降级标记),按会话落 `<agentDir>/verdicts/<sessionId>.jsonl`,保留最近 20 个。#62 起审计面扩至 protected-path ask——其用户应答是对 denyPaths 声明质量的反馈;#71 起 enforce 获救的 fail-closed 行顶层 verdict 落生效裁决(source 仍为 fail-closed),其余行顶层语义不变——且交互式 ask 记录 ground truth(`userAnswer`/`answeredAt` 于确认应答后落盘,`ts` 仍为裁决时间;确认中途会话中断丢该条,已接受的代价);规则层 allow/deny 仍不入审计。observe-only:append-only、永不回流裁决输入;全保真(受保护路径明文仅存本地,ADR-0002 边界注;凭证明文经**审计脱敏**处置);目录对 agent 读写双拒(记录含不可信原始输出);写失败 fail-soft 不影响裁决。
+
+### 审计脱敏
+
+审计落盘前的确定性凭证改写(ADR-0007)。仅作用于 `AuditLog.append()` 这一落盘咽喉——判定管线与分类器输入保持原文(命令携带凭证这一事实本身是裁决信号);两层检测(精确前缀形态 + 上下文引导的值脱敏),命中替换为 `<redacted:类型#sha256 前 8 hex>`;指纹不加盐、具确定性——同凭证跨记录同指纹,保留聚类/追因能力。默认开启,`auditRedactSecrets: false` 显式关闭(无效值一次性警告且保持开启);脱敏失败 fail-open(记录完整性优先于卫生);pi 原生 session 转录与终端回显不在其覆盖范围。
 
 ### 规则层 (rule layer)
 
