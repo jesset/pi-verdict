@@ -9,7 +9,7 @@ import { describe, test, expect, beforeAll, beforeEach, afterEach, afterAll } fr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import autoMode, { setTmpdirBasesForTests, adjudicate, bashPathTokens, BASH_MAX_MATCH_LEN, BASH_PATH_TOKENS, bindCompletion, buildProtectedSet, computeTmpdirBases, isProtectedWritePath, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
+import autoMode, { setTmpdirBasesForTests, adjudicate, bashPathTokens, BASH_MAX_MATCH_LEN, BASH_PATH_TOKENS, bindCompletion, buildProtectedSet, computeTmpdirBases, isProtectedWritePath, redactSecrets, resolveAgentDir, SessionState } from "../extensions/pi-verdict.ts";
 
 // ── 桩设施 ──────────────────────────────────────────────
 
@@ -142,11 +142,13 @@ const VERDICTS = () => path.join(TMP_AGENT, "verdicts");
 const readAudit = () =>
 	fs.readFileSync(path.join(VERDICTS(), "s1.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
 const clearAudit = () => fs.rmSync(VERDICTS(), { recursive: true, force: true });
+// Synthetic, production-shaped Langfuse-style key shared by the ADR-0007 describes
+const SYNTH_SK = "sk-lf-c7b2be14-f87f-4497-9c86-73713134867c";
 
 beforeAll(() => { process.env.PI_CODING_AGENT_DIR = TMP_AGENT; });
 afterAll(() => { delete process.env.PI_CODING_AGENT_DIR; });
 
-function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown }, invalid?: string[]): void {
+function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown[]; ignoreTools?: unknown[]; builtinDenyFloor?: boolean; classifierModel?: string | null; toggleShortcut?: string | null; audit?: boolean; auditRedactSecrets?: unknown; notifyAllows?: boolean; classifierFallbackModel?: string | null; classifierFallbackConfidence?: unknown; classifierMinConfidence?: unknown; classifierFallbackMode?: unknown; codemodeNestedCalls?: unknown }, invalid?: string[]): void {
 	config = { allow: cfg.allow ?? [], deny: cfg.deny ?? [] };
 	const p = path.join(TMP_AGENT, "config", "pi-verdict.json");
 	fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -155,6 +157,7 @@ function setConfig(cfg: { allow?: string[]; deny?: string[]; denyPaths?: unknown
 	if (cfg.builtinDenyFloor !== undefined) raw.builtinDenyFloor = cfg.builtinDenyFloor;
 	if (cfg.toggleShortcut !== undefined) raw.toggleShortcut = cfg.toggleShortcut;
 	if (cfg.audit !== undefined) raw.audit = cfg.audit;
+	if (cfg.auditRedactSecrets !== undefined) raw.auditRedactSecrets = cfg.auditRedactSecrets;
 	if (cfg.notifyAllows !== undefined) raw.notifyAllows = cfg.notifyAllows;
 	if (cfg.classifierFallbackModel !== undefined) raw.classifierFallbackModel = cfg.classifierFallbackModel;
 	if (cfg.classifierFallbackConfidence !== undefined) raw.classifierFallbackConfidence = cfg.classifierFallbackConfidence;
@@ -1997,6 +2000,177 @@ describe("agent-facing block reason form (#53)", () => {
 });
 
 // ── 10.7 verdict audit records (#54: opt-in JSONL decision records) ──
+
+describe("audit secret redaction (ADR-0007)", () => {
+	const SK = SYNTH_SK;
+
+	test("context+shape layering: an env-assigned key redacts under the env tag, fingerprint matches the bare shape", () => {
+		const out = redactSecrets(`export LANGFUSE_SECRET_KEY="${SK}"`) as string;
+		expect(out).not.toContain(SK);
+		expect(out).toContain("<redacted:env#"); // context layer runs before shapes — the tag is env
+		const fp1 = /<redacted:env#([0-9a-f]{8})>/.exec(out)![1];
+		// determinism: same token → same fingerprint, everywhere (cross-record clustering)
+		const out2 = redactSecrets(`echo ${SK} && echo ${SK}`) as string;
+		const fps = [...out2.matchAll(/<redacted:sk#([0-9a-f]{8})>/g)].map((m) => m[1]);
+		expect(fps.length).toBe(2);
+		expect(fps[0]).toBe(fps[1]);
+		expect(fps[0]).toBe(fp1); // the fingerprint, not the tag, is the clustering key
+		// different token → different fingerprint
+		const other = redactSecrets("sk-lf-ffffffff-1111-2222-3333-444455556666") as string;
+		expect(/<redacted:sk#([0-9a-f]{8})>/.exec(other)![1]).not.toBe(fp1);
+	});
+
+	test("shape layer: other provider families", () => {
+		const cases: Array<[string, string]> = [
+			["sk-ant", "sk-ant-api03-" + "e5".repeat(12)],
+			["pk", "pk-lf-deadbeef-1234-5678-9abc-def012345678"],
+			["gh", "ghp_" + "a1".repeat(18)],
+			["github_pat", "github_pat_" + "b2".repeat(16)],
+			["aws", "AKIA" + "CDEF".repeat(4)],
+			["slack", "xoxp-" + "c3".repeat(8)],
+			["google", "AIza" + "d4".repeat(18)],
+			["jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.e30Sig"],
+		];
+		for (const [type, tok] of cases) {
+			const out = redactSecrets(`X-${tok}-Y`) as string;
+			expect(out).not.toContain(tok);
+			expect(out).toContain(`<redacted:${type}#`);
+		}
+	});
+
+	test("context layer: -u basic auth keeps the user, redacts the password", () => {
+		const out = redactSecrets(`curl -s -u "admin:S3cretPassw0rd" https://api.example.dev/v0/orgs`) as string;
+		expect(out).toContain("admin:");
+		expect(out).not.toContain("S3cretPassw0rd");
+		expect(out).toContain("<redacted:basic#");
+	});
+
+	test("context layer: credentials embedded in a URL", () => {
+		const out = redactSecrets(`git clone https://ci-bot:hunter2github@github.com/acme/repo.git`) as string;
+		expect(out).toContain("https://ci-bot:<redacted:url#");
+		expect(out).not.toContain("hunter2github");
+		expect(out).toContain("<redacted:url#");
+	});
+
+	test("context layer: sensitive variable assignment redacts the value", () => {
+		const out = redactSecrets(`export OPENROUTER_API_KEY="or-v1-no-shape-sigil-abcdef"`) as string;
+		expect(out).toContain("OPENROUTER_API_KEY=");
+		expect(out).not.toContain("or-v1-no-shape-sigil-abcdef");
+		expect(out).toContain("<redacted:env#");
+		const lower = redactSecrets(`deploy_token=no-shape-token-value-here-123`) as string;
+		expect(lower).toContain("deploy_token=");
+		expect(lower).not.toContain("no-shape-token-value-here-123");
+	});
+
+	test("context layer: Bearer header and URL query tokens", () => {
+		const b = redactSecrets(`curl -H "authorization: Bearer opaquevalue123456" https://x.dev`) as string;
+		expect(b).toContain("<redacted:bearer#");
+		expect(b).not.toContain("opaquevalue123456");
+		const q = redactSecrets(`curl "https://x.dev/api?token=tok-no-shape-abcdef&limit=5"`) as string;
+		expect(q).toContain("token=<redacted:query#");
+		expect(q).toContain("&limit=5");
+		expect(q).not.toContain("tok-no-shape-abcdef");
+	});
+
+	test("context layer: remaining sensitive-name suffixes", () => {
+		expect(redactSecrets(`DB_PASSWORD=shapeless-pw-9876`)).toContain("<redacted:env#");
+		expect(redactSecrets(`CLIENT_SECRET="no-shape-sigil-123"`)).not.toContain("no-shape-sigil");
+		expect(redactSecrets(`GITHUB_CREDENTIALS=gh-shapeless-tok`)).toContain("<redacted:env#");
+		expect(redactSecrets(`apikey=query-style-key-42`)).toContain("<redacted:env#");
+	});
+
+	test("shape username + shapeless password: both segments redact (layer-order pin)", () => {
+		const out = redactSecrets(`curl -u "ghp_${"a1".repeat(18)}:shapeless-password-1" https://x.dev`) as string;
+		expect(out).not.toContain("shapeless-password-1");
+		expect(out).toContain(":<redacted:basic#");
+		expect(out).toContain("<redacted:gh#");
+	});
+
+	test("negative: URLs with ports and no userinfo stay untouched", () => {
+		const port = `curl https://host.internal:8443/api/v1/health`;
+		expect(redactSecrets(port)).toBe(port);
+		const portAt = `fetch https://host.internal:8080/some/path@x`;
+		expect(redactSecrets(portAt)).toBe(portAt);
+	});
+
+	test("negative: ordinary strings survive untouched", () => {
+		const plain = `bash: ls -la /tmp && echo "sessionId=01a10268-44f1-752e-9a48-b3140ea4f44b"`;
+		expect(redactSecrets(plain)).toBe(plain);
+		const b64 = `base64 -d snowy-owl.b64 > out.jpg && shasum pv-013.tgz`;
+		expect(redactSecrets(b64)).toBe(b64);
+		const misc = `curl -sS "https://registry.npmjs.org/@socketdev/cli/latest" | python3 -m json.tool`;
+		expect(redactSecrets(misc)).toBe(misc);
+		expect(redactSecrets(`curl -u admin https://x.dev`)).toBe(`curl -u admin https://x.dev`);
+	});
+
+	test("recurses through nested objects/arrays, returns a new tree", () => {
+		const rec = { input: { command: `echo ${SK}` }, fallback: { reason: `saw ${SK}` }, tags: [`x ${SK}`], n: 1, nil: null };
+		const out = redactSecrets(rec) as typeof rec;
+		expect(out.input.command).not.toContain(SK);
+		expect(out.fallback.reason).not.toContain(SK);
+		expect(out.tags[0]).not.toContain(SK);
+		expect(out.n).toBe(1);
+		expect(out.nil).toBeNull();
+		expect(rec.input.command).toContain(SK); // caller's object untouched
+	});
+});
+
+describe("audit redaction at the append seam (ADR-0007)", () => {
+	beforeAll(clearAudit);
+	afterAll(clearAudit);
+
+	test("append redacts every persisted field; fingerprint is stable across records", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "bash", { command: `curl -s -u "pk-lf-deadbeef-1234-5678-9abc-def012345678:${SYNTH_SK}" https://langfuse.example.dev/api/public/traces` });
+		expect(r).toBeUndefined();
+		const rec = readAudit()[0];
+		expect(rec.input.command).not.toContain(SYNTH_SK);
+		// context layer first: the password slot lands under the basic tag; the
+		// provider-shaped username (pk-) then falls to the shape layer
+		expect(rec.input.command).toContain("<redacted:basic#");
+		expect(rec.actionLine).toContain("<redacted:pk#");
+		expect(rec.transcript).toContain("<redacted:basic#");
+		const h2 = session({ audit: true });
+		h2.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h2, "bash", { command: `echo ${SYNTH_SK}` });
+		const rec2 = readAudit()[1];
+		const fp1 = /<redacted:(?:basic|sk)#([0-9a-f]{8})>/.exec(rec.input.command)![1];
+		const fp2 = /<redacted:sk#([0-9a-f]{8})>/.exec(rec2.input.command)![1];
+		expect(fp2).toBe(fp1); // same secret, same fingerprint — regardless of which layer tagged it
+	});
+
+	test("ask finalize keeps redaction and still lands userAnswer", async () => {
+		clearAudit();
+		const h = session({ audit: true });
+		h.responses = [{ text: "<verdict>ask</verdict> needs a human" }];
+		h.confirmAnswer = true;
+		const r = await toolCall(h, "bash", { command: `deploy_token=no-shape-token-value-here-123` });
+		expect(r).toBeUndefined();
+		const rec = readAudit()[0];
+		expect(rec.verdict).toBe("ask");
+		expect(rec.userAnswer).toBe("allowed");
+		expect(rec.input.command).toContain("<redacted:env#");
+		expect(rec.input.command).not.toContain("no-shape-token-value");
+	});
+
+	test("auditRedactSecrets:false keeps raw text; invalid values warn and stay on", async () => {
+		clearAudit();
+		const h1 = session({ audit: true, auditRedactSecrets: false });
+		h1.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h1, "bash", { command: `echo ${SYNTH_SK}` });
+		expect(readAudit()[0].input.command).toContain(SYNTH_SK);
+		clearAudit();
+		const h2 = session({ audit: true, auditRedactSecrets: "yes" });
+		await h2.handlers["session_start"]({}, h2.ctx);
+		h2.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		await toolCall(h2, "bash", { command: `echo ${SYNTH_SK}` });
+		expect(readAudit()[0].input.command).toContain("<redacted:sk#");
+		const warnings = h2.notifies.filter(([m, l]) => l === "warning" && m.includes("auditRedactSecrets")).map(([m]) => m).join(" ");
+		expect(warnings).toContain("\"yes\"");
+	});
+});
 
 describe("audit verdict records (#54)", () => {
 	const VERDICTS = () => path.join(TMP_AGENT, "verdicts");

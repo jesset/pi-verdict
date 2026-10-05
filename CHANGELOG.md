@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Added
+
+- Audit secret redaction ([ADR-0007](docs/adr/0007-audit-secret-redaction.md)): audit records now redact credential-shaped text before append — known provider token shapes (`sk-`/`pk-`/`ghp_`/`AKIA`/`xox`/`AIza`/JWT/`github_pat_`) plus context-guided values (`-u user:pass` password segment, URL userinfo, `*_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS` and bare `TOKEN|APIKEY|SECRET` assignments, `Bearer` tokens, credential query params), each landing as `<redacted:type#sha256-8hex>` with a deterministic unsalted fingerprint so the same secret stays traceable across records. Scope is the persisted copy only — the classifier still sees the real command (a secret-bearing command is itself an adjudication signal), and pi's native session transcripts are untouched. Redactor failure fails open (record integrity over hygiene); on by default, `auditRedactSecrets: false` is the explicit keep-raw escape hatch; non-boolean values warn once via the session-start channel and redaction stays on. Motivation: a production audit found ~18 records persisting a hardcoded API key pair in plaintext inside the gate's own telemetry ([research](research/verdicts-ask-friction-audit-2026-10.md)).
+
 ## [0.14.0] - 2026-10-02
 
 ### Added
