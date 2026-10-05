@@ -45,9 +45,32 @@ Everything the gate reads from disk lives in `<agentDir>/config/pi-verdict.json`
 - `classifierFallbackMode` (default `"enforce"` since 0.12.0) — `"shadow"` keeps the second layer **recording its opinion only** (audit `fallback` sub-object + `/automode` counters: `triggered · agreed · would-overrule · would-rescue-allow · errored`) and never changes any verdict: a demoted call is asked of you, a fail-closed deny stands. `"enforce"` — the second layer **adjudicates de novo**, with one carve-out family (#71): a demoted first-layer **deny or ask** that the second layer would allow is asked of you instead (never an automatic allow; headless degrades to deny). A **fail-closed** first layer keeps full de novo authority — it emitted no negative verdict, so a fallback allow is a first ruling and stands automatically. A failed or unresolvable fallback on a cascaded call falls to you as well — the tier that was to adjudicate is down (headless → deny, one-time warning). Audit reading: the top level keeps **first-layer semantics** (records of non-interactive asks — native, demoted, escalated — carry their effective deny, per the standing convention), `demoted: true` marks floor fires, and the applied verdict lives in `fallback.effective` (enforce rows, failure rows carry the `"ask"` you got) — except enforced **fail-closed rescues** (#71), whose top-level verdict is the applied ruling (a fail-closed layer's deny was only the default, never a judgment). An explicit `"shadow"` is the observation mode: flip to `"enforce"` (or drop the key) when the shadow data earns the layer your trust ([criteria](adr/0004-classifier-fallback-cascade.md)); config-only, new-session semantics.
 - `codemodeNestedCalls` (default `"gate"`, [ADR-0006](adr/0006-codemode-nested-calls-policy.md)) — how nested calls (issued by codemode scripts, `parentToolCallId` set) adjudicate. `"gate"`: identically to direct calls, every layer. `"rules-only"`: nested calls keep every deterministic layer — self-protection, the built-in deny floor, your allow/deny rules, denyPaths with its terminal ask — and skip only the classifier + confidence cascade; the gray zone passes (audited as `source: rule` + `policy: rules-only` when audit is on). The trade-off, stated rather than papered over: rule-passing actions the classifier would have caught now pass — e.g. a nested `bash head ~/.ssh/config` passes unless `~/.ssh` is a denyPaths declaration (bash token extraction then asks). Motivation: serial gray-zone adjudication of script batches — measured ~350ms/call, so 50 nested calls ≈ 17.5s and the 256-call cap ≈ 90s of pure gating latency. Direct calls are unaffected in both modes; audit records gain `toolCallId`/`parentToolCallId` attribution either way.
 
+Built-in (keyless) behaviors worth knowing about, both statements about the gate's relationship to pi's own surfaces rather than user policy: **agentDir `sessions/` writes pass** ([ADR-0008](adr/0008-agentdir-sessions-write-exemption.md)) — `write`/`edit` under `<agentDir>/sessions/` (pi's runtime output tree, where subagent artifacts live) return a deterministic allow; your `deny` rules and denyPaths declarations still outrank it, reads and bash under that tree are untouched, and a symlink resolving outside earns no exemption. **verdicts reads are denied** (#54, see `audit` above) — records contain untrusted raw model output.
+
+## Recipes: trimming predictable asks with `allow`
+
+The audit's ground truth ([research](../research/verdicts-ask-friction-audit-2026-10.md)): across 10 production sessions, 71 asked calls drew **70 approvals and 1 decline** — and the one decline was a denyPaths rule, not the classifier. Model-layer asks that repeat a stable shape are friction, not protection; the two shapes below (release workflow, read-only CI inspection) accounted for roughly two thirds of all asks. Since the built-in layer deliberately ships no allowlist, these are *your* declarations to make — adopt selectively, and keep `audit` on so corpus data keeps flowing:
+
+```jsonc
+"allow": [
+  // read-only CI/registry inspection — zero shared state, all observed allows
+  "^gh run (view|list|watch)\\b",
+  "^gh (release view|issue view|pr view|pr checks)\\b",
+  "^npm view\\b",
+  "^gh api .*\\?.*--method GET",   // careful: gh api defaults to GET; tighten to your org if you use it
+
+  // release workflow — shared state, but YOUR repo: adopt if you release through the agent
+  "^git push(?!.*--force)\\b",     // force-push stays classifier-adjudicated (the floor denies it)
+  "^gh pr (create|merge)\\b",
+  "^git (branch -d|-D|push origin --delete)\\b"
+]
+```
+
+Notes: user `allow` entries are full-command regexes for bash (and resolved absolute paths for file tools), tested after your `deny` list and denyPaths — a deny always wins. They cannot weaken the deny floor (danger regexes, path sensitivity) or the self-protection layer. If you want the confirm without the classifier round-trip instead, leave them out — an ask is one keypress; an allow rule is zero.
+
 ## Why no built-in allowlist?
 
-Bypass testing of the rule layer ([writeup](../research/rule-layer-security-audit.md)) showed that allowlist robustness is very limited. The built-in layer only makes **deny** claims (the sound direction); allow claims are yours.
+Bypass testing of the rule layer ([writeup](../research/rule-layer-security-audit.md)) showed that allowlist robustness is very limited. On *your* surfaces (commands you run, paths you own) the built-in layer only makes **deny** claims (the sound direction); allow claims are yours. The one built-in allow is a statement about the gate's relationship to pi's own runtime surface — the sessions/ write exemption above — which your `deny` rules and denyPaths declarations outrank.
 
 ## Host notes (pi and oh-my-pi)
 

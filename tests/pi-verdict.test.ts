@@ -2001,6 +2001,92 @@ describe("agent-facing block reason form (#53)", () => {
 
 // ── 10.7 verdict audit records (#54: opt-in JSONL decision records) ──
 
+describe("agentDir sessions/ runtime write exemption (ADR-0008)", () => {
+	const SESS = () => path.join(TMP_AGENT, "sessions");
+
+	test("headless subagent write under sessions/ passes deterministically — zero classifier calls", async () => {
+		const h = session({});
+		h.ctx.hasUI = false; // the production false-positive: headless ask degraded to deny
+		const r = await toolCall(h, "write", { path: path.join(SESS(), "s1/subagent-artifacts/outputs/6e055/context.md"), content: "x" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(0); // deterministic layer — the classifier never saw it
+	});
+
+	test("interactive write and edit under sessions/ also pass without a confirm", async () => {
+		const h = session({});
+		const w = await toolCall(h, "write", { path: path.join(SESS(), "s1/notes.md"), content: "x" });
+		expect(w).toBeUndefined();
+		const e = await toolCall(h, "edit", { path: path.join(SESS(), "s1/notes.md"), oldText: "x", newText: "y" });
+		expect(e).toBeUndefined();
+		expect(h.confirms).toBe(0);
+	});
+
+	test("reads and bash under sessions/ are not exempt (read-allow rule layer / bash classifier)", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const rd = await toolCall(h, "read", { path: path.join(SESS(), "s1/notes.md") });
+		expect(rd).toBeUndefined();
+		expect(h.calls.length).toBe(0); // reads keep the ordinary read-allow grade, no classifier
+		const bs = await toolCall(h, "bash", { command: `echo hi > ${path.join(SESS(), "s1/out.txt")}` });
+		expect(bs).toBeUndefined();
+		expect(h.calls.length).toBe(1); // bash stays classifier-adjudicated
+	});
+
+	test("a symlink escaping sessions/ earns no exemption (every-form intersection)", async () => {
+		await withTempDir(".pv-sess-real-", async (real) => {
+			fs.writeFileSync(path.join(real, "out.md"), "x");
+			fs.mkdirSync(path.join(SESS(), "s1"), { recursive: true });
+			const alias = path.join(SESS(), "s1", "alias-out.md");
+			fs.symlinkSync(path.join(real, "out.md"), alias); // existing target: the real form resolves outside sessions/
+			const h = session({});
+			h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+			const r = await toolCall(h, "write", { path: alias, content: "x" });
+			expect(r).toBeUndefined();
+			expect(h.calls.length).toBe(1); // real form escapes → every-form semantics denies the exemption → classifier
+			fs.rmSync(alias);
+			fs.rmSync(path.join(SESS(), "s1"), { recursive: true, force: true });
+		});
+	});
+
+	test("the floor and self-protection outrank the exemption", async () => {
+		// floor: a sessions/ alias onto an existing system file denies before the exemption can lift anything
+		fs.mkdirSync(path.join(SESS(), "s1"), { recursive: true });
+		const sysAlias = path.join(SESS(), "s1", "sys-alias");
+		fs.symlinkSync("/etc/passwd", sysAlias);
+		const h1 = session({});
+		const fd = await toolCall(h1, "write", { path: sysAlias, content: "x" });
+		expect(fd?.block).toBe(true);
+		expect(fd!.reason).toContain("system directory"); // S1 floor, not the exemption's reason
+		fs.rmSync(sysAlias);
+		fs.rmSync(path.join(SESS(), "s1"), { recursive: true, force: true });
+		// self-protection: the gate's own config stays denied
+		const h2 = session({});
+		const cfg = await toolCall(h2, "write", { path: path.join(TMP_AGENT, "config", "pi-verdict.json"), content: "{}" });
+		expect(cfg?.block).toBe(true);
+		expect(cfg!.reason).toContain("self-protection");
+	});
+
+	test("user declarations outrank the exemption (denyPaths ask, user deny)", async () => {
+		const h1 = session({ denyPaths: [path.join(TMP_AGENT, "sessions")] });
+		h1.confirmAnswer = false;
+		const r1 = await toolCall(h1, "write", { path: path.join(SESS(), "s1/notes.md"), content: "x" });
+		expect(r1?.block).toBe(true); // denyPaths terminal ask, declined
+		expect(r1!.reason).toContain("protected-path");
+		const h2 = session({ deny: ["sessions"] });
+		const r2 = await toolCall(h2, "write", { path: path.join(SESS(), "s1/notes.md"), content: "x" });
+		expect(r2?.block).toBe(true); // user deny rule
+		expect(r2!.reason).toContain("user deny");
+	});
+
+	test("agentDir writes outside sessions/ are not exempt", async () => {
+		const h = session({});
+		h.responses = [{ text: "<verdict>allow</verdict> ok" }];
+		const r = await toolCall(h, "write", { path: path.join(TMP_AGENT, "loose-file.md"), content: "x" });
+		expect(r).toBeUndefined();
+		expect(h.calls.length).toBe(1); // gray — classifier adjudicated it
+	});
+});
+
 describe("audit secret redaction (ADR-0007)", () => {
 	const SK = SYNTH_SK;
 

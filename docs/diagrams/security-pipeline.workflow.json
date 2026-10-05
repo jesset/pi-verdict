@@ -310,7 +310,7 @@
       "id": "userrules-run",
       "from": "userrules",
       "to": "run",
-      "label": "allow / ignoreTools / nested·rules-only",
+      "label": "allow / ignoreTools / sessions-write / nested·rules-only",
       "role": "branch"
     },
     {
