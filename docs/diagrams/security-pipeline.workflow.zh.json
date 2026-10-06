@@ -310,7 +310,7 @@
       "id": "userrules-run",
       "from": "userrules",
       "to": "run",
-      "label": "allow / ignoreTools / 嵌套·rules-only",
+      "label": "allow / ignoreTools / subagent-artifacts·headless 豁免 / 嵌套·rules-only",
       "role": "branch"
     },
     {

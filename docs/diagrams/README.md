@@ -30,5 +30,11 @@ Then open the HTML, use **Export → SVG (editable vector, dual-theme)**, and
 replace the matching `.svg` file. Keep both language specs in sync on
 pipeline-structure changes (only string fields differ).
 
-Baseline: adjudication pipeline as of v0.14 (ADR-0001–0006; #22/#62/#71/#73/#90
-semantics included — native classifier path, nested-call policy).
+Baseline: adjudication pipeline as of v0.14 + the ADR-0008 subagent-artifacts
+label (the rule-layer allow exit reads `allow / ignoreTools /
+subagent-artifacts·headless / nested·rules-only`; #22/#62/#71/#73/#90
+semantics included — native classifier path, nested-call policy). SVG
+re-export is pending: the current archify showcase validator flags 4
+pre-existing composition findings on the v0.14 baseline (edge
+crossings/corridors, unrelated to the label change) — fix those first, then
+regenerate both SVGs from these specs.

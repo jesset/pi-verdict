@@ -60,6 +60,10 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 注入分类器 system prompt 的固定背景句:告知用户配置了受保护路径,擦边行为(拷贝到临时目录再读、打包、间接引用)应从紧裁决。是 denyPaths 泄漏面为零承诺的推论:分类器知道"有",不知道"是什么"。
 
+### 运行时数据豁免
+
+无 UI 会话(`hasUI=false`,subagent 会话即此类)对 `<agentDir>/sessions/**/subagent-artifacts/` 子树的 write/edit 确定性放行(ADR-0008)。仅限 headless:交互会话保有 ask 能力,门禁不静默放弃人可执行的裁决;`hasUI` 是代理信号——pi 的 ExtensionAPI 无 subagent 身份标记(`parentToolCallId` 只标记 codemode 嵌套)。置于用户 deny 与 denyPaths 之后、gray 落分类器之前——用户声明压过内置豁免,且只抬 gray 档。双形从严(every 交集,前缀用祖先重建档);read 与 bash 不豁免。无配置键:与 #54 verdicts 读拒绝同类的"门禁对 pi 自身面的关系陈述",非用户策略。
+
 ### 自保护层 (self-protection layer)
 
 判定管线中**不可经任何配置豁免**的内置 deny 规则集,保护对象是门禁自身的完整性(用户规则配置文件与扩展安装副本;0.12 及以前另含随包分发的 jev 适配器副本,该文件已随适配器退役消失)。与用户规则相对:后者可自由增删,前者连 `builtinDenyFloor: false` 也不能关闭。语义依据:门禁之内一切写入按定义均由 agent 发起,故受保护路径对工具调用恒 deny;用户在门禁之外(编辑器等)修改不受影响。_Avoid_: 黑名单(该词保留给用户规则的 deny 正则)。

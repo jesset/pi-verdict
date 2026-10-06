@@ -202,7 +202,13 @@ tool_call
   │     ├─ denyPaths (ADR-0002): protected paths → terminal ask,
   │     │   before user allow; classifier sees an existence hint only
   │     ├─ ignoreTools: your declared uncovered tools → allow, zero model calls
-  │     └─ no built-in allowlist — every "always allow" claim is yours to make
+  │     ├─ headless subagent-artifacts writes (ADR-0008): a no-UI session's
+  │     │   write/edit under <agentDir>/sessions/**/subagent-artifacts/ →
+  │     │   deterministic allow (interactive sessions keep the ask); your
+  │     │   deny rules and denyPaths still outrank it
+  │     └─ no built-in allowlist on your surfaces — every "always allow"
+  │       claim is yours to make (the one built-in allow is pi's own
+  │       subagent-artifacts subtree, headless-only, ADR-0008)
   │
   ├─ 2. Gray zone → nested-call policy, then model classifier
   │     ├─ nested call (codemode) + codemodeNestedCalls=rules-only → pass;
@@ -235,7 +241,7 @@ Design decisions here are settled by measurement, and the lab notes ship with th
 
 ## Status & limitations
 
-- no built-in allowlist by design (see the [bypass writeup](research/rule-layer-security-audit.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
+- no built-in allowlist on user surfaces by design (see the [bypass writeup](research/rule-layer-security-audit.md); the one built-in allow is pi's own subagent-artifacts subtree, headless-only, [ADR-0008](docs/adr/0008-agentdir-sessions-write-exemption.md)); with an empty `allow` config most commands go to the classifier — point `--auto-mode-model` at a fast model if per-call latency matters
 - the path sensitivity floor applies to file tools only: bash command strings are matched by the danger regexes alone, so e.g. `cat ~/.ssh/id_rsa` goes to the classifier rather than the deterministic S0 deny (the file-tool spelling `read ~/.ssh/id_rsa` does deny)
 - on Windows the built-in floor covers bash-shaped patterns only — PowerShell-native dangerous commands (`Remove-Item -Recurse -Force`, `Invoke-Expression`, `Set-ExecutionPolicy`, …) rely on the classifier (fail-closed)
 - on macOS the per-user temp tree (`$TMPDIR`, the `/var/folders/…/T` confstr dir) is exempt from the system-directory floor: reads allow at zero cost, writes adjudicate as ordinary outside-project writes (classifier). The exemption anchors to the runtime-resolved confstr family — a hand-set `TMPDIR` lifts nothing — and `/var/tmp` (POSIX shared temp) stays denied; symlink spellings whose real form escapes the temp tree still hit S1
