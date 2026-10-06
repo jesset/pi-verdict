@@ -255,7 +255,7 @@
     {
       "id": "tamper-call",
       "from": "tamper",
-      "to": "call",
+      "to": "block",
       "label": "tamper · fail-closed",
       "variant": "security",
       "role": "error"
@@ -299,21 +299,6 @@
       "role": "error"
     },
     {
-      "id": "userrules-verdict",
-      "from": "userrules",
-      "to": "verdict",
-      "label": "denyPaths hit → terminal ask",
-      "variant": "security",
-      "role": "branch"
-    },
-    {
-      "id": "userrules-run",
-      "from": "userrules",
-      "to": "run",
-      "label": "allow / ignoreTools / subagent-artifacts·headless / nested·rules-only",
-      "role": "branch"
-    },
-    {
       "id": "userrules-classifier",
       "from": "userrules",
       "to": "classifier",
@@ -340,6 +325,21 @@
       "to": "block",
       "label": "deny · declined / headless",
       "role": "error"
+    },
+    {
+      "id": "userrules-run",
+      "from": "userrules",
+      "to": "run",
+      "label": "allow / ignoreTools / subagent-artifacts·headless / nested·rules-only",
+      "role": "branch"
+    },
+    {
+      "id": "userrules-verdict",
+      "from": "userrules",
+      "to": "verdict",
+      "label": "denyPaths ask",
+      "variant": "security",
+      "role": "branch"
     }
   ],
   "cards": [

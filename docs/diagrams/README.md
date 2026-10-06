@@ -33,8 +33,8 @@ pipeline-structure changes (only string fields differ).
 Baseline: adjudication pipeline as of v0.14 + the ADR-0008 subagent-artifacts
 label (the rule-layer allow exit reads `allow / ignoreTools /
 subagent-artifacts·headless / nested·rules-only`; #22/#62/#71/#73/#90
-semantics included — native classifier path, nested-call policy). SVG
-re-export is pending: the current archify showcase validator flags 4
-pre-existing composition findings on the v0.14 baseline (edge
-crossings/corridors, unrelated to the label change) — fix those first, then
-regenerate both SVGs from these specs.
+semantics included — native classifier path, nested-call policy). SVGs are
+regenerated from these specs (2026-10-06, `quality: standard` — the
+`showcase` composition validator flags 4 pre-existing layout findings on
+the v0.14 baseline that are unrelated to the label change; standard
+profile treats them as warnings and passes).

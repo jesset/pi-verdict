@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1169 682" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="" width="1169" height="682" xmlns="http://www.w3.org/2000/svg"><style>
+<svg viewBox="0 0 1313 682" data-layout-contract="readable-v2" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" style="width: 1313px; height: 682px; min-width: 0px;" width="1313" height="682" xmlns="http://www.w3.org/2000/svg"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -134,15 +134,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   
 svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
-:root, [data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
-[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+:root, [data-theme="dark"] { --bg: #020617; --grid: #1e293b; --canvas-dot: rgba(148, 163, 184, 0.16); --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+[data-theme="light"] { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #d9dee5; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
 [data-preset="signal-flow"][data-theme="dark"] { --bg: #030711; --grid: #15233a; --panel: rgba(6, 14, 28, 0.78); --panel-border: #1d3350; --lane-fill: rgba(9, 22, 40, 0.5); --lane-stroke: #2c4564; --text: #f5fbff; --text-muted: #9eb0c7; --text-dim: #52667f; --text-faint: #7890ad; --mask: #07101e; --frontend-fill: rgba(6, 182, 212, 0.14); --frontend-stroke: #67e8f9; --backend-fill: rgba(16, 185, 129, 0.14); --backend-stroke: #5eead4; --database-fill: rgba(139, 92, 246, 0.16); --database-stroke: #c4b5fd; --cloud-fill: rgba(245, 158, 11, 0.13); --cloud-stroke: #fcd34d; --security-fill: rgba(244, 63, 94, 0.13); --security-stroke: #fda4af; --messagebus-fill: rgba(249, 115, 22, 0.13); --messagebus-stroke: #fdba74; --external-fill: rgba(71, 85, 105, 0.24); --external-stroke: #a5b4c7; --arrow: #7890ad; --arrow-emphasis: #2dd4bf; --toolbar-bg: rgba(7, 16, 30, 0.86); --toolbar-border: #29415f; --toolbar-menu-bg: #07101e; }
 [data-preset="signal-flow"][data-theme="light"] { --bg: #f4f9fc; --grid: #d4e5ee; --panel: rgba(255, 255, 255, 0.82); --panel-border: #bfd5e2; --lane-fill: rgba(232, 243, 248, 0.62); --lane-stroke: #a9c5d5; --text: #102638; --text-muted: #587287; --text-dim: #8aa2b4; --text-faint: #668397; --mask: #ffffff; --frontend-fill: rgba(6, 182, 212, 0.09); --frontend-stroke: #0789a1; --backend-fill: rgba(5, 150, 105, 0.09); --backend-stroke: #087f69; --database-fill: rgba(124, 58, 237, 0.09); --database-stroke: #7254c7; --cloud-fill: rgba(217, 119, 6, 0.08); --cloud-stroke: #b9670b; --security-fill: rgba(225, 29, 72, 0.08); --security-stroke: #c53a59; --messagebus-fill: rgba(234, 88, 12, 0.08); --messagebus-stroke: #c65f27; --external-fill: rgba(100, 116, 139, 0.1); --external-stroke: #607a8c; --arrow: #7b97aa; --arrow-emphasis: #0d9488; }
 [data-preset="blueprint"][data-theme="dark"] { --bg: #06131f; --grid: #17425a; --panel: rgba(7, 27, 43, 0.9); --panel-border: #27627f; --lane-fill: rgba(10, 43, 66, 0.36); --lane-stroke: #34799a; --text: #e3f6ff; --text-muted: #91b8ca; --text-dim: #557e92; --text-faint: #739caf; --mask: #0a2031; --frontend-fill: rgba(26, 157, 193, 0.14); --frontend-stroke: #66d9ef; --backend-fill: rgba(31, 155, 124, 0.13); --backend-stroke: #69dfbd; --database-fill: rgba(120, 105, 196, 0.14); --database-stroke: #b4a8ff; --cloud-fill: rgba(197, 145, 43, 0.13); --cloud-stroke: #ffd166; --security-fill: rgba(199, 76, 104, 0.13); --security-stroke: #ff8da1; --messagebus-fill: rgba(207, 112, 49, 0.13); --messagebus-stroke: #ffad66; --external-fill: rgba(84, 119, 139, 0.18); --external-stroke: #a7cad9; --arrow: #78a3b7; --arrow-emphasis: #64dfc1; --toolbar-bg: rgba(7, 28, 45, 0.92); --toolbar-border: #34799a; --toolbar-text: #d8f3ff; --toolbar-hover: rgba(18, 58, 83, 0.95); --toolbar-menu-bg: #0a2031; }
 [data-preset="blueprint"][data-theme="light"] { --bg: #edf7fa; --grid: #b5d5e1; --panel: rgba(249, 253, 255, 0.94); --panel-border: #78aabd; --lane-fill: rgba(210, 232, 240, 0.42); --lane-stroke: #83b2c4; --text: #123344; --text-muted: #4e7486; --text-dim: #86a6b4; --text-faint: #668c9d; --mask: #f9fdff; --frontend-fill: rgba(8, 145, 178, 0.08); --frontend-stroke: #087f9c; --backend-fill: rgba(5, 128, 101, 0.08); --backend-stroke: #08755f; --database-fill: rgba(100, 75, 180, 0.08); --database-stroke: #6757a8; --cloud-fill: rgba(181, 120, 15, 0.08); --cloud-stroke: #a86609; --security-fill: rgba(190, 48, 80, 0.07); --security-stroke: #b32f50; --messagebus-fill: rgba(196, 81, 22, 0.07); --messagebus-stroke: #b65120; --external-fill: rgba(79, 112, 128, 0.08); --external-stroke: #506f7e; --arrow: #6d93a5; --arrow-emphasis: #087f69; --toolbar-bg: rgba(247, 252, 254, 0.94); --toolbar-border: #8ab5c5; --toolbar-text: #294f61; --toolbar-hover: #ffffff; --toolbar-menu-bg: #f9fdff; }
 [data-preset="editorial"][data-theme="dark"] { --bg: #181611; --grid: #39342a; --panel: rgba(35, 31, 24, 0.96); --panel-border: #625a4a; --lane-fill: rgba(52, 46, 35, 0.46); --lane-stroke: #726957; --text: #f4eddf; --text-muted: #b9ae9b; --text-dim: #776e60; --text-faint: #9d917e; --mask: #231f18; --frontend-fill: rgba(43, 133, 142, 0.16); --frontend-stroke: #7fc6c7; --backend-fill: rgba(63, 132, 92, 0.16); --backend-stroke: #8fc29e; --database-fill: rgba(117, 91, 141, 0.17); --database-stroke: #c0a4d0; --cloud-fill: rgba(170, 119, 49, 0.16); --cloud-stroke: #d8ad68; --security-fill: rgba(157, 69, 65, 0.17); --security-stroke: #df9085; --messagebus-fill: rgba(174, 79, 42, 0.16); --messagebus-stroke: #df946f; --external-fill: rgba(126, 115, 96, 0.18); --external-stroke: #b8ad99; --arrow: #948978; --arrow-emphasis: #dd6b3d; --toolbar-bg: rgba(35, 31, 24, 0.92); --toolbar-border: #625a4a; --toolbar-text: #eee5d5; --toolbar-hover: #302a20; --toolbar-menu-bg: #231f18; }
 [data-preset="editorial"][data-theme="light"] { --bg: #f2eee5; --grid: #d8d0c2; --panel: rgba(251, 248, 241, 0.97); --panel-border: #c4b9a6; --lane-fill: rgba(229, 221, 207, 0.42); --lane-stroke: #b8aa94; --text: #242018; --text-muted: #6f6658; --text-dim: #a09788; --text-faint: #817767; --mask: #fbf8f1; --frontend-fill: rgba(31, 117, 126, 0.09); --frontend-stroke: #287e84; --backend-fill: rgba(42, 119, 75, 0.09); --backend-stroke: #397b53; --database-fill: rgba(105, 75, 130, 0.09); --database-stroke: #765d86; --cloud-fill: rgba(157, 103, 31, 0.1); --cloud-stroke: #9a671f; --security-fill: rgba(153, 58, 52, 0.09); --security-stroke: #9e463f; --messagebus-fill: rgba(182, 70, 27, 0.09); --messagebus-stroke: #ad4b25; --external-fill: rgba(101, 91, 75, 0.09); --external-stroke: #746b5e; --arrow: #8a806f; --arrow-emphasis: #bb4c23; --toolbar-bg: rgba(251, 248, 241, 0.94); --toolbar-border: #c4b9a6; --toolbar-text: #40392f; --toolbar-hover: #fffdf8; --toolbar-menu-bg: #fbf8f1; }
-svg { width: 100%; min-width: min(900px, 100%); display: block; transform-origin: 0px 0px; transition: transform 0.18s; }
+svg { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono CJK SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", monospace; width: 100%; min-width: min(900px, 100%); display: block; transform-origin: 0px 0px; transition: transform 0.18s; }
 @keyframes archify-lens-in { 
   0% { opacity: 0; transform: translateY(5px) scale(0.985); }
   100% { opacity: 1; transform: translateY(0px) scale(1); }
@@ -151,22 +151,18 @@ svg { width: 100%; min-width: min(900px, 100%); display: block; transform-origin
   0% { opacity: 0; transform: translateY(-5px) scale(0.985); }
   100% { opacity: 1; transform: translateY(0px) scale(1); }
 }
-svg[data-chapter-handoff] [data-node-id][data-chapter-role="stay"] { opacity: 1; }
-svg[data-chapter-handoff] [data-node-id][data-chapter-role="enter"] { opacity: 0.78; }
-svg[data-chapter-handoff] [data-node-id][data-chapter-role="leave"] { opacity: 0.26; }
-@keyframes archify-chapter-anchor { 
-  0% { opacity: 0.35; stroke-dashoffset: 8; }
-  45% { opacity: 1; }
-  100% { opacity: 0.72; stroke-dashoffset: 0; }
-}
-@keyframes archify-story-caption-in { 
-  0% { opacity: 0; transform: translateY(3px); }
-  100% { opacity: 1; transform: translateY(0px); }
-}
+[data-theme="dark"] .toolbar #btn-theme::before { background: rgba(148, 163, 184, 0.16); }
+[data-theme="dark"] .toolbar #btn-theme::after { left: calc(100% - 1.6875rem); background: rgb(59, 74, 99); box-shadow: rgba(0, 0, 0, 0.4) 0px 1px 3px; }
+[data-theme="dark"] .toolbar #theme-icon { left: calc(100% - 1.5rem); color: rgb(199, 210, 254); }
 [data-theme="light"] #theme-icon { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cg fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='10' cy='10' r='3.1'/%3E%3Cpath d='M10 2.2v1.4M10 16.4v1.4M2.2 10h1.4M16.4 10h1.4M4.5 4.5l1 1M14.5 14.5l1 1M15.5 4.5l-1 1M5.5 14.5l-1 1'/%3E%3C/g%3E%3C/svg%3E"); }
 [data-theme="dark"] #theme-icon { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M15.2 12.7A6.3 6.3 0 017.3 4.8a6.3 6.3 0 107.9 7.9Z' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+[data-theme="dark"] .toolbar .preset-menu, [data-theme="dark"] .toolbar .export-menu { border-color: rgba(148, 163, 184, 0.16); box-shadow: rgba(0, 0, 0, 0.3) 0px 1px 2px, rgba(0, 0, 0, 0.6) 0px 18px 44px -12px; }
+[data-theme="light"] .preset-option-swatch.classic { background: radial-gradient(circle at 1px 1px, rgb(217, 222, 229) 0.6px, transparent 0.9px) 0px 0px / 5px 5px, rgb(255, 255, 255); }
+[data-theme="light"] .preset-option-swatch.classic::before { border-color: rgb(27, 135, 163); background: rgba(14, 116, 144, 0.08); box-shadow: rgba(17, 24, 39, 0.12) 0px 2px 4px; }
 .c-grid { stroke: var(--grid); fill: none; }
 .c-mask { fill: var(--mask); stroke: none; }
+.c-lane-rule { stroke: var(--lane-stroke); fill: none; opacity: 0.7; }
+.c-lane-wash { fill: var(--lane-fill); stroke: none; }
 .c-frontend { fill: var(--frontend-fill); stroke: var(--frontend-stroke); }
 .c-backend { fill: var(--backend-fill); stroke: var(--backend-stroke); }
 .c-database { fill: var(--database-fill); stroke: var(--database-stroke); }
@@ -184,6 +180,10 @@ svg[data-chapter-handoff] [data-node-id][data-chapter-role="leave"] { opacity: 0
 .t-security { fill: var(--security-stroke); }
 .t-messagebus { fill: var(--messagebus-stroke); }
 .t-external { fill: var(--external-stroke); }
+.t-edge-default { fill: var(--arrow); }
+.t-edge-emphasis { fill: var(--arrow-emphasis); }
+.t-edge-security { fill: var(--security-stroke); }
+.t-edge-dashed { fill: var(--database-stroke); }
 svg .semantic-sigil { fill: none; stroke: currentcolor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0.76; pointer-events: none; }
 svg .semantic-sigil &gt; * { vector-effect: non-scaling-stroke; }
 svg .semantic-sigil .sigil-fill { fill: currentcolor; stroke: none; }
@@ -201,8 +201,8 @@ svg .brand-mark-fallback { fill: none; stroke: rgb(71, 85, 105); stroke-width: 1
 svg[data-preset="blueprint"] .brand-mark-badge, svg[data-preset="blueprint"] .brand-mark-frame { rx: 1px; }
 svg [data-detail] { transition: opacity 160ms; }
 svg [data-detail-anchor] { transform-box: fill-box; transform-origin: center center; transition: transform 160ms; }
-svg[data-focus-active] [data-focus-match][data-detail], svg[data-focus-active] [data-focus-match] [data-detail], svg[data-reach-active] [data-reach-match][data-detail], svg[data-reach-active] [data-reach-match] [data-detail], svg[data-lens-active] [data-lens-match][data-detail], svg[data-lens-active] [data-lens-match] [data-detail], svg[data-legend-preview-active] [data-legend-preview-match][data-detail], svg[data-legend-preview-active] [data-legend-preview-match] [data-detail], svg[data-intent-trace-active] [data-intent-trace-match][data-detail], svg[data-intent-trace-active] [data-intent-trace-match] [data-detail], svg[data-route-active] [data-route-match][data-detail], svg[data-route-active] [data-route-match] [data-detail], svg[data-story-active] [data-story-step][data-detail], svg[data-story-active] [data-story-step] [data-detail], svg[data-relationship-preview-active] [data-relationship-preview][data-detail], svg[data-relationship-preview-active] [data-relationship-preview] [data-detail], svg [data-node-id]:hover [data-detail], svg [data-node-id]:focus-visible [data-detail] { opacity: 1; pointer-events: auto; }
-svg[data-focus-active] [data-focus-match] [data-detail-anchor], svg[data-reach-active] [data-reach-match] [data-detail-anchor], svg[data-lens-active] [data-lens-match] [data-detail-anchor], svg[data-legend-preview-active] [data-legend-preview-match] [data-detail-anchor], svg[data-intent-trace-active] [data-intent-trace-match] [data-detail-anchor], svg[data-route-active] [data-route-match] [data-detail-anchor], svg[data-story-active] [data-story-step] [data-detail-anchor], svg [data-node-id]:hover [data-detail-anchor], svg [data-node-id]:focus-visible [data-detail-anchor] { transform: none; }
+svg[data-focus-active] [data-focus-match][data-detail], svg[data-focus-active] [data-focus-match] [data-detail], svg[data-reach-active] [data-reach-match][data-detail], svg[data-reach-active] [data-reach-match] [data-detail], svg[data-lens-active] [data-lens-match][data-detail], svg[data-lens-active] [data-lens-match] [data-detail], svg[data-legend-preview-active] [data-legend-preview-match][data-detail], svg[data-legend-preview-active] [data-legend-preview-match] [data-detail], svg[data-intent-trace-active] [data-intent-trace-match][data-detail], svg[data-intent-trace-active] [data-intent-trace-match] [data-detail], svg[data-route-active] [data-route-match][data-detail], svg[data-route-active] [data-route-match] [data-detail], svg[data-relationship-preview-active] [data-relationship-preview][data-detail], svg[data-relationship-preview-active] [data-relationship-preview] [data-detail], svg [data-node-id]:hover [data-detail], svg [data-node-id]:focus-visible [data-detail] { opacity: 1; pointer-events: auto; }
+svg[data-focus-active] [data-focus-match] [data-detail-anchor], svg[data-reach-active] [data-reach-match] [data-detail-anchor], svg[data-lens-active] [data-lens-match] [data-detail-anchor], svg[data-legend-preview-active] [data-legend-preview-match] [data-detail-anchor], svg[data-intent-trace-active] [data-intent-trace-match] [data-detail-anchor], svg[data-route-active] [data-route-match] [data-detail-anchor], svg [data-node-id]:hover [data-detail-anchor], svg [data-node-id]:focus-visible [data-detail-anchor] { transform: none; }
 .a-default { stroke: var(--arrow); fill: none; }
 .a-emphasis { stroke: var(--arrow-emphasis); fill: none; }
 .a-security { stroke: var(--security-stroke); fill: none; stroke-dasharray: 5, 5; }
@@ -211,8 +211,8 @@ svg[data-focus-active] [data-focus-match] [data-detail-anchor], svg[data-reach-a
 .m-emphasis { fill: var(--arrow-emphasis); }
 .m-security { fill: var(--security-stroke); }
 .m-dashed { fill: var(--database-stroke); }
-svg [data-node-id] { cursor: pointer; transition: opacity 0.18s, filter 0.18s; }
-svg [data-edge-from] { transition: opacity 0.18s, filter 0.18s; }
+svg [data-node-id] { cursor: pointer; transition: opacity 0.18s, fill-opacity 0.18s, stroke-opacity 0.18s, filter 0.18s; }
+svg [data-edge-from], svg [data-graph-role="automatic-crossover-underlay"] { transition: opacity 0.18s, filter 0.18s; }
 svg [data-node-id]:hover, svg [data-node-id]:focus-visible { filter: drop-shadow(0 0 7px var(--frontend-stroke)); outline: none; }
 svg [data-node-id]:hover .source-evidence-beacon, svg [data-node-id]:focus-visible .source-evidence-beacon, svg [data-node-id][data-focus-selected] .source-evidence-beacon { opacity: 1; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--backend-stroke) 72%, transparent)); }
 svg[data-preset="signal-flow"] .source-evidence-beacon { opacity: 0.9; }
@@ -243,11 +243,19 @@ svg[data-preset="signal-flow"] .semantic-lens-flow[data-direction="out"], svg[da
 svg[data-preset="signal-flow"] .semantic-lens-flow[data-direction="in"], svg[data-preset="signal-flow"] .semantic-lens-flow[data-direction="reverse"] { filter: drop-shadow(0 0 6px var(--database-stroke)); }
 svg[data-preset="signal-flow"] .semantic-lens-flow[data-direction="within"] { filter: drop-shadow(0 0 6px var(--messagebus-stroke)); }
 svg[data-preset="blueprint"] .semantic-lens-flow { stroke-width: 2.45; stroke-linecap: square; filter: none; opacity: 0.78; }
+svg[data-legend-preview-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"], svg[data-lens-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.11; }
+svg[data-legend-preview-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-legend-preview-match]) &gt; [data-graph-role="automatic-crossover-underlay"], svg[data-lens-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-lens-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
+svg[data-legend-preview-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-legend-preview-peer]) &gt; [data-graph-role="automatic-crossover-underlay"], svg[data-lens-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-lens-peer]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.62; }
 svg[data-focus-active] [data-node-id], svg[data-focus-active] [data-edge-from] { opacity: 0.13; }
+svg[data-focus-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.13; }
+svg[data-focus-active] [data-lifecycle-rail] { opacity: 0; }
 svg[data-focus-active] [data-focus-match] { opacity: 1; }
+svg[data-focus-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-focus-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-focus-active] [data-focus-selected] { filter: drop-shadow(0 0 10px var(--frontend-stroke)); }
 svg[data-reach-active] [data-node-id], svg[data-reach-active] [data-edge-from] { opacity: 0.09; }
+svg[data-reach-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.09; }
 svg[data-reach-active] [data-reach-match] { opacity: 1; }
+svg[data-reach-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-reach-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-reach-active="upstream"] [data-reach-origin] { filter: drop-shadow(0 0 11px var(--database-stroke)); }
 svg[data-reach-active="downstream"] [data-reach-origin] { filter: drop-shadow(0 0 11px var(--backend-stroke)); }
 svg[data-reach-active="upstream"] [data-edge-from][data-reach-match] { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--database-stroke) 72%, transparent)); }
@@ -255,10 +263,15 @@ svg[data-reach-active="downstream"] [data-edge-from][data-reach-match] { filter:
 svg[data-preset="blueprint"][data-reach-active] [data-reach-origin], svg[data-preset="blueprint"][data-reach-active] [data-edge-from][data-reach-match] { filter: none; }
 svg[data-preset="blueprint"] .relationship-hit-target:focus-visible .relationship-focus-rail { stroke-linecap: square; filter: none; }
 svg[data-relationship-direct-active] [data-node-id], svg[data-relationship-direct-active] [data-edge-from] { opacity: 0.16; }
+svg[data-relationship-direct-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.16; }
 svg[data-relationship-direct-active] [data-relationship-preview], svg[data-relationship-direct-active] [data-relationship-preview-node] { opacity: 1; }
-svg[data-focus-active]:not([data-relationship-pin-active]) .relationship-hit-rail, svg[data-story-active] .relationship-hit-rail, svg[data-route-picking] .relationship-hit-rail, svg[data-route-active] .relationship-hit-rail, svg[data-lens-active] .relationship-hit-rail, svg[data-chapter-preview] .relationship-hit-rail { pointer-events: none; }
+svg[data-relationship-direct-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-relationship-preview]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
+svg[data-focus-active]:not([data-relationship-pin-active]) .relationship-hit-rail, svg[data-route-picking] .relationship-hit-rail, svg[data-route-active] .relationship-hit-rail, svg[data-lens-active] .relationship-hit-rail { pointer-events: none; }
 svg[data-relationship-preview-active] [data-focus-match] { opacity: 0.18; }
+svg[data-relationship-preview-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-focus-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.18; }
+svg[data-relationship-preview-active] [data-lifecycle-rail] { opacity: 0; }
 svg[data-relationship-preview-active] [data-relationship-preview], svg[data-relationship-preview-active] [data-relationship-preview-node] { opacity: 1; }
+svg[data-relationship-preview-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-relationship-preview]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-relationship-preview-active] [data-relationship-preview] { filter: drop-shadow(0 0 5px var(--arrow-emphasis)); }
 svg[data-relationship-preview-active] [data-relationship-preview] path, svg[data-relationship-preview-active] path[data-relationship-preview], svg[data-relationship-preview-active] [data-relationship-preview] line, svg[data-relationship-preview-active] line[data-relationship-preview], svg[data-relationship-preview-active] [data-relationship-preview] polyline, svg[data-relationship-preview-active] polyline[data-relationship-preview] { stroke-width: 2.75; }
 svg[data-relationship-preview-active] [data-relationship-preview-source] { filter: drop-shadow(0 0 7px var(--frontend-stroke)); }
@@ -269,8 +282,14 @@ svg[data-preset="editorial"] .relationship-flow-pulse { stroke: var(--arrow-emph
 svg[data-preset="signal-flow"] .semantic-flow-token { filter: drop-shadow(currentcolor 0px 0px 5px); }
 svg[data-preset="blueprint"] .semantic-flow-token { filter: none; }
 svg[data-preset="editorial"] .semantic-flow-token { filter: none; }
-svg[data-intent-trace-active] [data-node-id], svg[data-intent-trace-active] [data-edge-from] { opacity: 0.2; }
+svg[data-intent-trace-active] [data-node-id] { fill-opacity: 0.2; stroke-opacity: 0.2; }
+svg [data-node-id] &gt; .c-mask { fill-opacity: 1; }
+svg[data-intent-trace-active] [data-node-id][data-intent-trace-match] { fill-opacity: 1; stroke-opacity: 1; }
+svg[data-intent-trace-active] [data-edge-from] { opacity: 0.2; }
+svg[data-intent-trace-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.2; }
+svg[data-intent-trace-active] [data-lifecycle-rail] { opacity: 0; }
 svg[data-intent-trace-active] [data-intent-trace-match] { opacity: 1; }
+svg[data-intent-trace-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-intent-trace-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-intent-trace-active] [data-intent-trace-selected] { filter: drop-shadow(0 0 10px var(--frontend-stroke)); }
 svg[data-preset="blueprint"] [data-intent-trace-selected], svg[data-preset="blueprint"] .intent-trace-flow { filter: none; stroke-linecap: square; }
 svg[data-preset="editorial"] [data-intent-trace-selected], svg[data-preset="editorial"] .intent-trace-flow { filter: none; }
@@ -279,13 +298,18 @@ svg[data-route-picking="target"] [data-route-candidate], svg[data-route-picking=
 svg[data-route-picking] [data-node-id] { cursor: crosshair; }
 svg[data-route-picking] [data-route-start] { filter: drop-shadow(0 0 10px var(--frontend-stroke)); }
 svg[data-route-active] [data-node-id], svg[data-route-active] [data-edge-from] { opacity: 0.11; }
+svg[data-route-active] [data-graph-role="automatic-crossover"] &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.11; }
 svg[data-route-active] [data-route-match] { opacity: 1; }
+svg[data-route-active] [data-graph-role="automatic-crossover"]:has(&gt; [data-route-match]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-route-active] [data-route-start] { filter: drop-shadow(0 0 11px var(--frontend-stroke)); }
 svg[data-route-active] [data-route-end] { filter: drop-shadow(0 0 11px var(--security-stroke)); }
 svg[data-route-active] [data-route-step]:not([data-route-start]):not([data-route-end]) { filter: drop-shadow(0 0 7px var(--backend-stroke)); }
 svg[data-route-journey] [data-route-match][data-route-journey-state="past"] { opacity: 0.62; }
 svg[data-route-journey] [data-route-match][data-route-journey-state="future"] { opacity: 0.34; }
 svg[data-route-journey] [data-route-match][data-route-journey-state="current"] { opacity: 1; }
+svg[data-route-journey] [data-graph-role="automatic-crossover"]:has(&gt; [data-route-match][data-route-journey-state="past"]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.62; }
+svg[data-route-journey] [data-graph-role="automatic-crossover"]:has(&gt; [data-route-match][data-route-journey-state="future"]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 0.34; }
+svg[data-route-journey] [data-graph-role="automatic-crossover"]:has(&gt; [data-route-match][data-route-journey-state="current"]) &gt; [data-graph-role="automatic-crossover-underlay"] { opacity: 1; }
 svg[data-route-journey] [data-node-id][data-route-journey-current] { filter: drop-shadow(0 0 10px var(--backend-stroke)); }
 svg[data-route-journey] [data-edge-from][data-route-journey-current] { opacity: 1; filter: drop-shadow(0 0 6px var(--backend-stroke)); }
 svg[data-preset="blueprint"] [data-route-start], svg[data-preset="blueprint"] [data-route-end], svg[data-preset="blueprint"] [data-route-step], svg[data-preset="blueprint"] .route-probe-flow { filter: none; stroke-linecap: square; }
@@ -301,37 +325,17 @@ svg[data-preset="blueprint"] [data-node-id]:hover, svg[data-preset="blueprint"] 
 svg[data-preset="blueprint"][data-focus-active] [data-focus-selected] { filter: drop-shadow(0 0 3px var(--frontend-stroke)); }
 svg[data-preset="blueprint"][data-focus-active][data-reach-active] [data-focus-selected][data-reach-origin] { filter: none; }
 svg[data-preset="blueprint"][data-relationship-preview-active] [data-relationship-preview], svg[data-preset="blueprint"][data-relationship-preview-active] [data-relationship-preview-source], svg[data-preset="blueprint"][data-relationship-preview-active] [data-relationship-preview-target] { filter: drop-shadow(0 0 3px var(--frontend-stroke)); }
-svg[data-story-beat] [data-story-step] { opacity: 0.22; filter: saturate(0.42); transition: opacity 180ms, filter 180ms; }
-svg[data-story-beat] [data-story-step][data-story-beat-state="past"] { opacity: 0.72; filter: saturate(0.82); }
-svg[data-story-beat] [data-story-step][data-story-beat-state="next"] { opacity: 0.5; filter: saturate(0.66); }
-svg[data-story-beat] [data-story-step][data-story-beat-state="active"] { opacity: 1; filter: drop-shadow(0 0 7px var(--frontend-stroke)); animation: 360ms cubic-bezier(0.22, 1, 0.36, 1) 0s 1 normal both running archify-story-beat-node; }
-svg[data-story-beat] [data-edge-from][data-story-beat-step] { opacity: 0.16; transition: opacity 160ms; }
-svg[data-story-beat] [data-edge-from][data-story-beat-step][data-story-beat-state="past"] { opacity: 0.58; }
-svg[data-story-beat] [data-edge-from][data-story-beat-step][data-story-beat-state="next"] { opacity: 0.34; }
-svg[data-story-beat] [data-edge-from][data-story-beat-step][data-story-beat-state="active"] { opacity: 1; }
-svg[data-story-beat] .story-trail-flow { opacity: 0; transition: opacity 160ms; }
-svg[data-story-beat] .story-trail-flow[data-story-beat-state="past"] { opacity: 0.34; }
-svg[data-story-beat] .story-trail-flow[data-story-beat-state="next"] { opacity: 0.2; }
-svg[data-story-beat] .story-trail-flow[data-story-beat-state="active"] { opacity: 0.92; }
-svg[data-story-beat] .story-trail-flow[data-story-pulse="true"] { stroke-dasharray: 2, 13; stroke-dashoffset: 30; opacity: 0.92; animation: 0.78s linear 0s 1 normal both running archify-story-flow; }
-svg[data-preset="blueprint"] .story-trail-flow { stroke-linecap: square; filter: none; opacity: 0.5; }
-svg[data-preset="blueprint"][data-story-beat] [data-story-step][data-story-beat-state="active"] { filter: none; animation: auto ease 0s 1 normal none running none; }
-svg[data-preset="editorial"] .story-trail-flow { filter: none; }
-svg[data-preset="editorial"][data-story-beat] [data-story-step][data-story-beat-state="active"] { filter: drop-shadow(0 2px 2px color-mix(in srgb, var(--text) 16%, transparent)); }
-svg[data-chapter-preview] [data-node-id], svg[data-chapter-preview] [data-edge-from] { opacity: 0.1 !important; filter: none !important; transition: none !important; }
-svg[data-chapter-preview] .story-trail-overlay { opacity: 0.08 !important; }
-svg[data-chapter-preview] [data-node-id][data-chapter-preview-role="stay"] { opacity: 0.76 !important; filter: saturate(0.7) !important; }
-svg[data-chapter-preview] [data-node-id][data-chapter-preview-role="enter"] { opacity: 1 !important; filter: saturate(1.2) !important; }
-svg[data-chapter-preview] [data-node-id][data-chapter-preview-role="leave"] { opacity: 0.28 !important; filter: grayscale(0.72) !important; }
-svg[data-preset="blueprint"][data-chapter-preview] [data-node-id] { filter: none !important; }
 .c-security-group { fill: transparent; stroke: var(--security-stroke); stroke-dasharray: 4, 4; }
 .c-region { fill: rgba(251, 191, 36, 0.05); stroke: var(--cloud-stroke); stroke-dasharray: 8, 4; }
 .c-lane { fill: var(--lane-fill); stroke: var(--lane-stroke); stroke-dasharray: 6, 6; }
 svg[data-preset="signal-flow"][data-animation="trace"] [data-animate="edge"] { stroke-linecap: round; filter: drop-shadow(0 0 3px var(--arrow-emphasis)); animation-duration: 1.75s; }
+svg[data-preset="signal-flow"][data-animation="trace"] [data-graph-role="automatic-crossover"]:has(&gt; [data-animate="edge"]) &gt; [data-graph-role="automatic-crossover-underlay"] { animation-duration: 1.75s; }
 svg[data-preset="signal-flow"][data-animation="trace"] [data-animate="node"] { animation-duration: 3.1s; }
 svg[data-preset="blueprint"][data-animation="trace"] [data-animate="edge"] { stroke-linecap: square; filter: none; animation-duration: 2.15s; }
+svg[data-preset="blueprint"][data-animation="trace"] [data-graph-role="automatic-crossover"]:has(&gt; [data-animate="edge"]) &gt; [data-graph-role="automatic-crossover-underlay"] { animation-duration: 2.15s; }
 svg[data-preset="blueprint"][data-animation="trace"] [data-animate="node"] { animation-name: archify-blueprint-node-pulse; animation-duration: 3.8s; }
 svg[data-preset="editorial"][data-animation="trace"] [data-animate="edge"] { filter: none; animation-duration: 2.2s; }
+svg[data-preset="editorial"][data-animation="trace"] [data-graph-role="automatic-crossover"]:has(&gt; [data-animate="edge"]) &gt; [data-graph-role="automatic-crossover-underlay"] { animation-duration: 2.2s; }
 svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { animation-name: archify-editorial-node-pulse; animation-duration: 3.5s; }
 @keyframes archify-edge-flow { 
   0% { stroke-dasharray: 10, 8; stroke-dashoffset: 54; opacity: 0.42; }
@@ -359,13 +363,6 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
 @keyframes archify-radar-live { 
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--backend-stroke) 52%, transparent); }
   55%, 100% { box-shadow: transparent 0px 0px 0px 0.32rem; }
-}
-@keyframes archify-guided-progress { 
-  0% { transform: scaleX(var(--guided-progress-start, 0)); }
-  100% { transform: scaleX(1); }
-}
-@keyframes archify-story-flow { 
-  100% { stroke-dashoffset: 0; }
 }
 @keyframes archify-intent-trace-flow { 
   0% { opacity: 0.28; stroke-dashoffset: 0; }
@@ -397,11 +394,6 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
   13%, 82% { opacity: 1; }
   100% { opacity: 0; }
 }
-@keyframes archify-story-beat-node { 
-  0% { opacity: 0.48; filter: saturate(0.6); }
-  58% { opacity: 1; filter: drop-shadow(0 0 10px var(--frontend-stroke)); }
-  100% { opacity: 1; filter: drop-shadow(0 0 7px var(--frontend-stroke)); }
-}
 @keyframes archify-share-cue-enter { 
   0% { opacity: 0; transform: translate(-50%, -0.45rem); }
   100% { opacity: 1; transform: translate(-50%, 0px); }
@@ -410,12 +402,12 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.48; transform: scale(0.78); }
 }
-:root, svg { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
-@media (prefers-color-scheme: light) { :root, svg { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; } }
-svg[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
-svg[data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+:root, svg { --bg: #020617; --grid: #1e293b; --canvas-dot: rgba(148, 163, 184, 0.16); --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+@media (prefers-color-scheme: light) { :root, svg { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #d9dee5; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; } }
+svg[data-theme="light"] { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #d9dee5; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+svg[data-theme="dark"] { --bg: #020617; --grid: #1e293b; --canvas-dot: rgba(148, 163, 184, 0.16); --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
 rect.c-bg-rect { fill: var(--bg); }
-</style><rect width="100%" height="100%" class="c-bg-rect"/>
+</style><rect x="0" y="0" width="1313" height="682" class="c-bg-rect"/>
         <title id="archify-diagram-title">pi-verdict 安全门禁:工具调用判定管线</title>
         <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
@@ -470,22 +462,22 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="776.8" y="480" class="t-backend" font-size="7" font-weight="600">语义裁决</text>
 
         <!-- Edge paths -->
-        <path data-edge-from="call" data-edge-to="master" data-edge-key="0" data-edge-id="call-master" data-composition-points="208,120;248,120;248,225" d="M 208 120 L 248 120 L 248 225" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classifier" data-edge-to="verdict" data-edge-key="1" data-edge-id="classifier-verdict" data-composition-points="850.8,553;850.8,574;1043.8,574;1043.8,545" d="M 850.8 553 L 850.8 574 L 1043.8 574 L 1043.8 545" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="floor" data-edge-to="block" data-edge-label="deny" data-edge-key="2" data-edge-id="floor-block" data-composition-points="732.8,385;748.8,385;748.8,238;652.8,238;652.8,146" d="M 732.8 385 L 748.8 385 L 748.8 238 L 652.8 238 L 652.8 146" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="floor" data-edge-to="userrules" data-edge-label="通过" data-edge-key="3" data-edge-id="floor-userrules" data-composition-points="652.8,411;652.8,440;850.8,440;850.8,419" d="M 652.8 411 L 652.8 440 L 850.8 440 L 850.8 419" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="master" data-edge-to="call" data-edge-label="关闭 = 直接放行 · 不经门禁" data-edge-key="4" data-edge-id="master-bypass" data-composition-points="168,251;20,251;20,120;48,120" d="M 168 251 L 20 251 L 20 120 L 48 120" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="master" data-edge-to="tamper" data-edge-label="开启" data-edge-key="5" data-edge-id="master-tamper" data-composition-points="328,251;366,251" d="M 328 251 L 366 251" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="selfprot" data-edge-to="block" data-edge-label="命中 · 恒 deny" data-edge-key="6" data-edge-id="selfprot-block" data-composition-points="526,378;542,378;542,238;645.8,238;645.8,146" d="M 526 378 L 542 378 L 542 238 L 645.8 238 L 645.8 146" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="selfprot" data-edge-to="floor" data-edge-label="未命中" data-edge-key="7" data-edge-id="selfprot-floor" data-composition-points="446,419;446,440;652.8,440;652.8,411" d="M 446 419 L 446 440 L 652.8 440 L 652.8 411" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="tamper" data-edge-to="call" data-edge-label="篡改 · fail-closed" data-edge-key="8" data-edge-id="tamper-call" data-composition-points="446,217;446,127;208,127" d="M 446 217 L 446 127 L 208 127" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="tamper" data-edge-to="selfprot" data-edge-label="基线一致" data-edge-key="9" data-edge-id="tamper-selfprot" data-composition-points="446,217;446,162;542,162;542,385;526,385" d="M 446 217 L 446 162 L 542 162 L 542 385 L 526 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="userrules" data-edge-to="block" data-edge-label="deny" data-edge-key="10" data-edge-id="userrules-block" data-composition-points="843.8,351;843.8,113;732.8,113" d="M 843.8 351 L 843.8 113 L 732.8 113" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="userrules" data-edge-to="classifier" data-edge-label="灰区" data-edge-key="11" data-edge-id="userrules-classifier" data-composition-points="850.8,351;850.8,294;946.8,294;946.8,519;930.8,519" d="M 850.8 351 L 850.8 294 L 946.8 294 L 946.8 519 L 930.8 519" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / 嵌套·rules-only" data-edge-key="12" data-edge-id="userrules-run" data-composition-points="850.8,351;850.8,238;1043.8,238;1043.8,146" d="M 850.8 351 L 850.8 238 L 1043.8 238 L 1043.8 146" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths 命中 → ask 终局" data-edge-key="13" data-edge-id="userrules-verdict" data-composition-points="930.8,385;946.8,385;946.8,294;1036.8,294;1036.8,493" d="M 930.8 385 L 946.8 385 L 946.8 294 L 1036.8 294 L 1036.8 493" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="verdict" data-edge-to="block" data-edge-label="deny · 拒绝 / 无 UI 降级" data-edge-key="14" data-edge-id="verdict-block" data-composition-points="1128.8,519;1153,519;1153,78;652.8,78;652.8,94" d="M 1128.8 519 L 1153 519 L 1153 78 L 652.8 78 L 652.8 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="verdict" data-edge-to="run" data-edge-label="allow · 确认通过" data-edge-key="15" data-edge-id="verdict-run" data-composition-points="1043.8,493;1043.8,477;1153,477;1153,120;1123.8,120" d="M 1043.8 493 L 1043.8 477 L 1153 477 L 1153 120 L 1123.8 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="call" data-edge-to="master" data-edge-key="0" data-edge-id="call-master" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="208,120;248,120;248,225" d="M 208 120 L 248 120 L 248 225" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="verdict" data-edge-key="1" data-edge-id="classifier-verdict" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="930.8,519;958.8,519" d="M 930.8 519 L 958.8 519" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="floor" data-edge-to="block" data-edge-label="deny" data-edge-key="2" data-edge-id="floor-block" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="732.8,385;748.8,385;748.8,238;652.8,238;652.8,146" d="M 732.8 385 L 748.8 385 L 748.8 238 L 652.8 238 L 652.8 146" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="floor" data-edge-to="userrules" data-edge-label="通过" data-edge-key="3" data-edge-id="floor-userrules" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="652.8,411;652.8,440;850.8,440;850.8,419" d="M 652.8 411 L 652.8 440 L 850.8 440 L 850.8 419" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="master" data-edge-to="call" data-edge-label="关闭 = 直接放行 · 不经门禁" data-edge-key="4" data-edge-id="master-bypass" data-composition-routing="workflow-v2-auto" data-edge-role="branch" data-composition-points="168,251;20,251;20,120;48,120" d="M 168 251 L 20 251 L 20 120 L 48 120" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="master" data-edge-to="tamper" data-edge-label="开启" data-edge-key="5" data-edge-id="master-tamper" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="328,251;366,251" d="M 328 251 L 366 251" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="selfprot" data-edge-to="block" data-edge-label="命中 · 恒 deny" data-edge-key="6" data-edge-id="selfprot-block" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="526,378;542,378;542,238;640.8,238;640.8,146" d="M 526 378 L 542 378 L 542 238 L 640.8 238 L 640.8 146" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="selfprot" data-edge-to="floor" data-edge-label="未命中" data-edge-key="7" data-edge-id="selfprot-floor" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="446,419;446,440;640.8,440;640.8,411" d="M 446 419 L 446 440 L 640.8 440 L 640.8 411" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="tamper" data-edge-to="block" data-edge-label="tamper · fail-closed" data-edge-key="8" data-edge-id="tamper-call" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="446,217;446,120;572.8,120" d="M 446 217 L 446 120 L 572.8 120" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="tamper" data-edge-to="selfprot" data-edge-label="基线一致" data-edge-key="9" data-edge-id="tamper-selfprot" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="366,263;350,263;350,440;434,440;434,419" d="M 366 263 L 350 263 L 350 440 L 434 440 L 434 419" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="userrules" data-edge-to="block" data-edge-label="deny" data-edge-key="10" data-edge-id="userrules-block" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="843.8,351;843.8,113;732.8,113" d="M 843.8 351 L 843.8 113 L 732.8 113" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="userrules" data-edge-to="classifier" data-edge-label="灰区" data-edge-key="11" data-edge-id="userrules-classifier" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="862.8,351;862.8,294;946.8,294;946.8,507;930.8,507" d="M 862.8 351 L 862.8 294 L 946.8 294 L 946.8 507 L 930.8 507" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / subagent-artifacts·headless / nested·rules-only" data-edge-key="12" data-edge-id="userrules-run" data-composition-routing="workflow-v2-auto" data-edge-role="branch" data-composition-points="930.8,385;946.8,385;946.8,238;1139.8,238;1139.8,120;1123.8,120" d="M 930.8 385 L 946.8 385 L 946.8 238 L 1139.8 238 L 1139.8 120 L 1123.8 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths ask" data-edge-key="13" data-edge-id="userrules-verdict" data-composition-routing="workflow-v2-auto" data-edge-role="branch" data-composition-points="930.8,397;946.8,397;946.8,418;1036.8,418;1036.8,493" d="M 930.8 397 L 946.8 397 L 946.8 418 L 1036.8 418 L 1036.8 493" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="verdict" data-edge-to="block" data-edge-label="deny · 拒绝 / 无 UI 降级" data-edge-key="14" data-edge-id="verdict-block" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="1128.8,519;1217.9,519;1217.9,78;652.8,78;652.8,94" d="M 1128.8 519 L 1217.9 519 L 1217.9 78 L 652.8 78 L 652.8 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="verdict" data-edge-to="run" data-edge-label="allow · 确认通过" data-edge-key="15" data-edge-id="verdict-run" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="1043.8,545;1043.8,561;1296.6,561;1296.6,78;1043.8,78;1043.8,94" d="M 1043.8 545 L 1043.8 561 L 1296.6 561 L 1296.6 78 L 1043.8 78 L 1043.8 94" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
         <g id="node-call" data-node-id="call" data-node-label="工具调用" tabindex="0" role="button" aria-label="聚焦工具调用，tool_call 钩子 · 直发与嵌套调用, Agent 运行时(pi) › 拦截 · 完整性" aria-pressed="false" data-node-kind="external" data-node-sublabel="tool_call 钩子 · 直发与嵌套调用" data-node-context="Agent 运行时(pi) › 拦截 · 完整性">
@@ -616,59 +608,59 @@ rect.c-bg-rect { fill: var(--bg); }
 
         <g data-edge-from="floor" data-edge-to="block" data-edge-label="deny" data-edge-key="2" data-edge-id="floor-block">
           <rect x="685.8" y="218" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="700.8" y="228" class="t-security" font-size="8" text-anchor="middle">deny</text>
+          <text x="700.8" y="228" class="t-edge-security" font-size="8" text-anchor="middle">deny</text>
         </g>
         <g data-edge-from="floor" data-edge-to="userrules" data-edge-label="通过" data-edge-key="3" data-edge-id="floor-userrules">
           <rect x="736.8" y="420" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="751.8" y="430" class="t-muted" font-size="8" text-anchor="middle">通过</text>
+          <text x="751.8" y="430" class="t-edge-default" font-size="8" text-anchor="middle">通过</text>
         </g>
         <g data-edge-from="master" data-edge-to="call" data-edge-label="关闭 = 直接放行 · 不经门禁" data-edge-key="4" data-edge-id="master-bypass">
           <rect x="26.599999999999994" y="231" width="134.8" height="14" rx="3" class="c-mask"/>
-          <text x="94" y="241" class="t-database" font-size="8" text-anchor="middle">关闭 = 直接放行 · 不经门禁</text>
+          <text x="94" y="241" class="t-edge-dashed" font-size="8" text-anchor="middle">关闭 = 直接放行 · 不经门禁</text>
         </g>
         <g data-edge-from="master" data-edge-to="tamper" data-edge-label="开启" data-edge-key="5" data-edge-id="master-tamper">
           <rect x="332" y="231" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="347" y="241" class="t-muted" font-size="8" text-anchor="middle">开启</text>
+          <text x="347" y="241" class="t-edge-default" font-size="8" text-anchor="middle">开启</text>
         </g>
         <g data-edge-from="selfprot" data-edge-to="block" data-edge-label="命中 · 恒 deny" data-edge-key="6" data-edge-id="selfprot-block">
-          <rect x="555.3" y="218" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="593.9" y="228" class="t-security" font-size="8" text-anchor="middle">命中 · 恒 deny</text>
+          <rect x="552.8" y="218" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="591.4" y="228" class="t-edge-security" font-size="8" text-anchor="middle">命中 · 恒 deny</text>
         </g>
         <g data-edge-from="selfprot" data-edge-to="floor" data-edge-label="未命中" data-edge-key="7" data-edge-id="selfprot-floor">
-          <rect x="530" y="420" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="549.4" y="430" class="t-muted" font-size="8" text-anchor="middle">未命中</text>
+          <rect x="524" y="420" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="543.4" y="430" class="t-edge-default" font-size="8" text-anchor="middle">未命中</text>
         </g>
-        <g data-edge-from="tamper" data-edge-to="call" data-edge-label="篡改 · fail-closed" data-edge-key="8" data-edge-id="tamper-call">
-          <rect x="278.8" y="107" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="327" y="117" class="t-security" font-size="8" text-anchor="middle">篡改 · fail-closed</text>
+        <g data-edge-from="tamper" data-edge-to="block" data-edge-label="tamper · fail-closed" data-edge-key="8" data-edge-id="tamper-call">
+          <rect x="456.4" y="100" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="509.4" y="110" class="t-edge-security" font-size="8" text-anchor="middle">tamper · fail-closed</text>
         </g>
         <g data-edge-from="tamper" data-edge-to="selfprot" data-edge-label="基线一致" data-edge-key="9" data-edge-id="tamper-selfprot">
-          <rect x="469.8" y="142" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="494" y="152" class="t-muted" font-size="8" text-anchor="middle">基线一致</text>
+          <rect x="367.8" y="420" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="392" y="430" class="t-edge-default" font-size="8" text-anchor="middle">基线一致</text>
         </g>
         <g data-edge-from="userrules" data-edge-to="block" data-edge-label="deny" data-edge-key="10" data-edge-id="userrules-block">
           <rect x="773.3" y="93" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="788.3" y="103" class="t-security" font-size="8" text-anchor="middle">deny</text>
+          <text x="788.3" y="103" class="t-edge-security" font-size="8" text-anchor="middle">deny</text>
         </g>
         <g data-edge-from="userrules" data-edge-to="classifier" data-edge-label="灰区" data-edge-key="11" data-edge-id="userrules-classifier">
-          <rect x="883.8" y="274" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="898.8" y="284" class="t-backend" font-size="8" text-anchor="middle">灰区</text>
+          <rect x="889.8" y="274" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="904.8" y="284" class="t-edge-emphasis" font-size="8" text-anchor="middle">灰区</text>
         </g>
-        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / 嵌套·rules-only" data-edge-key="12" data-edge-id="userrules-run">
-          <rect x="853.5" y="218" width="187.6" height="14" rx="3" class="c-mask"/>
-          <text x="947.3" y="228" class="t-muted" font-size="8" text-anchor="middle">allow / ignoreTools / 嵌套·rules-only</text>
+        <g data-edge-from="userrules" data-edge-to="run" data-edge-label="allow / ignoreTools / subagent-artifacts·headless / nested·rules-only" data-edge-key="12" data-edge-id="userrules-run">
+          <rect x="872.6999999999999" y="218" width="341.2" height="14" rx="3" class="c-mask"/>
+          <text x="1043.3" y="228" class="t-edge-default" font-size="8" text-anchor="middle">allow / ignoreTools / subagent-artifacts·headless / nested·rules-only</text>
         </g>
-        <g data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths 命中 → ask 终局" data-edge-key="13" data-edge-id="userrules-verdict">
-          <rect x="926.8" y="274" width="130" height="14" rx="3" class="c-mask"/>
-          <text x="991.8" y="284" class="t-security" font-size="8" text-anchor="middle">denyPaths 命中 → ask 终局</text>
+        <g data-edge-from="userrules" data-edge-to="verdict" data-edge-label="denyPaths ask" data-edge-key="13" data-edge-id="userrules-verdict">
+          <rect x="955.5999999999999" y="398" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="991.8" y="408" class="t-edge-security" font-size="8" text-anchor="middle">denyPaths ask</text>
         </g>
         <g data-edge-from="verdict" data-edge-to="block" data-edge-label="deny · 拒绝 / 无 UI 降级" data-edge-key="14" data-edge-id="verdict-block">
-          <rect x="840.3" y="58" width="125.19999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="902.9" y="68" class="t-muted" font-size="8" text-anchor="middle">deny · 拒绝 / 无 UI 降级</text>
+          <rect x="872.75" y="58" width="125.19999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="935.35" y="68" class="t-edge-default" font-size="8" text-anchor="middle">deny · 拒绝 / 无 UI 降级</text>
         </g>
         <g data-edge-from="verdict" data-edge-to="run" data-edge-label="allow · 确认通过" data-edge-key="15" data-edge-id="verdict-run">
-          <rect x="1055" y="457" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="1098.4" y="467" class="t-backend" font-size="8" text-anchor="middle">allow · 确认通过</text>
+          <rect x="1126.7999999999997" y="541" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="1170.1999999999998" y="551" class="t-edge-emphasis" font-size="8" text-anchor="middle">allow · 确认通过</text>
         </g>
 
         <!-- Legend -->

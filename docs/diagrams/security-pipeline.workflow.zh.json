@@ -255,8 +255,8 @@
     {
       "id": "tamper-call",
       "from": "tamper",
-      "to": "call",
-      "label": "篡改 · fail-closed",
+      "to": "block",
+      "label": "tamper · fail-closed",
       "variant": "security",
       "role": "error"
     },
@@ -299,21 +299,6 @@
       "role": "error"
     },
     {
-      "id": "userrules-verdict",
-      "from": "userrules",
-      "to": "verdict",
-      "label": "denyPaths 命中 → ask 终局",
-      "variant": "security",
-      "role": "branch"
-    },
-    {
-      "id": "userrules-run",
-      "from": "userrules",
-      "to": "run",
-      "label": "allow / ignoreTools / subagent-artifacts·headless 豁免 / 嵌套·rules-only",
-      "role": "branch"
-    },
-    {
       "id": "userrules-classifier",
       "from": "userrules",
       "to": "classifier",
@@ -340,6 +325,21 @@
       "to": "block",
       "label": "deny · 拒绝 / 无 UI 降级",
       "role": "error"
+    },
+    {
+      "id": "userrules-run",
+      "from": "userrules",
+      "to": "run",
+      "label": "allow / ignoreTools / subagent-artifacts·headless / nested·rules-only",
+      "role": "branch"
+    },
+    {
+      "id": "userrules-verdict",
+      "from": "userrules",
+      "to": "verdict",
+      "label": "denyPaths ask",
+      "variant": "security",
+      "role": "branch"
     }
   ],
   "cards": [
