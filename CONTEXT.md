@@ -62,7 +62,7 @@ Auto Mode 门禁的启用状态:会话内存态,默认开启。有三个操作�
 
 ### 运行时数据豁免
 
-`<agentDir>/sessions/` 树(pi 自身运行时输出面,subagent artifacts 所在)的 write/edit 确定性放行(ADR-0008)。置于用户 deny 与 denyPaths 之后、gray 落分类器之前——用户声明压过内置豁免,且只抬 gray 档(floor 与自保护层先行返回)。双形从严(every 交集,前缀用祖先重建档——目录不存在时不因 firmlink 缺真实形而失效);read 与 bash 不豁免(转录含不可信输出/bash 走自身管线)。无配置键:与 #54 verdicts 读拒绝同类的"门禁对 pi 自身面的关系陈述",非用户策略。
+无 UI 会话(`hasUI=false`,subagent 会话即此类)对 `<agentDir>/sessions/**/subagent-artifacts/` 子树的 write/edit 确定性放行(ADR-0008)。仅限 headless:交互会话保有 ask 能力,门禁不静默放弃人可执行的裁决;`hasUI` 是代理信号——pi 的 ExtensionAPI 无 subagent 身份标记(`parentToolCallId` 只标记 codemode 嵌套)。置于用户 deny 与 denyPaths 之后、gray 落分类器之前——用户声明压过内置豁免,且只抬 gray 档。双形从严(every 交集,前缀用祖先重建档);read 与 bash 不豁免。无配置键:与 #54 verdicts 读拒绝同类的"门禁对 pi 自身面的关系陈述",非用户策略。
 
 ### 自保护层 (self-protection layer)
 

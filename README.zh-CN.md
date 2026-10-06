@@ -202,11 +202,13 @@ tool_call
   │     ├─ denyPaths(ADR-0002):受保护路径 → 终局 ask,先于用户 allow;
   │     │   分类器只见存在性话术
   │     ├─ ignoreTools:用户声明的未覆盖工具 → 直接放行,零模型调用
-  │     ├─ agentDir sessions/ 写入(ADR-0008):pi 自身运行时输出树(subagent
-  │     │   artifacts 所在)→ write/edit 确定性放行;用户 deny 规则与
-  │     │   denyPaths 声明仍然优先
+  │     ├─ headless subagent-artifacts 写入(ADR-0008):无 UI 会话对
+  │     │   <agentDir>/sessions/**/subagent-artifacts/ 的 write/edit →
+  │     │   确定性放行(交互会话仍可 ask);用户 deny 规则与 denyPaths
+  │     │   声明仍然优先
   │     └─ 你的操作面上无内置白名单 —— 「永远放行」的声明由你自己做
-  │       (唯一的内置放行是 pi 自身的 sessions/ 树,ADR-0008)
+  │       (唯一的内置放行是 pi 自身的 subagent-artifacts 子树,仅限
+  │       headless,ADR-0008)
   │
   ├─ 2. 灰区 → 嵌套策略,再进模型分类器
   │     ├─ 嵌套调用(codemode)+ codemodeNestedCalls=rules-only → 放行;
@@ -239,7 +241,7 @@ tool_call
 
 ## 状态与限制
 
-- 设计上在你的操作面无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户自定义规则](#用户自定义规则pi-verdictjson)；唯一内置放行是 pi 自身的 `sessions/` 运行时树,[ADR-0008](docs/adr/0008-agentdir-sessions-write-exemption.md))；allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
+- 设计上在你的操作面无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户自定义规则](#用户自定义规则pi-verdictjson)；唯一内置放行是 pi 自身的 subagent-artifacts 子树、仅限 headless,[ADR-0008](docs/adr/0008-agentdir-sessions-write-exemption.md))；allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - 路径敏感度 floor 只作用于文件类工具：bash 命令串仅匹配危险正则——`cat ~/.ssh/id_rsa` 走分类器而非确定性 S0 拦截(文件工具拼写 `read ~/.ssh/id_rsa` 会拦截)
 - Windows 下内置 floor 仅覆盖 bash 形态模式——PowerShell 原生危险命令(`Remove-Item -Recurse -Force`、`Invoke-Expression`、`Set-ExecutionPolicy` 等)依赖分类器兜底(fail-closed)
 - macOS 下 per-user 临时目录(`$TMPDIR`,`/var/folders/…/T` confstr 目录)豁免于系统目录 floor:读零成本放行,写按普通项目外写交分类器裁决。豁免锚定运行时解析的 confstr 族——手工设置 `TMPDIR` 不会解除任何保护;`/var/tmp`(POSIX 共享临时目录)维持拦截;真实形态逃逸临时树的符号链接拼写仍命中 S1

@@ -828,7 +828,7 @@ interface ProtectedSet {
 	prefixes: string[];
 	/** 读拒绝前缀(#54):verdicts 审计目录——记录含不可信原始输出,禁回流 agent context */
 	readPrefixes: string[];
-	/** Runtime-data write-exemption prefixes (ADR-0008): <agentDir>/sessions — write/edit deterministic allow */
+	/** Subagent-artifacts write-exemption tree (ADR-0008): <agentDir>/sessions — headless write/edit to its subagent-artifacts subtree passes deterministically */
 	runtimeWritePrefixes: string[];
 	/** bash/powershell 命令串危险特征(子串匹配,可绕——变更检测兜底) */
 	bashPatterns: RegExp[];
@@ -1026,15 +1026,18 @@ export function isProtectedReadPath(rawPath: string | undefined, cwd: string, pr
 	return false;
 }
 
-/** ADR-0008: runtime-data write exemption — EVERY canonical form must sit under
- *  <agentDir>/sessions (intersection semantics, same discipline as the in-cwd
- *  allowance): a lexical hit whose real form escapes (symlink alias) earns no
- *  exemption and falls back to the classifier. */
-export function isRuntimeDataWrite(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
+/** ADR-0008: subagent-artifacts write exemption — EVERY canonical form must sit
+ *  under <agentDir>/sessions AND carry a subagent-artifacts directory segment
+ *  (intersection semantics, same discipline as the in-cwd allowance): a lexical
+ *  hit whose real form escapes (symlink alias) earns no exemption and falls back
+ *  to the classifier. Gated to headless sessions at the call site — an
+ *  interactive session keeps its ask capability. */
+const SUBAGENT_ARTIFACTS_SEG = /(^|\/)subagent-artifacts(\/|$)/;
+export function isSubagentArtifactWrite(rawPath: string, cwd: string, prot: ProtectedSet): boolean {
 	if (prot.runtimeWritePrefixes.length === 0 || !rawPath) return false;
 	const forms = rebuiltForms(path.resolve(cwd, expandHome(rawPath)));
 	const inTree = (f: string) => prot.runtimeWritePrefixes.some((p) => f === p || f.startsWith(p + path.sep));
-	return forms.every(inTree);
+	return forms.every((f) => inTree(f) && SUBAGENT_ARTIFACTS_SEG.test(f));
 }
 
 /** 自保护层裁决(第 0 层,先于一切):触碰门禁自身文件 → 不可豁免的 deny;其余 null 交后续层 */
@@ -1208,14 +1211,6 @@ function classifyByRules(toolName: string, input: Record<string, unknown>, cwd: 
 		for (const re of user.allow) {
 			if (re.test(target)) return { verdict: "allow", reason: "user allow rule" };
 		}
-	}
-	// ADR-0008: agentDir sessions/ runtime data — write/edit pass deterministically.
-	// Sits after user deny and denyPaths (a declaration beats the built-in exemption)
-	// and only lifts the gray grade: floor denies and self-protection already
-	// returned above. Read and bash are deliberately NOT exempt (reads of session
-	// transcripts stay classifier-adjudicated; bash keeps its own pipeline).
-	if ((toolName === "write" || toolName === "edit") && isRuntimeDataWrite(String(input.path ?? ""), cwd, prot)) {
-		return { verdict: "allow", reason: "agentDir sessions/ runtime data — deterministic write exemption (ADR-0008)" };
 	}
 	return base;
 }
@@ -2145,6 +2140,14 @@ export async function adjudicate(
 	const rule = classifyByRules(call.toolName, call.input, env.cwd, state.userRules, state.prot, state.anchoredDenyPathBases(env.cwd));
 	if (rule.verdict === "allow") return { verdict: "allow", reason: rule.reason ?? "", source: "rule", degraded: false };
 	if (rule.verdict === "deny") return { verdict: "deny", reason: rule.reason ?? "", source: "rule", degraded: false };
+	// ADR-0008: subagent artifacts — a headless (no-UI) session writing pi's own
+	// runtime artifact tree passes deterministically; user deny and denyPaths have
+	// already ruled above (declarations beat the built-in exemption), and only the
+	// gray grade is lifted. An interactive session keeps its ask capability, so the
+	// exemption stays headless-only. Read and bash are deliberately NOT exempt.
+	if (rule.verdict === "gray" && !env.hasUI && (call.toolName === "write" || call.toolName === "edit") && isSubagentArtifactWrite(String(call.input.path ?? ""), env.cwd, state.prot)) {
+		return { verdict: "allow", reason: "subagent artifacts (headless) — deterministic write exemption (ADR-0008)", source: "rule", degraded: false };
+	}
 
 	// #62: the audit surface widens to protected-path asks (their user answers grade the
 	// denyPaths rules); rule allow/deny stay unaudited (no corpus value, #54). Record
