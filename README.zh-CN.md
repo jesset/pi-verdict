@@ -244,6 +244,7 @@ tool_call
 - 设计上在你的操作面无内置白名单(见[绕过测试](research/rule-layer-security-audit.md)与[用户自定义规则](#用户自定义规则pi-verdictjson)；唯一内置放行是 pi 自身的 subagent-artifacts 子树、仅限 headless,[ADR-0008](docs/adr/0008-agentdir-sessions-write-exemption.md))；allow 配置为空时大多数命令进分类器 —— 延迟敏感可 `--auto-mode-model` 指向轻量模型
 - 路径敏感度 floor 只作用于文件类工具：bash 命令串仅匹配危险正则——`cat ~/.ssh/id_rsa` 走分类器而非确定性 S0 拦截(文件工具拼写 `read ~/.ssh/id_rsa` 会拦截)
 - 对 scope 工具(`grep`/`find`/`ls`)，S0 floor 约束的是**整个搜索子树**而非仅命名根：搜索范围覆盖 S0 材料(如省略 path 的 grep 其 cwd 含 `.env`)即被 floor 拦截。子树扫描有界——BFS、深度 ≤ 8、≤ 500 个条目、跳过 `node_modules`/`.git`、不跟随符号链接——超出界限或藏在符号链接目录后的 S0 文件逃过扫描、回落分类器
+- MCP 与自定义工具：自保护层对其 input 的每个字符串值扫描受保护集合(verdicts 记录、门禁自身文件)，命中即 deny——deny 方向过近似，输入字段仅**提及**受保护路径形态也会被拦;`ignoreTools` 无法削弱(layer 0 先于一切豁免)
 - Windows 下内置 floor 仅覆盖 bash 形态模式——PowerShell 原生危险命令(`Remove-Item -Recurse -Force`、`Invoke-Expression`、`Set-ExecutionPolicy` 等)依赖分类器兜底(fail-closed)
 - macOS 下 per-user 临时目录(`$TMPDIR`,`/var/folders/…/T` confstr 目录)豁免于系统目录 floor:读零成本放行,写按普通项目外写交分类器裁决。豁免锚定运行时解析的 confstr 族——手工设置 `TMPDIR` 不会解除任何保护;`/var/tmp`(POSIX 共享临时目录)维持拦截;真实形态逃逸临时树的符号链接拼写仍命中 S1
 - AGENTS.md 未作为降权意图证据传入分类器(Claude Code 有此设计)
