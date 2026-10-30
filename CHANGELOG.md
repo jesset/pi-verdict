@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Security
+
+Fixes for five confirmed findings from security-audit run-1 (v0.15.0 @ 3744feb; report under `security-audit/`). Each was independently reproduced before fixing and is pinned by regression tests.
+
+- **denyPaths: filesystem-root search scope now hits** — `pathStartsWith` folded a `/` base into `//` and matched nothing, so `grep`/`find`/`ls` over `/` rule-allowed with every declaration active (zero model calls), breaking ADR-0002's amendment promise that an over-broad scope "e.g. `grep` over `/` with any declaration active) ask". The root is now the ancestor of every absolute path; a declaration of `/` itself contains ordinary absolute targets as well.
+- **Scope tools: the S0 floor now binds the search subtree** — an omitted/empty/`.`-path `grep`/`find`/`ls` graded an unconditional allow, so a `.env` in the cwd leaked through grep with zero model calls while a direct read of the same file was floor-denied. The named root (or the cwd) now grades like a read, and a bounded subtree scan denies when S0 material sits inside the scope: BFS, depth ≤ 8, ≤ 500 entries, `node_modules`/`.git` skipped, symlinks not followed (the `listPackageFiles` precedent). Honest residual: S0 files buried beyond the bounds or behind symlinked directories escape the scan; `builtinDenyFloor: false` degrades the hit to gray like every other built-in S0 deny.
+- **rebuiltForms: dangling final-segment symlinks resolve their target** — realpath fails on a nonexistent target and the ancestor rebuild kept only the lexical form, so a write through a dangling `k → ~/.ssh/newkey` rule-allowed (zero model calls) and created the file inside the S0 tree; the protected package dir was plantable the same way. The rebuild now lstat/readlinks the deepest unresolved segment and merges the resolved-target form (chains followed, with a cycle guard); the existing #20 symlink-directory coverage is unchanged, and an existing target still resolves through realpath as before.
+- **Bash floor: full-length matching plus a larger action-under-review window** — the #25 hard cap truncated floor matching at 8192 chars while the action line showed head600+tail400, so a payload in the blind region executed under auto-allow, invisible to the floor, the classifier prompt and the confirm dialog alike. Matching is now full-length (a ReDoS guard test pins the 200k-char adversarial shapes at <250ms each, the #32 discipline), and the action-under-review line gets its own 16384-char window so beyond-floor-cap content stays visible to the classifier and the human; transcript history entries keep the 1000-char cap.
+- **Transcript hardening: tool names are escaped (#22 completion)** — the tool name is the one model-chosen field the #22 line-forgery fix did not cover: a newline-bearing name forged a structural `User:` line in the live classifier prompt (auto-allow under a hostile allow) and persisted via the session branch. `toolCallLine` now runs the name through the same escaping — history, action line and confirm dialogs at once — and `\f`/`\v` join the escaped line-break set.
+
 ## [0.15.0] - 2026-10-06
 
 ### Added
