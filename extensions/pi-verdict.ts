@@ -92,22 +92,41 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // 规则层:bash
 // ============================================================================
 
-/** 危险模式:对完整命令串匹配(覆盖管道/复合命令),命中即 deny(源自研究报告 §4.3) */
+/** git global-option sequence tolerated between `git` and its subcommand (audit
+ *  run-1): `-C <dir>`, `-c <k=v>`, `--git-dir=<p>` … defeated the historical
+ *  adjacency requirement (`git -C x push --force` floor-missed). Bounded to 8
+ *  repetitions (real global-option prefixes are 1–2) — the optional value makes
+ *  each repetition 2 backtracking splits, so the cap bounds the enumeration. */
+const GIT_GLOBAL_OPTS = String.raw`(?:-{1,2}[A-Za-z][\w-]*(?:[ =]\S+)?\s+){0,8}`;
+/** Block-device name family for the raw-device rule: sd/hd/vd/xvd letters with
+ *  optional numeric partition, nvme/mmcblk numbered forms. The `\b` boundary
+ *  keeps character devices (/dev/stdout, /dev/stderr) out. */
+const RAW_DEVICE = String.raw`sd[a-z](?:\d+)?|hd[a-z](?:\d+)?|nvme\d+n\d+(?:p\d+)?|mmcblk\d+(?:p\d+)?|vd[a-z](?:\d+)?|xvd[a-z](?:\d+)?`;
+
+/** 危险模式:对完整命令串匹配(覆盖管道/复合命令),命中即 deny(源自研究报告 §4.3)。
+ *  Canonical-spelling discipline (audit run-1): each enumerated danger covers the
+ *  standard spellings of the same act — git global options, multi-pipe download
+ *  chains, octal setuid modes, operand-form device writes, named fork bombs.
+ *  Backtracking discipline: separator-excluding single classes run UNBOUNDED
+ *  (greedy split is unique → linear); only bounded repetition counts (≤8 pipe
+ *  links) and bounded alternatives appear — a cap on a character class would
+ *  create split degrees of freedom and blow up exponentially (caught by the
+ *  ReDoS guard during the fix). */
 const BASH_DANGER_RULES: Array<{ id: string; pattern: RegExp; reason: string }> = [
 	{ id: "rm-recursive", pattern: /\brm\b[^;|&]*(\s-(?:[a-zA-Z]*r[a-zA-Z]*f?|[a-zA-Z]*f[a-zA-Z]*r)\b|--recursive)/i, reason: "recursive delete (rm -r)" },
 	{ id: "rm-root", pattern: /\brm\s+(-[a-zA-Z]*\s+)*(--recursive\s+)?(\/|\/etc|\/usr|\/var|~|\$HOME)(?:\s|$)/i, reason: "delete root/system/home directory" },
 	{ id: "sudo", pattern: /\bsudo\b/i, reason: "privilege escalation (sudo)" },
-	{ id: "chmod-777", pattern: /\bchmod\b[^;|&]*(777|a\+rwx|ugo\+rwx|ugo=rwx|[ug]\+s)\b/i, reason: "permission weakening (chmod 777/setuid)" },
-	{ id: "raw-device", pattern: /(>\s*\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|of=\/dev\/(sd|hd|nvme|mmcblk|vd|xvd)|\bmkfs\.)/i, reason: "raw device write/format" },
-	{ id: "git-push-force", pattern: /\bgit\s+push\b[^;|&]*(-f\b|--force\b)/i, reason: "git push --force" },
-	{ id: "git-reset-hard", pattern: /\bgit\s+reset\s+--hard\b/i, reason: "git reset --hard" },
-	{ id: "git-clean-force", pattern: /\bgit\s+clean\b[^;|&]*(\s-[a-zA-Z]*f|--force)/i, reason: "git clean -f" },
-	{ id: "git-checkout-dot", pattern: /\bgit\s+checkout\s+(--\s+)?\.(?:\s|$)/i, reason: "git checkout . (discard working tree)" },
-	{ id: "git-restore", pattern: /\bgit\s+restore\b/i, reason: "git restore (discard changes)" },
-	{ id: "remote-exec", pattern: /\b(curl|wget)\b[^;|&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/i, reason: "remote code execution (curl|sh)" },
+	{ id: "chmod-777", pattern: /\bchmod\b[^;|&]*\b(0?777|[2467][0-7][0-7][1357]|a\+rwx|ugo\+rwx|ugo=rwx|[ug]\+s|[ug]o\+s)\b/i, reason: "permission weakening (chmod 777/setuid)" },
+	{ id: "raw-device", pattern: new RegExp(String.raw`(?:\b(?:cp|mv|tee|dd)\b[^;|&]{0,256}\s|>\s*|of=)\/dev\/(?:${RAW_DEVICE})\b|\bmkfs\.`, "i"), reason: "raw device write/format" },
+	{ id: "git-push-force", pattern: new RegExp(String.raw`\bgit\s+${GIT_GLOBAL_OPTS}push\b[^;|&]*(-f\b|--force\b)`, "i"), reason: "git push --force" },
+	{ id: "git-reset-hard", pattern: new RegExp(String.raw`\bgit\s+${GIT_GLOBAL_OPTS}reset\s+--hard\b`, "i"), reason: "git reset --hard" },
+	{ id: "git-clean-force", pattern: new RegExp(String.raw`\bgit\s+${GIT_GLOBAL_OPTS}clean\b[^;|&]*(\s-[a-zA-Z]*f|--force)`, "i"), reason: "git clean -f" },
+	{ id: "git-checkout-dot", pattern: new RegExp(String.raw`\bgit\s+${GIT_GLOBAL_OPTS}checkout\s+(--\s+)?\.(?:\s|$)`, "i"), reason: "git checkout . (discard working tree)" },
+	{ id: "git-restore", pattern: new RegExp(String.raw`\bgit\s+${GIT_GLOBAL_OPTS}restore\b`, "i"), reason: "git restore (discard changes)" },
+	{ id: "remote-exec", pattern: /\b(curl|wget)\b[^;|&|]*(?:\|[^;|&|]*){0,8}\|\s*(sudo\s+)?(ba|z|da)?sh\b/i, reason: "remote code execution (curl|sh)" },
 	{ id: "gh-repo", pattern: /\bgh\s+repo\s+(create|delete|rename|archive)\b/i, reason: "GitHub repository-level change" },
 	{ id: "gh-release", pattern: /\bgh\s+release\s+(create|delete|edit)\b/i, reason: "GitHub release change" },
-	{ id: "fork-bomb", pattern: /:\(\)\s*\{/, reason: "fork bomb" },
+	{ id: "fork-bomb", pattern: /:\(\)\s*\{|(\w{1,64})\s*\(\)\s*\{[^}|&]*\|[^}|&]*&\s*\}\s*;\s*\1\b/, reason: "fork bomb" },
 ];
 
 type RuleVerdict = "allow" | "deny" | "gray" | "ask";
@@ -974,6 +993,11 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		// → exact, a package dir (`@scope/pkg` or `pkg`) → prefix, so every
 		// npm form gets whole-package-dir protection (#26).
 		const extRoots = new Set<string>();
+		// audit run-1 (#6): the pi <agentDir>/extensions roots matched by the
+		// single-file install form — the root itself joins the write prefixes
+		// (a planted sibling must not pass on one classifier allow and own the
+		// next session's gate), and its existing files join the tamper baseline.
+		const piSingleRoots = new Set<string>();
 		const agentBases = new Set(baseForms(agentDir));
 		const configRootBases = new Set([...agentBases].map((b) => path.dirname(b)));
 		for (const seg of [["extensions"], ["plugins", "node_modules"]]) {
@@ -995,6 +1019,13 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 					(singleFile ? exact : prefixes).add(f);
 					extTargets.add(f);
 				}
+				if (singleFile && !path.relative(agentDir, extRoot).startsWith("..")) {
+					// the pi extensions root only (not the omp node_modules roots):
+					// the npm form's #26 whole-package protection already covers it,
+					// and widening protection to all of node_modules is not ours to take
+					for (const f of baseForms(extRoot)) prefixes.add(f);
+					piSingleRoots.add(extRoot);
+				}
 				if (!singleFile && pkgRoot === null) pkgRoot = target;
 			}
 		}
@@ -1002,6 +1033,16 @@ export function buildProtectedSet(agentDir: string, ownFile: string | null): Pro
 		// expansion picks up real forms per file) — no duplicate entries
 		if (pkgRoot !== null) {
 			for (const f of listPackageFiles(pkgRoot)) {
+				if (seenWatch.has(f)) continue;
+				seenWatch.add(f);
+				watchBases.push({ file: f, kind: "extension" });
+			}
+		}
+		// audit run-1 (#6): existing siblings of the single-file install join the
+		// tamper baseline (same walk bounds); files planted later are caught by
+		// the root prefix on write, not by the baseline (new files are no diff)
+		for (const root of piSingleRoots) {
+			for (const f of listPackageFiles(root)) {
 				if (seenWatch.has(f)) continue;
 				seenWatch.add(f);
 				watchBases.push({ file: f, kind: "extension" });
@@ -1079,13 +1120,16 @@ export function isProtectedWritePath(rawPath: string, cwd: string, prot: Protect
 
 /** Read-deny for the verdicts dir (#54): audit records contain raw fail-closed
  *  model output — untrusted text that must not flow back into agent context.
- *  Unlike write protection (prefixes) this is read semantics, hence a separate set. */
-export function isProtectedReadPath(rawPath: string | undefined, cwd: string, prot: ProtectedSet): boolean {
+ *  Unlike write protection (prefixes) this is read semantics, hence a separate set.
+ *  Scope tools (subtree=true) compare bidirectionally (#48 discipline, audit
+ *  run-1): a search rooted ABOVE the verdicts dir reads its records too. */
+export function isProtectedReadPath(rawPath: string | undefined, cwd: string, prot: ProtectedSet, subtree = false): boolean {
 	if (prot.readPrefixes.length === 0) return false;
 	const target = rawPath ?? cwd; // #48: absent path → cwd is the effective target
 	for (const c of rebuiltForms(path.resolve(cwd, expandHome(target)))) {
 		for (const p of prot.readPrefixes) {
 			if (c === p || c.startsWith(p + path.sep)) return true;
+			if (subtree && pathStartsWith(p, c)) return true;
 		}
 	}
 	return false;
@@ -1118,7 +1162,7 @@ function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd:
 		case "grep":
 		case "find":
 		case "ls":
-			if (isProtectedReadPath(typeof input.path === "string" ? input.path : undefined, cwd, prot)) {
+			if (isProtectedReadPath(typeof input.path === "string" ? input.path : undefined, cwd, prot, isScopeTool(toolName))) {
 				return { verdict: "deny", reason: `self-protection layer (#54): ${typeof input.path === "string" ? input.path : cwd} holds the gate's verdict audit records — agent reads are denied (untrusted raw model output inside); view them outside pi` };
 			}
 			return null;
@@ -1130,8 +1174,20 @@ function selfProtectCheck(toolName: string, input: Record<string, unknown>, cwd:
 			}
 			return null;
 		}
-		default:
-			return null; // MCP/自定义工具不经规则层(ADR-0001:由变更检测兜底)
+		default: {
+			// MCP/custom tools skip the name-keyed dispatch, but their inputs still
+			// name paths: scan string values against the protected sets so the
+			// documented unconditional verdicts/config deny binds them too (audit
+			// run-1). Deny-direction over-approximation only — a protected-shaped
+			// string in any field blocks; there is no allow-grade counterpart.
+			for (const v of Object.values(input)) {
+				if (typeof v !== "string") continue;
+				if (isProtectedReadPath(v, cwd, prot) || isProtectedWritePath(v, cwd, prot)) {
+					return { verdict: "deny", reason: `self-protection layer (#54/ADR-0001): ${v} names a gate-protected path (verdict audit records / the gate's own files) — agent-side access is denied regardless of tool kind` };
+				}
+			}
+			return null; // 其余 MCP/自定义工具不经规则层(ADR-0001:由变更检测兜底)
+		}
 	}
 }
 
@@ -1995,7 +2051,19 @@ export class AuditLog {
 			if (this.redact) {
 				try {
 					persisted = redactSecrets(record);
-				} catch { /* fail-open */ }
+				} catch {
+					// Recursion depth exceeded (audit run-1): failing open here
+					// persisted the raw record — the exact secret the redaction
+					// exists to scrub. Fall back to serialize-then-redact: a flat
+					// string has no structure to recurse into (the JSON scalars
+					// survive the round-trip untouched; serializer stack depth
+					// exceeds the recursive redactor's by ~2x on every supported
+					// runtime). Only if serialization too fails does the
+					// record-integrity-over-hygiene stance apply.
+					try {
+						persisted = JSON.parse(redactString(JSON.stringify(record))) as AuditRecord;
+					} catch { /* fail-open: record integrity over hygiene */ }
+				}
 			}
 			fs.appendFileSync(file, JSON.stringify(persisted) + "\n");
 		} catch (err) {
